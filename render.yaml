@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: designops-ai-backend
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build:backend
+    startCommand: node dist/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false          # prompted during first deploy
+      - key: NODE_ENV
+        value: production

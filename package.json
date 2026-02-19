@@ -1,0 +1,35 @@
+{
+  "name": "designops-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DesignOps AI — a safe, design-system-aware Figma plugin with structured AI operations",
+  "scripts": {
+    "build:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife",
+    "watch:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --watch",
+    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk",
+    "start": "node dist/server.js",
+    "start:backend": "npx tsx backend/server.ts",
+    "dev:backend": "npx tsx watch backend/server.ts",
+    "build": "npm run build:plugin && npm run build:backend",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.76.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.21.0",
+    "zod": "^3.24.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@figma/plugin-typings": "^1.104.0",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

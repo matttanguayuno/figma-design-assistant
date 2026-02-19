@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DesignOps AI</title>
+  <style>
+    :root {
+      --bg: #1e1e1e;
+      --surface: #2d2d2d;
+      --border: #3e3e3e;
+      --text: #e0e0e0;
+      --text-muted: #999;
+      --accent: #6c5ce7;
+      --accent-hover: #7c6df7;
+      --success: #00b894;
+      --danger: #d63031;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: var(--font);
+      font-size: 12px;
+      color: var(--text);
+      background: var(--bg);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    label {
+      font-weight: 600;
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 72px;
+      padding: 10px;
+      font-family: var(--font);
+      font-size: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      resize: vertical;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      flex: 1;
+      padding: 8px 12px;
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .btn-danger {
+      background: transparent;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      flex: 0 0 auto;
+      padding: 8px 16px;
+    }
+    .btn-danger:hover:not(:disabled) {
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+
+    /* ── Cancel Button ──────────────────────────────── */
+    .btn-cancel {
+      flex: 1;
+      padding: 8px 16px;
+      background: var(--surface);
+      color: var(--text);
+      border: 1px solid var(--border);
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      display: none;
+    }
+    .btn-cancel:hover {
+      color: var(--danger);
+      border-color: var(--danger);
+      background: rgba(214, 48, 49, 0.1);
+    }
+
+    /* ── Progress Bar ───────────────────────────────── */
+    .progress-container {
+      display: none;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .progress-container.visible {
+      display: flex;
+    }
+    .progress-bar-track {
+      width: 100%;
+      height: 4px;
+      background: var(--surface);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 0.15s linear;
+    }
+    .progress-steps {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+    .progress-steps .step {
+      opacity: 0.4;
+      transition: opacity 0.3s, color 0.3s;
+    }
+    .progress-steps .step.active {
+      opacity: 1;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .progress-steps .step.done {
+      opacity: 0.7;
+      color: var(--success);
+    }
+
+    .status-bar {
+      font-size: 10px;
+      padding: 4px 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text-muted);
+      text-align: center;
+      min-height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-top: 1px solid var(--border);
+    }
+    .status-bar::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex-shrink: 0;
+    }
+
+    .status-bar.success {
+      color: var(--success);
+    }
+    .status-bar.success::before {
+      background: var(--success);
+    }
+    .status-bar.error {
+      color: var(--danger);
+    }
+    .status-bar.error::before {
+      background: var(--danger);
+    }
+
+    /* ── Label row with menu ─────────────────────────── */
+    .label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .menu-wrapper {
+      position: relative;
+    }
+
+    .menu-toggle {
+      flex: none;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .menu-toggle:hover {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .menu-toggle.open {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .menu-dropdown {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: 32px;
+      min-width: 180px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      z-index: 100;
+      padding: 4px 0;
+      animation: menuFadeIn 0.1s ease;
+    }
+    .menu-dropdown.show {
+      display: block;
+    }
+
+    @keyframes menuFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 7px 12px;
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+    .menu-item:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    .menu-item svg {
+      flex-shrink: 0;
+      width: 14px;
+      height: 14px;
+    }
+
+    .menu-separator {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 0;
+    }
+  </style>
+</head>
+<body>
+  <div>
+    <div class="label-row">
+      <label for="intent">Describe changes</label>
+      <div class="menu-wrapper">
+        <button id="menu-toggle" class="menu-toggle" title="Menu" aria-label="Menu">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M8 9.5L4 5.5h8L8 9.5z" fill="currentColor"/>
+          </svg>
+        </button>
+        <div id="menu-dropdown" class="menu-dropdown">
+          <button class="menu-item" id="menu-export-json">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Export to JSON
+          </button>
+          <div class="menu-separator"></div>
+          <button class="menu-item" id="menu-import-json">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 11l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Import from JSON
+          </button>
+        </div>
+      </div>
+    </div>
+    <textarea
+      id="intent"
+      placeholder="e.g. Add a login screen, make the header larger, change background to blue…"
+    ></textarea>
+  </div>
+
+  <div class="btn-row">
+    <button id="btn-apply" class="btn-primary">Apply</button>
+    <button id="btn-cancel" class="btn-cancel">Cancel</button>
+  </div>
+
+  <div id="progress-container" class="progress-container">
+    <div class="progress-bar-track">
+      <div id="progress-bar-fill" class="progress-bar-fill"></div>
+    </div>
+    <div id="progress-steps" class="progress-steps">
+      <span class="step" data-step="analyze">Analyzing</span>
+      <span class="step" data-step="generate">Generating</span>
+      <span class="step" data-step="create">Creating</span>
+    </div>
+  </div>
+
+  <div id="status-bar" class="status-bar">Nothing selected — will generate new frame</div>
+
+  <!-- Hidden file input for JSON import -->
+  <input type="file" id="file-input" accept=".json" style="display:none" />
+
+  <script>
+    // ── DOM References ────────────────────────────────────────────
+    const intentEl = document.getElementById("intent");
+    const btnApply = document.getElementById("btn-apply");
+    const btnCancel = document.getElementById("btn-cancel");
+    const statusBar = document.getElementById("status-bar");
+    const menuToggle = document.getElementById("menu-toggle");
+    const menuDropdown = document.getElementById("menu-dropdown");
+    const menuExportJson = document.getElementById("menu-export-json");
+    const menuImportJson = document.getElementById("menu-import-json");
+    const fileInput = document.getElementById("file-input");
+    const progressContainer = document.getElementById("progress-container");
+    const progressBarFill = document.getElementById("progress-bar-fill");
+    const progressSteps = document.getElementById("progress-steps");
+
+    // Track whether anything is selected to update button label
+    let hasSelection = false;
+    function updateButtonLabel(selected) {
+      hasSelection = selected;
+      btnApply.textContent = selected ? "Apply" : "Generate";
+    }
+
+    // ── Progress Bar (timing-adaptive with guaranteed visible movement) ──
+    //
+    // Strategy: each phase gets a % range of the bar. Within each phase,
+    // we progress linearly over the estimated duration to ~85% of the range,
+    // then slow-creep the remaining 15% (never stopping). When a phase
+    // actually completes, snap to its boundary. After each run, store
+    // actual timings to improve estimates for next time.
+
+    // Default estimates (ms). Updated after each successful run.
+    let phaseEstimates = { analyze: 5000, generate: 45000, create: 4000 };
+    const PHASE_ORDER = ["analyze", "generate", "create"];
+
+    // Fixed allocation: analyze=12%, generate=75%, create=8%, done-jump=5%
+    const PHASE_ALLOC = { analyze: 12, generate: 75, create: 8 };
+
+    // Compute boundaries from allocations
+    function computeBoundaries() {
+      let cum = 0;
+      const b = {};
+      for (const p of PHASE_ORDER) {
+        cum += PHASE_ALLOC[p];
+        b[p] = cum; // e.g. analyze=12, generate=87, create=95
+      }
+      return b;
+    }
+    let PHASE_BOUNDARIES = computeBoundaries();
+
+    let _progressInterval = null;
+    let _progressPct = 0;
+    let _progressPhase = "";
+    let _phaseStartTime = 0;
+    // Track actual phase start times for timing measurement
+    let _phaseTimings = {};
+    let _runStartTime = 0;
+
+    function startProgress(phase) {
+      progressContainer.classList.add("visible");
+      _progressPct = 0;
+      _progressPhase = phase || "analyze";
+      _phaseStartTime = Date.now();
+      _runStartTime = Date.now();
+      _phaseTimings = {};
+      _phaseTimings[_progressPhase] = Date.now();
+      progressBarFill.style.width = "0%";
+      updateStepIndicators(_progressPhase);
+
+      if (_progressInterval) clearInterval(_progressInterval);
+      _progressInterval = setInterval(tickProgress, 80); // ~12fps for smooth movement
+    }
+
+    function tickProgress() {
+      const phaseIdx = PHASE_ORDER.indexOf(_progressPhase);
+      const phaseStart = phaseIdx > 0 ? PHASE_BOUNDARIES[PHASE_ORDER[phaseIdx - 1]] : 0;
+      const phaseEnd = PHASE_BOUNDARIES[_progressPhase] || 95;
+      const phaseRange = phaseEnd - phaseStart;
+      const est = phaseEstimates[_progressPhase] || 30000;
+
+      const elapsed = Date.now() - _phaseStartTime;
+
+      let target;
+      if (elapsed < est) {
+        // Within estimated time: linear progression to 85% of phase range
+        target = phaseStart + phaseRange * 0.85 * (elapsed / est);
+      } else {
+        // Past estimated time: slow logarithmic creep from 85% toward 98% of range
+        // This NEVER stops — always adds a tiny bit
+        const overtime = elapsed - est;
+        const base = phaseRange * 0.85;
+        const extra = phaseRange * 0.13 * (1 - Math.exp(-overtime / (est * 0.5)));
+        target = phaseStart + base + extra;
+      }
+
+      // Guarantee minimum visible movement: at least +0.05% per tick
+      const minStep = 0.05;
+      if (target <= _progressPct) {
+        target = _progressPct + minStep;
+      }
+
+      // Cap at 95% (leave room for "done" snap to 100%)
+      _progressPct = Math.min(target, 95);
+      progressBarFill.style.width = _progressPct.toFixed(1) + "%";
+    }
+
+    function advanceToPhase(phase) {
+      if (phase === _progressPhase) return;
+
+      // Record actual timing for the phase that just ended
+      const prevPhase = _progressPhase;
+      if (_phaseTimings[prevPhase]) {
+        const actualMs = Date.now() - _phaseTimings[prevPhase];
+        // Blend with previous estimate: 70% actual, 30% old estimate (smoothing)
+        phaseEstimates[prevPhase] = Math.round(actualMs * 0.7 + phaseEstimates[prevPhase] * 0.3);
+      }
+
+      _progressPhase = phase;
+      _phaseStartTime = Date.now();
+      _phaseTimings[phase] = Date.now();
+      updateStepIndicators(phase);
+
+      // Snap bar to the start of this phase (previous phase boundary)
+      const phaseIdx = PHASE_ORDER.indexOf(phase);
+      if (phaseIdx > 0) {
+        const floor = PHASE_BOUNDARIES[PHASE_ORDER[phaseIdx - 1]];
+        if (_progressPct < floor) _progressPct = floor;
+      }
+
+      if (phase === "done") {
+        // Record final phase timing
+        if (_phaseTimings[prevPhase]) {
+          const actualMs = Date.now() - _phaseTimings[prevPhase];
+          phaseEstimates[prevPhase] = Math.round(actualMs * 0.7 + phaseEstimates[prevPhase] * 0.3);
+        }
+        // Animate to 100%
+        _progressPct = 100;
+        progressBarFill.style.width = "100%";
+        if (_progressInterval) clearInterval(_progressInterval);
+        _progressInterval = null;
+        const steps = progressSteps.querySelectorAll(".step");
+        steps.forEach(el => { el.classList.remove("active"); el.classList.add("done"); });
+      }
+    }
+
+    function updateStepIndicators(phase) {
+      const steps = progressSteps.querySelectorAll(".step");
+      const idx = PHASE_ORDER.indexOf(phase);
+      steps.forEach((el, i) => {
+        el.classList.remove("active", "done");
+        if (i < idx) el.classList.add("done");
+        else if (i === idx) el.classList.add("active");
+      });
+    }
+
+    function stopProgress() {
+      if (_progressInterval) clearInterval(_progressInterval);
+      _progressInterval = null;
+      progressContainer.classList.remove("visible");
+      _progressPct = 0;
+      progressBarFill.style.width = "0%";
+      const steps = progressSteps.querySelectorAll(".step");
+      steps.forEach(el => el.classList.remove("active", "done"));
+    }
+
+    function showWorking() {
+      btnApply.style.display = "none";
+      btnCancel.style.display = "block";
+      statusBar.style.display = "none";
+    }
+
+    function hideWorking() {
+      btnApply.style.display = "block";
+      btnCancel.style.display = "none";
+      btnApply.disabled = false;
+      statusBar.style.display = "flex";
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+    function setStatus(msg, type) {
+      statusBar.textContent = msg;
+      statusBar.className = "status-bar" + (type ? " " + type : "");
+    }
+
+    // Track current selection label for restoring after transient status
+    let _selectionLabel = "Nothing selected";
+    function setSelectionStatus(msg) {
+      _selectionLabel = msg;
+      // Only update if we're not showing a transient status (success/error)
+      if (!statusBar.classList.contains("success") && !statusBar.classList.contains("error")) {
+        statusBar.textContent = msg;
+        statusBar.className = "status-bar";
+      }
+    }
+
+    // Override setStatus to auto-revert to selection label after success/error
+    const _origSetStatus = setStatus;
+    function setStatus(msg, type) {
+      statusBar.textContent = msg;
+      statusBar.className = "status-bar" + (type ? " " + type : "");
+      // Revert to selection status after a few seconds for success/error
+      if (type === "success" || type === "error") {
+        setTimeout(() => {
+          // Only revert if it's still showing the same message
+          if (statusBar.textContent === msg) {
+            statusBar.textContent = _selectionLabel;
+            statusBar.className = "status-bar";
+          }
+        }, 4000);
+      }
+    }
+
+    // ── Send to Plugin ────────────────────────────────────────────
+    function postToPlugin(msg) {
+      parent.postMessage({ pluginMessage: msg }, "*");
+    }
+
+    // ── Menu Toggle ──────────────────────────────────────────────
+    menuToggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isOpen = menuDropdown.classList.toggle("show");
+      menuToggle.classList.toggle("open", isOpen);
+    });
+
+    // Close menu when clicking outside
+    document.addEventListener("click", (e) => {
+      if (!menuDropdown.contains(e.target) && e.target !== menuToggle) {
+        menuDropdown.classList.remove("show");
+        menuToggle.classList.remove("open");
+      }
+    });
+
+    // ── Menu: Export design to JSON ──────────────────────────────
+    menuExportJson.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+      menuToggle.classList.remove("open");
+      setStatus("Exporting design to JSON…");
+      postToPlugin({ type: "export-json" });
+    });
+    // \u2500\u2500 Menu: Import design from JSON \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    menuImportJson.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+      menuToggle.classList.remove("open");
+      fileInput.value = "";
+      fileInput.click();
+    });
+
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      setStatus("Reading JSON file\u2026");
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          if (!data.selection || !data.selection.nodes) {
+            setStatus("Invalid JSON: missing selection.nodes", "error");
+            return;
+          }
+          setStatus("Importing design\u2026");
+          postToPlugin({ type: "import-json", data: data });
+        } catch (err) {
+          setStatus("Invalid JSON file: " + err.message, "error");
+        }
+      };
+      reader.onerror = () => setStatus("Failed to read file.", "error");
+      reader.readAsText(file);
+    });
+
+    // ── Menu: Generate Frame ────────────────────────────────────
+    // Removed — Generate is now handled automatically by Apply when nothing is selected
+    function downloadJson(data) {
+      const json = JSON.stringify(data, null, 2);
+      const dataUri = "data:application/json;charset=utf-8," + encodeURIComponent(json);
+      const a = document.createElement("a");
+      a.href = dataUri;
+      a.download = "design-export.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    // ── Fetch Proxy (real AbortController for instant cancel) ──────
+    // ▸ For local development:  "http://localhost:3001"
+    // ▸ For Render deployment:  "https://YOUR-SERVICE.onrender.com"
+    const BACKEND_URL = "http://localhost:3001";
+    let _activeFetchAbort = null;
+
+    function doFetchForPlugin(endpoint, body, seq) {
+      // Abort any prior in-flight request
+      if (_activeFetchAbort) { _activeFetchAbort.abort(); _activeFetchAbort = null; }
+      const ac = new AbortController();
+      _activeFetchAbort = ac;
+      fetch(BACKEND_URL + endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: ac.signal,
+      })
+        .then(async (resp) => {
+          _activeFetchAbort = null;
+          if (!resp.ok) {
+            const errText = await resp.text();
+            postToPlugin({ type: "fetch-error", error: "Backend error " + resp.status + ": " + errText, seq });
+          } else {
+            const data = await resp.json();
+            postToPlugin({ type: "fetch-result", data, seq });
+          }
+        })
+        .catch((err) => {
+          _activeFetchAbort = null;
+          if (err.name === "AbortError") {
+            postToPlugin({ type: "fetch-aborted", seq });
+          } else {
+            postToPlugin({ type: "fetch-error", error: err.message, seq });
+          }
+        });
+    }
+
+    function abortActiveFetch() {
+      if (_activeFetchAbort) {
+        _activeFetchAbort.abort();
+        _activeFetchAbort = null;
+      }
+      // Also tell the backend to stop the LLM call (fire-and-forget)
+      fetch(BACKEND_URL + "/cancel", { method: "POST" }).catch(() => {});
+    }
+
+    // ── Cancel guard: suppress stale plugin messages after cancel ──
+    let _cancelledAt = 0;
+    const CANCEL_GUARD_MS = 5000; // ignore generation messages for 5s after cancel
+    function isCancelGuardActive() {
+      return _cancelledAt > 0 && (Date.now() - _cancelledAt) < CANCEL_GUARD_MS;
+    }
+
+    // ── Button Handlers ───────────────────────────────────────────
+    btnApply.addEventListener("click", () => {
+      const intent = intentEl.value.trim();
+      if (!intent) {
+        setStatus("Please describe what you want to change.", "error");
+        return;
+      }
+      _cancelledAt = 0; // clear cancel guard for new run
+      showWorking();
+      startProgress("analyze");
+      postToPlugin({ type: "run", intent });
+    });
+
+    btnCancel.addEventListener("click", () => {
+      // Set cancel guard to suppress any late-arriving plugin messages
+      _cancelledAt = Date.now();
+      // Abort in-flight fetch instantly (AbortController)
+      abortActiveFetch();
+      // Tell the plugin to set _cancelled flag
+      postToPlugin({ type: "cancel" });
+      // Immediately reset ALL UI — no setTimeout, no waiting for plugin
+      stopProgress();
+      hideWorking();
+      setStatus("Cancelled.", "error");
+    });
+
+    // ── Ctrl+Enter to apply ───────────────────────────────────
+    intentEl.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (!btnApply.disabled) btnApply.click();
+      }
+    });
+
+    // ── Receive from Plugin ───────────────────────────────────────
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      switch (msg.type) {
+        case "apply-success": {
+          if (isCancelGuardActive()) break; // suppress stale message
+          intentEl.value = "";
+          advanceToPhase("done");
+          setTimeout(() => { stopProgress(); hideWorking(); }, 600);
+          setStatus(msg.summary, "success");
+          break;
+        }
+        case "apply-error": {
+          if (isCancelGuardActive()) break; // suppress stale message
+          setStatus(msg.error, "error");
+          stopProgress();
+          hideWorking();
+          break;
+        }
+        case "revert-success": {
+          setStatus("Undo successful.", "success");
+          break;
+        }
+        case "revert-error": {
+          setStatus(msg.error, "error");
+          break;
+        }
+        case "do-fetch": {
+          if (isCancelGuardActive()) break; // don't start fetch if cancelled
+          doFetchForPlugin(msg.endpoint, msg.body, msg.seq);
+          break;
+        }
+        case "status": {
+          if (isCancelGuardActive()) break; // suppress stale progress updates
+          // Map status messages to progress phases (only update progress, not status bar)
+          const m = (msg.message || "").toLowerCase();
+          if (m.includes("analyz") || m.includes("extract") || m.includes("design system")) {
+            advanceToPhase("analyze");
+          } else if (m.includes("generat") || m.includes("thinking")) {
+            advanceToPhase("generate");
+          } else if (m.includes("creat") || m.includes("canvas") || m.includes("applying")) {
+            advanceToPhase("create");
+          }
+          break;
+        }
+        case "export-json-result": {
+          downloadJson(msg.data);
+          setStatus("JSON saved.", "success");
+          break;
+        }
+        case "export-json-error": {
+          setStatus(msg.error, "error");
+          break;
+        }
+        case "import-json-success": {
+          setStatus(msg.summary, "success");
+          break;
+        }
+        case "import-json-error": {
+          setStatus(msg.error, "error");
+          break;
+        }
+        case "generate-success": {
+          if (isCancelGuardActive()) break; // suppress stale message
+          intentEl.value = "";
+          advanceToPhase("done");
+          setTimeout(() => { stopProgress(); hideWorking(); }, 600);
+          setStatus(msg.summary, "success");
+          break;
+        }
+        case "generate-error": {
+          if (isCancelGuardActive()) break; // suppress stale message
+          setStatus(msg.error, "error");
+          stopProgress();
+          hideWorking();
+          break;
+        }
+        case "generate-cancelled": {
+          // Already handled by cancel click — just confirm
+          stopProgress();
+          hideWorking();
+          setStatus("Cancelled.", "error");
+          break;
+        }
+        case "selection-change": {
+          setSelectionStatus(msg.label);
+          updateButtonLabel(msg.label !== "Nothing selected — will generate new frame");
+          break;
+        }
+      }
+    };
+  </script>
+</body>
+</html>
