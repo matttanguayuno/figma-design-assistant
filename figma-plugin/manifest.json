@@ -1,5 +1,5 @@
 {
-  "name": "Design Assistant",
+  "name": "Uno Design Assistant",
   "id": "designops-ai-v1",
   "api": "1.0.0",
   "main": "code.js",
