@@ -1453,12 +1453,11 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   const FIGMA_INTERNAL = /^Figma\s*\(/i;
   const MAX_TOKEN_VALUE = 64; // cap spacing/padding outliers
 
-  // Deduplicate component specs by signature (fill + radius, height bucketed to 4px)
+  // Deduplicate component specs by signature (fill + stroke + radius)
   function dedupeComponents(items: any[]): any[] {
     const seen = new Set<string>();
     return items.filter(item => {
-      const hBucket = item.height ? Math.round(item.height / 4) * 4 : 0;
-      const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, hBucket].join("|");
+      const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0].join("|");
       if (seen.has(sig)) return false;
       seen.add(sig);
       return true;
@@ -1513,7 +1512,7 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     for (const s of (ds.fillStyles || []) as any[]) {
       const lower = (s.name || "").toLowerCase();
       if (s.hex) {
-        if (lower.includes("error")) knownError.add(s.hex);
+        if (lower.includes("error") && !lower.includes("on error")) knownError.add(s.hex);
         else if (lower.includes("primary") && !lower.includes("on primary")) knownPrimary.add(s.hex);
       }
     }

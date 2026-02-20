@@ -1206,8 +1206,7 @@
     function dedupeComponents(items) {
       const seen = /* @__PURE__ */ new Set();
       return items.filter((item) => {
-        const hBucket = item.height ? Math.round(item.height / 4) * 4 : 0;
-        const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, hBucket].join("|");
+        const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0].join("|");
         if (seen.has(sig)) return false;
         seen.add(sig);
         return true;
@@ -1250,7 +1249,7 @@
       for (const s of ds.fillStyles || []) {
         const lower = (s.name || "").toLowerCase();
         if (s.hex) {
-          if (lower.includes("error")) knownError.add(s.hex);
+          if (lower.includes("error") && !lower.includes("on error")) knownError.add(s.hex);
           else if (lower.includes("primary") && !lower.includes("on primary")) knownPrimary.add(s.hex);
         }
       }
