@@ -6,7 +6,17 @@ import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePr
 
 // ── Client ──────────────────────────────────────────────────────────
 
-let client: Anthropic | null = null;
+// Cache clients by API key to reuse within the same server lifetime
+const _clientCache = new Map<string, Anthropic>();
+
+function getClient(apiKey: string): Anthropic {
+  let client = _clientCache.get(apiKey);
+  if (!client) {
+    client = new Anthropic({ apiKey });
+    _clientCache.set(apiKey, client);
+  }
+  return client;
+}
 
 // ── Active request cancellation ─────────────────────────────────────
 
@@ -19,20 +29,6 @@ export function cancelCurrentRequest(): void {
     _activeAbort.abort();
     _activeAbort = null;
   }
-}
-
-function getClient(): Anthropic {
-  if (!client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "ANTHROPIC_API_KEY environment variable is not set. " +
-          "Set it before starting the backend."
-      );
-    }
-    client = new Anthropic({ apiKey });
-  }
-  return client;
 }
 
 // ── Types matching what the plugin sends ────────────────────────────
@@ -67,9 +63,10 @@ interface DesignSystemSnapshot {
 export async function callLLM(
   intent: string,
   selection: SelectionSnapshot,
-  designSystem: DesignSystemSnapshot
+  designSystem: DesignSystemSnapshot,
+  apiKey: string
 ): Promise<unknown> {
-  const anthropic = getClient();
+  const anthropic = getClient(apiKey);
   const userPrompt = buildUserPrompt(intent, selection, designSystem);
 
   const abort = new AbortController();
@@ -121,9 +118,10 @@ export async function callLLM(
 export async function callLLMGenerate(
   prompt: string,
   styleTokens: any,
-  designSystem: DesignSystemSnapshot
+  designSystem: DesignSystemSnapshot,
+  apiKey: string
 ): Promise<unknown> {
-  const anthropic = getClient();
+  const anthropic = getClient(apiKey);
   const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem);
 
   const abort = new AbortController();

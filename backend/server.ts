@@ -74,7 +74,13 @@ app.post("/cancel", (_req: Request, res: Response) => {
 
 app.post("/plan", async (req: Request, res: Response) => {
   try {
-    const { intent, selection, designSystem } = req.body;
+    const { intent, selection, designSystem, apiKey } = req.body;
+
+    // API key is required (per-user)
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key. Please configure your Anthropic API key in Settings." });
+      return;
+    }
 
     // Basic input validation
     if (!intent || typeof intent !== "string") {
@@ -93,7 +99,7 @@ app.post("/plan", async (req: Request, res: Response) => {
     console.log(`[plan] intent="${intent}", nodes=${selection.nodes.length}`);
 
     // 1. Call LLM
-    const rawBatch = await callLLM(intent, selection, designSystem);
+    const rawBatch = await callLLM(intent, selection, designSystem, apiKey);
     console.log(`[plan] LLM returned:`, JSON.stringify(rawBatch).slice(0, 300));
 
     // 2. Validate
@@ -140,7 +146,13 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem } = req.body;
+    const { prompt, styleTokens, designSystem, apiKey } = req.body;
+
+    // API key is required (per-user)
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key. Please configure your Anthropic API key in Settings." });
+      return;
+    }
 
     if (!prompt || typeof prompt !== "string") {
       res.status(400).json({ error: "Missing or invalid 'prompt'" });
@@ -155,7 +167,8 @@ app.post("/generate", async (req: Request, res: Response) => {
     const snapshot = await callLLMGenerate(
       prompt,
       styleTokens || {},
-      designSystem || { textStyles: [], fillStyles: [], components: [], variables: [] }
+      designSystem || { textStyles: [], fillStyles: [], components: [], variables: [] },
+      apiKey
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));

@@ -120,7 +120,14 @@ DELETE_NODE:
 DUPLICATE_FRAME:
   { "type": "DUPLICATE_FRAME", "nodeId": "<node id from selection — the top-level frame to duplicate>", "variantIntent": "<optional string describing how the copy should differ, e.g. 'dark mode', 'mobile layout', 'Spanish language'>" }
   Note: Creates a complete copy of the specified frame and places it to the right on the canvas. If variantIntent is provided, the plugin will automatically apply a second AI pass to transform the copy according to the description.
-  IMPORTANT: Use this when the user says "duplicate this frame", "create a variant", "make a dark mode version", "create a copy with X changes", etc.
+  IMPORTANT: ONLY use DUPLICATE_FRAME when the user EXPLICITLY asks to DUPLICATE, COPY, or CREATE A VARIANT/VERSION. Look for words like "duplicate", "copy", "create a version", "create a variant", "make a copy".
+  IMPORTANT: Do NOT use DUPLICATE_FRAME when the user says "change", "convert", "make this", "switch to", "turn this into", or similar modification words. Those mean the user wants to MODIFY THE EXISTING frame in place — use SET_FILL_COLOR, SET_TEXT, and other edit operations directly on the selected nodes instead.
+  IMPORTANT: Examples:
+    - "duplicate this frame in dark mode" → DUPLICATE_FRAME (user said "duplicate")
+    - "create a dark mode version" → DUPLICATE_FRAME (user said "create a version")
+    - "change this to dark mode" → Use SET_FILL_COLOR operations (user said "change this", wants in-place edit)
+    - "make this dark mode" → Use SET_FILL_COLOR operations (user said "make this", wants in-place edit)
+    - "switch to dark mode" → Use SET_FILL_COLOR operations (user said "switch to", wants in-place edit)
   IMPORTANT: The variantIntent should capture WHAT should change in the copy. For example:
     - "dark mode" → dark backgrounds, light text, ensure all text contrasts with new backgrounds
     - "light mode" → light backgrounds, dark text, ensure all text contrasts with new backgrounds

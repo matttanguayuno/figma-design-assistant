@@ -125,45 +125,58 @@
       background: rgba(214, 48, 49, 0.1);
     }
 
-    /* ── Progress Bar ───────────────────────────────── */
+    /* ── Progress Bar (Segmented) ───────────────────── */
     .progress-container {
       display: none;
       flex-direction: column;
-      gap: 4px;
+      gap: 0;
     }
     .progress-container.visible {
       display: flex;
     }
-    .progress-bar-track {
-      width: 100%;
+    .progress-segments {
+      display: flex;
+      gap: 3px;
+    }
+    .progress-segment {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .segment-track {
       height: 4px;
       background: var(--surface);
       border-radius: 2px;
       overflow: hidden;
     }
-    .progress-bar-fill {
+    .segment-fill {
       height: 100%;
       width: 0%;
-      background: var(--accent);
       border-radius: 2px;
       transition: width 0.15s linear;
+      background: var(--accent);
     }
-    .progress-steps {
-      display: flex;
-      justify-content: space-between;
+    .segment-label {
+      text-align: center;
       font-size: 9px;
       color: var(--text-muted);
-    }
-    .progress-steps .step {
-      opacity: 0.4;
+      opacity: 0.35;
       transition: opacity 0.3s, color 0.3s;
     }
-    .progress-steps .step.active {
+    .progress-segment.active .segment-fill {
+      background: var(--accent);
+    }
+    .progress-segment.active .segment-label {
       opacity: 1;
       color: var(--accent);
       font-weight: 600;
     }
-    .progress-steps .step.done {
+    .progress-segment.done .segment-fill {
+      width: 100% !important;
+      background: var(--success);
+    }
+    .progress-segment.done .segment-label {
       opacity: 0.7;
       color: var(--success);
     }
@@ -297,9 +310,130 @@
       background: var(--border);
       margin: 4px 0;
     }
+
+    /* ── Loading Overlay ─────────────────────────────── */
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      z-index: 999;
+      transition: opacity 0.3s;
+    }
+    .loading-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid var(--surface);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .loading-text {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* ── Settings Panel ──────────────────────────────── */
+    .settings-panel {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      padding: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      animation: menuFadeIn 0.15s ease;
+    }
+    .settings-panel.visible {
+      display: flex;
+    }
+    .settings-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .settings-row {
+      display: flex;
+      gap: 6px;
+    }
+    .settings-input {
+      flex: 1;
+      padding: 6px 8px;
+      font-family: var(--font);
+      font-size: 11px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      outline: none;
+    }
+    .settings-input:focus {
+      border-color: var(--accent);
+    }
+    .settings-input::placeholder {
+      color: var(--text-muted);
+      opacity: 0.5;
+    }
+    .btn-save-key {
+      flex: none;
+      padding: 6px 10px;
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .btn-save-key:hover {
+      background: var(--accent-hover);
+    }
+    .key-status {
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .key-status.connected {
+      color: var(--success);
+    }
+    .key-status.missing {
+      color: var(--danger);
+    }
+    .key-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .key-status.connected .key-dot {
+      background: var(--success);
+    }
+    .key-status.missing .key-dot {
+      background: var(--danger);
+    }
   </style>
 </head>
 <body>
+  <div id="loading-overlay" class="loading-overlay">
+    <div class="spinner"></div>
+    <div class="loading-text">Initializing…</div>
+  </div>
+
   <div>
     <div class="label-row">
       <label for="intent">Describe changes</label>
@@ -319,6 +453,11 @@
             <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 11l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Import from JSON
           </button>
+          <div class="menu-separator"></div>
+          <button class="menu-item" id="menu-settings">
+            <svg viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3l.4 2 1.3.7 1.8-1 2.1 2.1-1 1.8.7 1.3 2 .4v3l-2 .4-1.3.7 1 1.8-2.1 2.1-1.8-1-.7 1.3-.4 2h-3l-.4-2-1.3-.7-1.8 1L.9 13.1l1-1.8L1.2 10l-2-.4v-3l2-.4.7-1.3-1-1.8L3 .9l1.8 1L6.1 1.2l.4-2z" stroke="currentColor" stroke-width="1.1"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.1"/></svg>
+            Settings
+          </button>
         </div>
       </div>
     </div>
@@ -329,18 +468,36 @@
   </div>
 
   <div class="btn-row">
-    <button id="btn-apply" class="btn-primary">Apply</button>
+    <button id="btn-apply" class="btn-primary" disabled>Apply</button>
     <button id="btn-cancel" class="btn-cancel">Cancel</button>
   </div>
 
-  <div id="progress-container" class="progress-container">
-    <div class="progress-bar-track">
-      <div id="progress-bar-fill" class="progress-bar-fill"></div>
+  <div id="settings-panel" class="settings-panel">
+    <div class="settings-label">Anthropic API Key</div>
+    <div class="settings-row">
+      <input id="api-key-input" class="settings-input" type="password" placeholder="sk-ant-api03-…" spellcheck="false" autocomplete="off" />
+      <button id="btn-save-key" class="btn-save-key">Save</button>
     </div>
-    <div id="progress-steps" class="progress-steps">
-      <span class="step" data-step="analyze">Analyzing</span>
-      <span class="step" data-step="generate">Generating</span>
-      <span class="step" data-step="create">Creating</span>
+    <div id="key-status" class="key-status missing">
+      <span class="key-dot"></span>
+      <span id="key-status-text">No API key configured</span>
+    </div>
+  </div>
+
+  <div id="progress-container" class="progress-container">
+    <div class="progress-segments">
+      <div class="progress-segment" data-step="analyze">
+        <div class="segment-track"><div class="segment-fill"></div></div>
+        <div class="segment-label">Analyzing</div>
+      </div>
+      <div class="progress-segment" data-step="generate">
+        <div class="segment-track"><div class="segment-fill"></div></div>
+        <div class="segment-label">Generating</div>
+      </div>
+      <div class="progress-segment" data-step="create">
+        <div class="segment-track"><div class="segment-fill"></div></div>
+        <div class="segment-label">Creating</div>
+      </div>
     </div>
   </div>
 
@@ -361,8 +518,29 @@
     const menuImportJson = document.getElementById("menu-import-json");
     const fileInput = document.getElementById("file-input");
     const progressContainer = document.getElementById("progress-container");
-    const progressBarFill = document.getElementById("progress-bar-fill");
-    const progressSteps = document.getElementById("progress-steps");
+    const progressSegments = document.querySelectorAll(".progress-segment");
+    const settingsPanel = document.getElementById("settings-panel");
+    const apiKeyInput = document.getElementById("api-key-input");
+    const btnSaveKey = document.getElementById("btn-save-key");
+    const keyStatus = document.getElementById("key-status");
+    const keyStatusText = document.getElementById("key-status-text");
+    const menuSettings = document.getElementById("menu-settings");
+
+    // ── API Key state ────────────────────────────────────────────
+    let _apiKey = "";
+
+    function updateKeyStatus(key) {
+      _apiKey = key || "";
+      if (_apiKey) {
+        keyStatus.className = "key-status active";
+        keyStatusText.textContent = "API key configured";
+        btnApply.disabled = false;
+      } else {
+        keyStatus.className = "key-status missing";
+        keyStatusText.textContent = "No API key configured";
+        btnApply.disabled = true;
+      }
+    }
 
     // Track whether anything is selected to update button label
     let hasSelection = false;
@@ -371,135 +549,96 @@
       btnApply.textContent = selected ? "Apply" : "Generate";
     }
 
-    // ── Progress Bar (timing-adaptive with guaranteed visible movement) ──
+    // ── Progress Bar (segmented, timing-adaptive) ──────────────────
     //
-    // Strategy: each phase gets a % range of the bar. Within each phase,
-    // we progress linearly over the estimated duration to ~85% of the range,
-    // then slow-creep the remaining 15% (never stopping). When a phase
-    // actually completes, snap to its boundary. After each run, store
-    // actual timings to improve estimates for next time.
+    // Strategy: 3 independent segments, one per phase. The active
+    // segment fills based on estimated time; completed segments snap
+    // to 100% green. No positional confusion — label sits below its bar.
+    // After each run, timings are persisted via figma.clientStorage.
 
     // Default estimates (ms). Updated after each successful run.
     let phaseEstimates = { analyze: 5000, generate: 45000, create: 4000 };
     const PHASE_ORDER = ["analyze", "generate", "create"];
 
-    // Fixed allocation: analyze=12%, generate=75%, create=8%, done-jump=5%
-    const PHASE_ALLOC = { analyze: 12, generate: 75, create: 8 };
-
-    // Compute boundaries from allocations
-    function computeBoundaries() {
-      let cum = 0;
-      const b = {};
-      for (const p of PHASE_ORDER) {
-        cum += PHASE_ALLOC[p];
-        b[p] = cum; // e.g. analyze=12, generate=87, create=95
-      }
-      return b;
-    }
-    let PHASE_BOUNDARIES = computeBoundaries();
-
     let _progressInterval = null;
-    let _progressPct = 0;
     let _progressPhase = "";
     let _phaseStartTime = 0;
-    // Track actual phase start times for timing measurement
     let _phaseTimings = {};
-    let _runStartTime = 0;
+
+    function getSegmentFill(phase) {
+      const seg = document.querySelector('.progress-segment[data-step="' + phase + '"]');
+      return seg ? seg.querySelector(".segment-fill") : null;
+    }
 
     function startProgress(phase) {
       progressContainer.classList.add("visible");
-      _progressPct = 0;
       _progressPhase = phase || "analyze";
       _phaseStartTime = Date.now();
-      _runStartTime = Date.now();
       _phaseTimings = {};
       _phaseTimings[_progressPhase] = Date.now();
-      progressBarFill.style.width = "0%";
+      // Reset all segments
+      progressSegments.forEach(function(seg) {
+        seg.classList.remove("active", "done");
+        seg.querySelector(".segment-fill").style.width = "0%";
+      });
       updateStepIndicators(_progressPhase);
-
       if (_progressInterval) clearInterval(_progressInterval);
-      _progressInterval = setInterval(tickProgress, 80); // ~12fps for smooth movement
+      _progressInterval = setInterval(tickProgress, 80);
     }
 
     function tickProgress() {
-      const phaseIdx = PHASE_ORDER.indexOf(_progressPhase);
-      const phaseStart = phaseIdx > 0 ? PHASE_BOUNDARIES[PHASE_ORDER[phaseIdx - 1]] : 0;
-      const phaseEnd = PHASE_BOUNDARIES[_progressPhase] || 95;
-      const phaseRange = phaseEnd - phaseStart;
-      const est = phaseEstimates[_progressPhase] || 30000;
-
-      const elapsed = Date.now() - _phaseStartTime;
-
-      let target;
+      var fill = getSegmentFill(_progressPhase);
+      if (!fill) return;
+      var est = phaseEstimates[_progressPhase] || 30000;
+      var elapsed = Date.now() - _phaseStartTime;
+      var pct;
       if (elapsed < est) {
-        // Within estimated time: linear progression to 85% of phase range
-        target = phaseStart + phaseRange * 0.85 * (elapsed / est);
+        pct = 85 * (elapsed / est);
       } else {
-        // Past estimated time: slow logarithmic creep from 85% toward 98% of range
-        // This NEVER stops — always adds a tiny bit
-        const overtime = elapsed - est;
-        const base = phaseRange * 0.85;
-        const extra = phaseRange * 0.13 * (1 - Math.exp(-overtime / (est * 0.5)));
-        target = phaseStart + base + extra;
+        var overtime = elapsed - est;
+        pct = 85 + 13 * (1 - Math.exp(-overtime / (est * 0.5)));
       }
-
-      // Guarantee minimum visible movement: at least +0.05% per tick
-      const minStep = 0.05;
-      if (target <= _progressPct) {
-        target = _progressPct + minStep;
-      }
-
-      // Cap at 95% (leave room for "done" snap to 100%)
-      _progressPct = Math.min(target, 95);
-      progressBarFill.style.width = _progressPct.toFixed(1) + "%";
+      fill.style.width = Math.min(pct, 98).toFixed(1) + "%";
     }
 
     function advanceToPhase(phase) {
       if (phase === _progressPhase) return;
 
-      // Record actual timing for the phase that just ended
-      const prevPhase = _progressPhase;
+      // Record timing for finished phase
+      var prevPhase = _progressPhase;
       if (_phaseTimings[prevPhase]) {
-        const actualMs = Date.now() - _phaseTimings[prevPhase];
-        // Blend with previous estimate: 70% actual, 30% old estimate (smoothing)
+        var actualMs = Date.now() - _phaseTimings[prevPhase];
         phaseEstimates[prevPhase] = Math.round(actualMs * 0.7 + phaseEstimates[prevPhase] * 0.3);
+      }
+
+      // Mark previous segment as done (CSS handles 100% fill + green)
+      var prevSeg = document.querySelector('.progress-segment[data-step="' + prevPhase + '"]');
+      if (prevSeg) { prevSeg.classList.remove("active"); prevSeg.classList.add("done"); }
+
+      if (phase === "done") {
+        // Mark all segments done
+        progressSegments.forEach(function(seg) {
+          seg.classList.remove("active");
+          seg.classList.add("done");
+        });
+        if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
+        // Save timings to plugin sandbox for persistence
+        postToPlugin({ type: "save-timings", timings: phaseEstimates });
+        return;
       }
 
       _progressPhase = phase;
       _phaseStartTime = Date.now();
       _phaseTimings[phase] = Date.now();
       updateStepIndicators(phase);
-
-      // Snap bar to the start of this phase (previous phase boundary)
-      const phaseIdx = PHASE_ORDER.indexOf(phase);
-      if (phaseIdx > 0) {
-        const floor = PHASE_BOUNDARIES[PHASE_ORDER[phaseIdx - 1]];
-        if (_progressPct < floor) _progressPct = floor;
-      }
-
-      if (phase === "done") {
-        // Record final phase timing
-        if (_phaseTimings[prevPhase]) {
-          const actualMs = Date.now() - _phaseTimings[prevPhase];
-          phaseEstimates[prevPhase] = Math.round(actualMs * 0.7 + phaseEstimates[prevPhase] * 0.3);
-        }
-        // Animate to 100%
-        _progressPct = 100;
-        progressBarFill.style.width = "100%";
-        if (_progressInterval) clearInterval(_progressInterval);
-        _progressInterval = null;
-        const steps = progressSteps.querySelectorAll(".step");
-        steps.forEach(el => { el.classList.remove("active"); el.classList.add("done"); });
-      }
     }
 
     function updateStepIndicators(phase) {
-      const steps = progressSteps.querySelectorAll(".step");
-      const idx = PHASE_ORDER.indexOf(phase);
-      steps.forEach((el, i) => {
-        el.classList.remove("active", "done");
-        if (i < idx) el.classList.add("done");
-        else if (i === idx) el.classList.add("active");
+      var idx = PHASE_ORDER.indexOf(phase);
+      progressSegments.forEach(function(seg, i) {
+        seg.classList.remove("active", "done");
+        if (i < idx) seg.classList.add("done");
+        else if (i === idx) seg.classList.add("active");
       });
     }
 
@@ -507,10 +646,10 @@
       if (_progressInterval) clearInterval(_progressInterval);
       _progressInterval = null;
       progressContainer.classList.remove("visible");
-      _progressPct = 0;
-      progressBarFill.style.width = "0%";
-      const steps = progressSteps.querySelectorAll(".step");
-      steps.forEach(el => el.classList.remove("active", "done"));
+      progressSegments.forEach(function(seg) {
+        seg.classList.remove("active", "done");
+        seg.querySelector(".segment-fill").style.width = "0%";
+      });
     }
 
     function showWorking() {
@@ -522,7 +661,7 @@
     function hideWorking() {
       btnApply.style.display = "block";
       btnCancel.style.display = "none";
-      btnApply.disabled = false;
+      btnApply.disabled = !_apiKey;
       statusBar.style.display = "flex";
     }
 
@@ -580,6 +719,27 @@
       }
     });
 
+    // ── Menu: Settings ──────────────────────────────────────────
+    menuSettings.addEventListener("click", () => {
+      menuDropdown.classList.remove("show");
+      menuToggle.classList.remove("open");
+      settingsPanel.classList.toggle("visible");
+    });
+
+    // ── Save API Key ─────────────────────────────────────────────
+    btnSaveKey.addEventListener("click", () => {
+      const key = apiKeyInput.value.trim();
+      if (!key) {
+        setStatus("Please enter an API key.", "error");
+        return;
+      }
+      updateKeyStatus(key);
+      postToPlugin({ type: "save-api-key", key: key });
+      apiKeyInput.value = "";
+      apiKeyInput.placeholder = "sk-ant-\u2026" + key.slice(-4);
+      setStatus("API key saved.", "success");
+    });
+
     // ── Menu: Export design to JSON ──────────────────────────────
     menuExportJson.addEventListener("click", () => {
       menuDropdown.classList.remove("show");
@@ -632,8 +792,8 @@
 
     // ── Fetch Proxy (real AbortController for instant cancel) ──────
     // ▸ For local development:  "http://localhost:3001"
-    // ▸ For Render deployment:  "https://YOUR-SERVICE.onrender.com"
-    const BACKEND_URL = "http://localhost:3001";
+    // ▸ For Render deployment:  "https://figma-design-assistant.onrender.com"
+    const BACKEND_URL = "https://figma-design-assistant.onrender.com";
     let _activeFetchAbort = null;
 
     function doFetchForPlugin(endpoint, body, seq) {
@@ -685,6 +845,10 @@
 
     // ── Button Handlers ───────────────────────────────────────────
     btnApply.addEventListener("click", () => {
+      if (!_apiKey) {
+        setStatus("Please configure your API key in Settings first.", "error");
+        return;
+      }
       const intent = intentEl.value.trim();
       if (!intent) {
         setStatus("Please describe what you want to change.", "error");
@@ -806,6 +970,31 @@
         case "selection-change": {
           setSelectionStatus(msg.label);
           updateButtonLabel(msg.label !== "Nothing selected — will generate new frame");
+          break;
+        }
+        case "load-timings": {
+          if (msg.timings) {
+            if (msg.timings.analyze) phaseEstimates.analyze = msg.timings.analyze;
+            if (msg.timings.generate) phaseEstimates.generate = msg.timings.generate;
+            if (msg.timings.create) phaseEstimates.create = msg.timings.create;
+          }
+          break;
+        }
+        case "startup-ready": {
+          const overlay = document.getElementById("loading-overlay");
+          if (overlay) {
+            overlay.classList.add("hidden");
+            setTimeout(() => overlay.remove(), 300);
+          }
+          break;
+        }
+        case "load-api-key": {
+          const key = msg.key || "";
+          updateKeyStatus(key);
+          if (key) {
+            apiKeyInput.value = "";
+            apiKeyInput.placeholder = "sk-ant-\u2026" + key.slice(-4);
+          }
           break;
         }
       }

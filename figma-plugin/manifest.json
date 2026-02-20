@@ -6,8 +6,8 @@
   "ui": "ui.html",
   "editorType": ["figma"],
   "networkAccess": {
-    "allowedDomains": ["none"],
+    "allowedDomains": ["https://figma-design-assistant.onrender.com"],
     "devAllowedDomains": ["http://localhost:3001"],
-    "reasoning": "Connects to local backend server for AI-powered operation planning"
+    "reasoning": "Connects to backend server for AI-powered design generation"
   }
 }

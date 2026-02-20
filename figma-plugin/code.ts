@@ -31,13 +31,27 @@ let lastRevertState: RevertState | null = null;
 let _skipResizePropagation = false;
 let _cancelled = false;
 let _working = false;
+let _userApiKey = "";
 
 // ── Extraction caching ──────────────────────────────────────────────
 // Caches the expensive tree-walking results so rapid cancel+re-generate
 // doesn't freeze the UI for 30+ seconds waiting for extractDesignSystemSnapshot.
 const CACHE_TTL_MS = 60_000; // 60 seconds
 let _designSystemCache: { data: DesignSystemSnapshot; ts: number } | null = null;
-let _styleTokenCache: { data: Record<string, any>; ts: number } | null = null;
+// Separate cache for raw extracted data (before prompt-dependent reference selection)
+let _rawTokenCache: {
+  ts: number;
+  colors: string[];
+  cornerRadii: number[];
+  fontSizes: number[];
+  fontFamilies: string[];
+  spacings: number[];
+  paddings: number[];
+  buttonStyles: any[];
+  inputStyles: any[];
+  rootFrameLayouts: any[];
+  designFramesMeta: { name: string; height: number; childrenCount: number; nodeId: string }[];
+} | null = null;
 
 /** Yield to the event loop so Figma can process UI events (cancel clicks). */
 function yieldToUI(): Promise<void> {
@@ -109,11 +123,24 @@ function assignTempIds(snap: any): void {
  * font sizes, spacing, etc. so the LLM can match the design system.
  */
 function extractStyleTokens(userPrompt?: string): Record<string, any> {
-  // Return cached result if fresh (prompt only affects reference frame selection,
-  // not worth re-walking the entire tree for)
-  if (_styleTokenCache && (Date.now() - _styleTokenCache.ts) < CACHE_TTL_MS) {
-    console.log("[extractStyleTokens] Using cached result (age: " + Math.round((Date.now() - _styleTokenCache.ts) / 1000) + "s)");
-    return _styleTokenCache.data;
+  // If raw cache is fresh, skip the expensive tree walk but ALWAYS
+  // recompute reference frame selection & style prioritization based on prompt.
+  const hasFreshRawCache = _rawTokenCache && (Date.now() - _rawTokenCache.ts) < CACHE_TTL_MS;
+  if (hasFreshRawCache) {
+    console.log("[extractStyleTokens] Using cached raw data (age: " + Math.round((Date.now() - _rawTokenCache!.ts) / 1000) + "s), recomputing reference for prompt");
+    return _buildFinalTokens(
+      _rawTokenCache!.colors,
+      _rawTokenCache!.cornerRadii,
+      _rawTokenCache!.fontSizes,
+      _rawTokenCache!.fontFamilies,
+      _rawTokenCache!.spacings,
+      _rawTokenCache!.paddings,
+      _rawTokenCache!.buttonStyles,
+      _rawTokenCache!.inputStyles,
+      _rawTokenCache!.rootFrameLayouts,
+      _rawTokenCache!.designFramesMeta,
+      userPrompt,
+    );
   }
 
   const colors = new Set<string>();
@@ -453,129 +480,183 @@ function extractStyleTokens(userPrompt?: string): Record<string, any> {
     }
   }
 
-  // ── Reference Snapshots ──
-  // Send compact snapshots of 1-2 existing frames so the LLM can see the actual
-  // node structure, style properties, and layout — much more reliable than 
-  // fragile button/input heuristic detection.
-  const referenceSnapshots: any[] = [];
-  
-  function compactSnapshot(node: SceneNode, depth: number, maxDepth: number): any | null {
-    if (depth > maxDepth) return null;
-    const snap: any = { name: node.name, type: node.type };
-    
-    // Size (skip position to save tokens)
-    snap.width = Math.round(node.width);
-    snap.height = Math.round(node.height);
-    
-    // Layout properties
-    if ("layoutMode" in node) {
-      const frame = node as FrameNode;
-      const lm = frame.layoutMode;
-      if (lm === "HORIZONTAL" || lm === "VERTICAL") {
-        snap.layoutMode = lm;
-        if (frame.paddingTop > 0) snap.paddingTop = frame.paddingTop;
-        if (frame.paddingRight > 0) snap.paddingRight = frame.paddingRight;
-        if (frame.paddingBottom > 0) snap.paddingBottom = frame.paddingBottom;
-        if (frame.paddingLeft > 0) snap.paddingLeft = frame.paddingLeft;
-        if (frame.itemSpacing > 0) snap.itemSpacing = frame.itemSpacing;
-        snap.primaryAxisAlignItems = frame.primaryAxisAlignItems;
-        snap.counterAxisAlignItems = frame.counterAxisAlignItems;
-        if ("layoutSizingHorizontal" in frame) {
-          snap.layoutSizingHorizontal = (frame as any).layoutSizingHorizontal;
-          snap.layoutSizingVertical = (frame as any).layoutSizingVertical;
-        }
+  // Build design frame metadata for reference selection (cached for later prompt-aware reuse)
+  const designFramesMeta = designFrames
+    .filter(f => "children" in f && (f as FrameNode).height >= 500 && (f as any).children.length >= 3)
+    .map(f => ({
+      name: f.name,
+      height: Math.round((f as FrameNode).height),
+      childrenCount: (f as any).children.length,
+      nodeId: f.id,
+    }));
+
+  // Cache raw extracted data (before prompt-dependent reference selection)
+  _rawTokenCache = {
+    ts: Date.now(),
+    colors: [...colors],
+    cornerRadii: [...cornerRadii].sort((a, b) => a - b),
+    fontSizes: [...fontSizes].sort((a, b) => a - b),
+    fontFamilies: [...fontFamilies],
+    spacings: [...spacings].sort((a, b) => a - b),
+    paddings: [...paddings].sort((a, b) => a - b),
+    buttonStyles: buttonStyles.map(b => ({ ...b })), // preserve _sourceFrame
+    inputStyles: inputStyles.map(i => ({ ...i })),   // preserve _sourceFrame
+    rootFrameLayouts,
+    designFramesMeta,
+  };
+
+  return _buildFinalTokens(
+    _rawTokenCache.colors,
+    _rawTokenCache.cornerRadii,
+    _rawTokenCache.fontSizes,
+    _rawTokenCache.fontFamilies,
+    _rawTokenCache.spacings,
+    _rawTokenCache.paddings,
+    _rawTokenCache.buttonStyles,
+    _rawTokenCache.inputStyles,
+    _rawTokenCache.rootFrameLayouts,
+    _rawTokenCache.designFramesMeta,
+    userPrompt,
+  );
+}
+
+// ── Compact snapshot helper (module-level for reuse) ──
+function _compactSnapshot(node: SceneNode, depth: number, maxDepth: number): any | null {
+  if (depth > maxDepth) return null;
+  const snap: any = { name: node.name, type: node.type };
+
+  // Size (skip position to save tokens)
+  snap.width = Math.round(node.width);
+  snap.height = Math.round(node.height);
+
+  // Layout properties
+  if ("layoutMode" in node) {
+    const frame = node as FrameNode;
+    const lm = frame.layoutMode;
+    if (lm === "HORIZONTAL" || lm === "VERTICAL") {
+      snap.layoutMode = lm;
+      if (frame.paddingTop > 0) snap.paddingTop = frame.paddingTop;
+      if (frame.paddingRight > 0) snap.paddingRight = frame.paddingRight;
+      if (frame.paddingBottom > 0) snap.paddingBottom = frame.paddingBottom;
+      if (frame.paddingLeft > 0) snap.paddingLeft = frame.paddingLeft;
+      if (frame.itemSpacing > 0) snap.itemSpacing = frame.itemSpacing;
+      snap.primaryAxisAlignItems = frame.primaryAxisAlignItems;
+      snap.counterAxisAlignItems = frame.counterAxisAlignItems;
+      if ("layoutSizingHorizontal" in frame) {
+        snap.layoutSizingHorizontal = (frame as any).layoutSizingHorizontal;
+        snap.layoutSizingVertical = (frame as any).layoutSizingVertical;
       }
     }
-    
-    // Fill
-    if ("fills" in node) {
-      try {
-        const fills = (node as GeometryMixin).fills;
-        if (Array.isArray(fills) && fills.length > 0) {
-          const sf = fills.find((f: Paint) => f.type === "SOLID" && f.visible !== false) as SolidPaint | undefined;
-          if (sf) {
-            const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
-            snap.fillColor = `#${toH(sf.color.r)}${toH(sf.color.g)}${toH(sf.color.b)}`.toUpperCase();
-          }
+  }
+
+  // Fill
+  if ("fills" in node) {
+    try {
+      const fills = (node as GeometryMixin).fills;
+      if (Array.isArray(fills) && fills.length > 0) {
+        const sf = fills.find((f: Paint) => f.type === "SOLID" && f.visible !== false) as SolidPaint | undefined;
+        if (sf) {
+          const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
+          snap.fillColor = `#${toH(sf.color.r)}${toH(sf.color.g)}${toH(sf.color.b)}`.toUpperCase();
         }
-      } catch (_) {}
-    }
-    
-    // Corner radius
-    if ("cornerRadius" in node) {
-      const cr = (node as any).cornerRadius;
-      if (typeof cr === "number" && cr > 0) snap.cornerRadius = cr;
-    }
-    
-    // Strokes
-    if ("strokes" in node) {
-      try {
-        const strokes = (node as GeometryMixin).strokes;
-        if (Array.isArray(strokes) && strokes.length > 0) {
-          const ss = strokes.find((s: Paint) => s.type === "SOLID" && s.visible !== false) as SolidPaint | undefined;
-          if (ss) {
-            const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
-            snap.strokeColor = `#${toH(ss.color.r)}${toH(ss.color.g)}${toH(ss.color.b)}`.toUpperCase();
-            const sw = (node as any).strokeWeight;
-            if (typeof sw === "number" && sw > 0) snap.strokeWeight = sw;
-            // Individual stroke weights
-            const stw = (node as any).strokeTopWeight;
-            if (typeof stw === "number") {
-              const top = stw || 0, right = (node as any).strokeRightWeight || 0;
-              const bottom = (node as any).strokeBottomWeight || 0, left = (node as any).strokeLeftWeight || 0;
-              if (top !== bottom || left !== right || top !== left) {
-                snap.strokeTopWeight = top; snap.strokeRightWeight = right;
-                snap.strokeBottomWeight = bottom; snap.strokeLeftWeight = left;
-              }
+      }
+    } catch (_) {}
+  }
+
+  // Corner radius
+  if ("cornerRadius" in node) {
+    const cr = (node as any).cornerRadius;
+    if (typeof cr === "number" && cr > 0) snap.cornerRadius = cr;
+  }
+
+  // Strokes
+  if ("strokes" in node) {
+    try {
+      const strokes = (node as GeometryMixin).strokes;
+      if (Array.isArray(strokes) && strokes.length > 0) {
+        const ss = strokes.find((s: Paint) => s.type === "SOLID" && s.visible !== false) as SolidPaint | undefined;
+        if (ss) {
+          const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
+          snap.strokeColor = `#${toH(ss.color.r)}${toH(ss.color.g)}${toH(ss.color.b)}`.toUpperCase();
+          const sw = (node as any).strokeWeight;
+          if (typeof sw === "number" && sw > 0) snap.strokeWeight = sw;
+          // Individual stroke weights
+          const stw = (node as any).strokeTopWeight;
+          if (typeof stw === "number") {
+            const top = stw || 0, right = (node as any).strokeRightWeight || 0;
+            const bottom = (node as any).strokeBottomWeight || 0, left = (node as any).strokeLeftWeight || 0;
+            if (top !== bottom || left !== right || top !== left) {
+              snap.strokeTopWeight = top; snap.strokeRightWeight = right;
+              snap.strokeBottomWeight = bottom; snap.strokeLeftWeight = left;
             }
           }
         }
-      } catch (_) {}
-    }
-    
-    // Text properties
-    if (node.type === "TEXT") {
-      const tn = node as TextNode;
-      snap.characters = tn.characters;
-      if (typeof tn.fontSize === "number") snap.fontSize = tn.fontSize;
-      if (typeof tn.fontName !== "symbol" && tn.fontName) {
-        snap.fontFamily = (tn.fontName as FontName).family;
-        snap.fontStyle = (tn.fontName as FontName).style;
       }
-      snap.textAlignHorizontal = tn.textAlignHorizontal;
-      try {
-        const tFills = tn.fills as Paint[];
-        if (Array.isArray(tFills)) {
-          const sf = tFills.find((f: Paint) => f.type === "SOLID" && f.visible !== false) as SolidPaint | undefined;
-          if (sf) {
-            const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
-            snap.fillColor = `#${toH(sf.color.r)}${toH(sf.color.g)}${toH(sf.color.b)}`.toUpperCase();
-          }
-        }
-      } catch (_) {}
-      const td = tn.textDecoration;
-      if (typeof td === "string" && td !== "NONE") snap.textDecoration = td;
-    }
-    
-    // Children
-    if ("children" in node && depth < maxDepth) {
-      const children = (node as any).children;
-      if (children.length > 0) {
-        const mapped = children.map((c: SceneNode) => compactSnapshot(c, depth + 1, maxDepth)).filter(Boolean);
-        if (mapped.length > 0) snap.children = mapped;
-      }
-    }
-    
-    return snap;
+    } catch (_) {}
   }
-  
-  // Pick 1 representative frame — prefer the frame that contains the most detected buttons/inputs
-  // Use depth 4 so input text children are captured
+
+  // Text properties
+  if (node.type === "TEXT") {
+    const tn = node as TextNode;
+    snap.characters = tn.characters;
+    if (typeof tn.fontSize === "number") snap.fontSize = tn.fontSize;
+    if (typeof tn.fontName !== "symbol" && tn.fontName) {
+      snap.fontFamily = (tn.fontName as FontName).family;
+      snap.fontStyle = (tn.fontName as FontName).style;
+    }
+    snap.textAlignHorizontal = tn.textAlignHorizontal;
+    try {
+      const tFills = tn.fills as Paint[];
+      if (Array.isArray(tFills)) {
+        const sf = tFills.find((f: Paint) => f.type === "SOLID" && f.visible !== false) as SolidPaint | undefined;
+        if (sf) {
+          const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
+          snap.fillColor = `#${toH(sf.color.r)}${toH(sf.color.g)}${toH(sf.color.b)}`.toUpperCase();
+        }
+      }
+    } catch (_) {}
+    const td = tn.textDecoration;
+    if (typeof td === "string" && td !== "NONE") snap.textDecoration = td;
+  }
+
+  // Children
+  if ("children" in node && depth < maxDepth) {
+    const children = (node as any).children;
+    if (children.length > 0) {
+      const mapped = children.map((c: SceneNode) => _compactSnapshot(c, depth + 1, maxDepth)).filter(Boolean);
+      if (mapped.length > 0) snap.children = mapped;
+    }
+  }
+
+  return snap;
+}
+
+// ── Build final tokens with prompt-aware reference frame selection ──
+// This is separated from the tree walk so cached raw data can be reused
+// while still picking the right reference frame for each prompt.
+function _buildFinalTokens(
+  colors: string[],
+  cornerRadii: number[],
+  fontSizes: number[],
+  fontFamilies: string[],
+  spacings: number[],
+  paddings: number[],
+  rawButtonStyles: any[],
+  rawInputStyles: any[],
+  rootFrameLayouts: any[],
+  designFramesMeta: { name: string; height: number; childrenCount: number; nodeId: string }[],
+  userPrompt?: string,
+): Record<string, any> {
+  // ── Reference Snapshots ──
+  // Pick 1 representative frame based on prompt keywords + detected descendants
+  const referenceSnapshots: any[] = [];
+
   const detectedNames = new Set([
-    ...buttonStyles.map(b => b.name),
-    ...inputStyles.map(i => i.name),
+    ...rawButtonStyles.map((b: any) => b.name),
+    ...rawInputStyles.map((i: any) => i.name),
   ]);
-  
+
+  // Count detected descendants in a Figma node (for scoring)
   function countDetectedDescendants(node: SceneNode): number {
     let count = 0;
     if (detectedNames.has(node.name)) count++;
@@ -584,75 +665,77 @@ function extractStyleTokens(userPrompt?: string): Record<string, any> {
     }
     return count;
   }
-  
+
   // Score reference frames primarily by prompt keyword relevance
   const promptWords = (userPrompt || "").toLowerCase().split(/\s+/).filter(w => w.length > 2);
-  
-  let bestFrame: FrameNode | null = null;
+
+  let bestFrameNode: FrameNode | null = null;
+  let bestFrameName = "";
   let bestScore = -1;
-  for (const frame of designFrames) {
-    if (!("children" in frame)) continue;
-    const f = frame as FrameNode;
-    if (f.height < 500 || f.children.length < 3) continue;
+  for (const meta of designFramesMeta) {
     let score = 0;
     // Prompt keyword matching is the primary signal (e.g., "login" matches "01. Login")
-    const frameNameLower = f.name.toLowerCase();
+    const frameNameLower = meta.name.toLowerCase();
     for (const word of promptWords) {
       if (frameNameLower.includes(word)) { score += 100; break; }
     }
-    // Detected descendants as secondary signal
-    score += countDetectedDescendants(f);
-    // Tie-breaker: prefer frames with more children (richer content)
-    score += Math.min(f.children.length, 10) * 0.1;
-    if (score > bestScore) { bestScore = score; bestFrame = f; }
-  }
-  // Fallback: first qualifying frame if none scored
-  if (!bestFrame) {
-    for (const frame of designFrames) {
-      if (!("children" in frame)) continue;
-      const f = frame as FrameNode;
-      if (f.height < 500 || f.children.length < 3) continue;
-      bestFrame = f; break;
+    // Try to find the node for deeper scoring
+    const frameNode = figma.currentPage.findOne(n => n.id === meta.nodeId) as FrameNode | null;
+    if (frameNode) {
+      // Detected descendants as secondary signal
+      score += countDetectedDescendants(frameNode);
+      // Tie-breaker: prefer frames with more children (richer content)
+      score += Math.min(meta.childrenCount, 10) * 0.1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestFrameNode = frameNode;
+      bestFrameName = meta.name;
     }
   }
-  if (bestFrame) {
-    console.log("[extractStyleTokens] Reference snapshot from:", bestFrame.name, "(score:", bestScore, ")");
-    referenceSnapshots.push(compactSnapshot(bestFrame, 0, 4));
+  // Fallback: first qualifying frame if none scored
+  if (!bestFrameNode) {
+    for (const meta of designFramesMeta) {
+      const frameNode = figma.currentPage.findOne(n => n.id === meta.nodeId) as FrameNode | null;
+      if (frameNode) { bestFrameNode = frameNode; bestFrameName = meta.name; break; }
+    }
+  }
+  if (bestFrameNode) {
+    console.log("[extractStyleTokens] Reference snapshot from:", bestFrameName, "(score:", bestScore, ")");
+    referenceSnapshots.push(_compactSnapshot(bestFrameNode, 0, 4));
   }
 
   // ── Prioritize buttons/inputs from the reference frame ──
   // Sort so tokens from the reference frame come first, then trim.
-  // This avoids tokens from other screens confusing the LLM.
-  const refFrameName = bestFrame?.name || "";
+  const refFrameName = bestFrameName;
   const sortBySource = (a: any, b: any) => {
     const aMatch = a._sourceFrame === refFrameName ? 0 : 1;
     const bMatch = b._sourceFrame === refFrameName ? 0 : 1;
     return aMatch - bMatch;
   };
-  buttonStyles.sort(sortBySource);
-  inputStyles.sort(sortBySource);
+  // Work on copies to avoid mutating the cached raw arrays
+  const sortedButtons = [...rawButtonStyles].sort(sortBySource);
+  const sortedInputs = [...rawInputStyles].sort(sortBySource);
 
   // Trim to top 3 and strip internal _sourceFrame tag
-  const finalButtonStyles = buttonStyles.slice(0, 3).map(({ _sourceFrame, ...rest }: any) => rest);
-  const finalInputStyles = inputStyles.slice(0, 3).map(({ _sourceFrame, ...rest }: any) => rest);
+  const finalButtonStyles = sortedButtons.slice(0, 3).map(({ _sourceFrame, ...rest }: any) => rest);
+  const finalInputStyles = sortedInputs.slice(0, 3).map(({ _sourceFrame, ...rest }: any) => rest);
 
   console.log("[extractStyleTokens] Final buttons (ref=" + refFrameName + "):", JSON.stringify(finalButtonStyles));
   console.log("[extractStyleTokens] Final inputs (ref=" + refFrameName + "):", JSON.stringify(finalInputStyles));
 
-  const result = {
-    colors: [...colors],
-    cornerRadii: [...cornerRadii].sort((a, b) => a - b),
-    fontSizes: [...fontSizes].sort((a, b) => a - b),
-    fontFamilies: [...fontFamilies],
-    spacings: [...spacings].sort((a, b) => a - b),
-    paddings: [...paddings].sort((a, b) => a - b),
+  return {
+    colors,
+    cornerRadii,
+    fontSizes,
+    fontFamilies,
+    spacings,
+    paddings,
     buttonStyles: finalButtonStyles,
     inputStyles: finalInputStyles,
     rootFrameLayouts,
     referenceSnapshots,
   };
-  _styleTokenCache = { data: result, ts: Date.now() };
-  return result;
 }
 
 function snapshotNode(node: SceneNode, depth: number, siblingIndex?: number): NodeSnapshot {
@@ -5073,6 +5156,7 @@ setTimeout(() => {
 // ── Pre-cache extractions at startup ────────────────────────────────
 // Run the expensive tree-walking NOW (while the user is reading/typing),
 // so when they click Generate, the cache is warm and it's instant.
+// UI shows a loading overlay until we send "startup-ready".
 setTimeout(async () => {
   try {
     console.log("[startup] Pre-caching design system...");
@@ -5083,7 +5167,25 @@ setTimeout(async () => {
   } catch (e) {
     console.warn("[startup] Pre-cache failed (non-fatal):", e);
   }
+  // Signal UI that startup work is done — remove loading overlay
+  sendToUI({ type: "startup-ready" } as any);
 }, 200);
+
+// ── Load saved phase timings from clientStorage ─────────────────────
+// Sends persisted timing estimates to UI so the progress bar can use
+// actual historical durations for more accurate fill predictions.
+setTimeout(async () => {
+  try {
+    const raw = await figma.clientStorage.getAsync("phaseTimings");
+    if (raw) {
+      const timings = JSON.parse(raw);
+      sendToUI({ type: "load-timings", timings } as any);
+      console.log("[startup] Loaded saved phase timings:", timings);
+    }
+  } catch (e) {
+    console.warn("[startup] Failed to load phase timings:", e);
+  }
+}, 150);
 
 figma.ui.onmessage = async (msg: UIToPluginMessage) => {
   try {
@@ -5126,6 +5228,31 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Persist phase timings from UI ─────────────────────
+      case "save-timings" as any: {
+        try {
+          const timings = (msg as any).timings;
+          await figma.clientStorage.setAsync("phaseTimings", JSON.stringify(timings));
+          console.log("[timings] Saved phase timings:", timings);
+        } catch (e) {
+          console.warn("[timings] Failed to save:", e);
+        }
+        return;
+      }
+
+      // ── Persist API key from UI ───────────────────────────
+      case "save-api-key" as any: {
+        try {
+          const key = (msg as any).key || "";
+          _userApiKey = key;
+          await figma.clientStorage.setAsync("anthropicApiKey", key);
+          console.log("[api-key] API key saved.");
+        } catch (e) {
+          console.warn("[api-key] Failed to save API key:", e);
+        }
+        return;
+      }
+
       // ── Run (plan + apply in one step) ─────────────────────
       case "run": {
         // If already working, auto-cancel previous operation
@@ -5136,7 +5263,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         }
 
         // No selection → auto-redirect to generate flow
-        if (figma.currentPage.selection.length === 0) {
+        // Also redirect if the prompt is clearly asking to CREATE a new frame/screen
+        const intentText = ((msg as any).intent || "").toLowerCase();
+        const isGenerateIntent = figma.currentPage.selection.length === 0 ||
+          /\b(add|create|generate|make|build|design)\b.+\b(frame|screen|page|view|layout|mobile|desktop)\b/i.test(intentText) ||
+          /\b(new|mobile|desktop)\b.+\b(frame|screen|page|view|layout)\b/i.test(intentText) ||
+          /\b(frame|screen|page)\b.+\bfor\b/i.test(intentText);
+        if (isGenerateIntent) {
           // Re-dispatch as a generate message (will set _working there)
           const genMsg = { type: "generate" as const, prompt: (msg as any).intent || "" };
           figma.ui.onmessage!(genMsg as any);
@@ -5170,7 +5303,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
           let batch: OperationBatch;
           try {
-            batch = await fetchViaUI("/plan", payload) as OperationBatch;
+            batch = await fetchViaUI("/plan", { ...payload, apiKey: _userApiKey }) as OperationBatch;
           } catch (err: any) {
             if (_cancelled) {
               sendToUI({ type: "generate-cancelled" as any });
@@ -5555,6 +5688,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               prompt: (msg as any).prompt,
               styleTokens,
               designSystem,
+              apiKey: _userApiKey,
             });
           } catch (err: any) {
             if (_cancelled) {
