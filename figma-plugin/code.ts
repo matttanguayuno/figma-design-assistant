@@ -22,7 +22,6 @@ import { Operation, OperationBatch } from "../shared/operationSchema";
 
 // ── Configuration ───────────────────────────────────────────────────
 
-const BACKEND_URL = "http://localhost:3001";
 const CHANGE_LOG_FRAME_NAME = "AI Change Log";
 
 // ── State ───────────────────────────────────────────────────────────
@@ -1423,26 +1422,6 @@ async function extractDesignSystemSnapshot(): Promise<DesignSystemSnapshot> {
   const result: DesignSystemSnapshot = { textStyles, fillStyles, components, variables };
   _designSystemCache = { data: result, ts: Date.now() };
   return result;
-}
-
-// ── 3. Call Backend ─────────────────────────────────────────────────
-
-async function callBackend(
-  endpoint: string,
-  payload: BackendPayload
-): Promise<OperationBatch> {
-  const resp = await fetch(`${BACKEND_URL}${endpoint}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Backend error ${resp.status}: ${text}`);
-  }
-
-  return (await resp.json()) as OperationBatch;
 }
 
 // ── 4. Operation Applicators ────────────────────────────────────────
@@ -4523,17 +4502,22 @@ async function applyDuplicateFrame(op: Extract<Operation, { type: "DUPLICATE_FRA
         variantPrompt = buildColorVariantPrompt(op.variantIntent);
       }
 
-      const payload: BackendPayload = {
+      const payload = {
         intent: variantPrompt,
         selection: cloneSelection,
         designSystem,
+        apiKey: _userApiKey,
+        provider: _selectedProvider,
+        model: _selectedModel,
       };
 
-      const variantBatch = await callBackend("/plan?lenient=true", payload);
+      const variantBatch = await fetchViaUI("/plan?lenient=true", payload) as OperationBatch;
 
       if (variantBatch.operations && variantBatch.operations.length > 0) {
-        console.log(`[duplicateFrame] Applying ${variantBatch.operations.length} variant transformations`);
-        for (const varOp of variantBatch.operations) {
+        // Filter out DUPLICATE_FRAME ops to prevent runaway duplication loops
+        const safeOps = variantBatch.operations.filter(o => o.type !== "DUPLICATE_FRAME");
+        console.log(`[duplicateFrame] Applying ${safeOps.length} variant transformations (filtered ${variantBatch.operations.length - safeOps.length} DUPLICATE_FRAME ops)`);
+        for (const varOp of safeOps) {
           try {
             await applyOperation(varOp);
           } catch (err: any) {
@@ -5431,7 +5415,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
             // Sibling positioning is handled mechanically — refinement only
             // fine-tunes internal layout of the resized section.
-            const refinementPayload: BackendPayload = {
+            const refinementPayload = {
               intent: buildRefinementIntent(
                 targetNode.name,
                 deepSnapshot,
@@ -5446,10 +5430,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 components: [],
                 variables: [],
               },
+              apiKey: _userApiKey,
+              provider: _selectedProvider,
+              model: _selectedModel,
             };
 
             try {
-              const refineBatch = await callBackend("/plan?lenient=true", refinementPayload);
+              const refineBatch = await fetchViaUI("/plan?lenient=true", refinementPayload) as OperationBatch;
               if (refineBatch.operations && refineBatch.operations.length > 0) {
                 _skipResizePropagation = true;
                 try {
