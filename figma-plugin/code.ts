@@ -1424,6 +1424,243 @@ async function extractDesignSystemSnapshot(): Promise<DesignSystemSnapshot> {
   return result;
 }
 
+// ── Generate Design Docs (LLM-friendly markdown) ───────────────────
+
+async function generateDesignDocs(): Promise<{ markdown: string; filename: string }> {
+  // Extract tokens from actual visual usage (works on unstructured files)
+  const tokens = await extractStyleTokens();
+  // Extract named Figma styles/components/variables (may be empty on messy files)
+  const ds = await extractDesignSystemSnapshot();
+  const pageName = figma.currentPage.name;
+  const now = new Date().toISOString().split("T")[0];
+
+  // Collect design frame names for screen inventory
+  const validTopLevelTypes = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "SECTION"]);
+  const designFrames = figma.currentPage.children.filter(c => {
+    if (!validTopLevelTypes.has(c.type)) return false;
+    if (c.name === CHANGE_LOG_FRAME_NAME) return false;
+    if (c.name.startsWith("Generation ") || c.name.startsWith("Try the plugin")) return false;
+    if ("getPluginData" in c && (c as SceneNode).getPluginData("generated") === "true") return false;
+    return true;
+  });
+
+  const lines: string[] = [];
+
+  // ── Front matter (Copilot instructions) ──
+  lines.push("---");
+  lines.push(`applyTo: "**"`);
+  lines.push("---");
+  lines.push("");
+  lines.push(`# Design System — ${pageName}`);
+  lines.push("");
+  lines.push(`> Auto-extracted from Figma on ${now}. Use these tokens and component specs as the`);
+  lines.push(`> single source of truth when generating UI code for this project.`);
+  lines.push("");
+
+  // ── Color Palette ──
+  lines.push("## Color Palette");
+  lines.push("");
+  if (tokens.colors && tokens.colors.length > 0) {
+    lines.push("| Hex | Role |");
+    lines.push("|-----|------|");
+    for (const hex of tokens.colors) {
+      lines.push(`| \`${hex}\` | — |`);
+    }
+  } else {
+    lines.push("_No colors detected._");
+  }
+  lines.push("");
+
+  // ── Named Fill Styles (if any) ──
+  if (ds.fillStyles && ds.fillStyles.length > 0) {
+    lines.push("### Named Color Styles");
+    lines.push("");
+    lines.push("| Name |");
+    lines.push("|------|");
+    for (const s of ds.fillStyles) {
+      lines.push(`| ${s.name} |`);
+    }
+    lines.push("");
+  }
+
+  // ── Typography ──
+  lines.push("## Typography");
+  lines.push("");
+  if (tokens.fontFamilies && tokens.fontFamilies.length > 0) {
+    lines.push("### Font Families");
+    lines.push("");
+    for (const ff of tokens.fontFamilies) {
+      lines.push(`- ${ff}`);
+    }
+    lines.push("");
+  }
+  if (tokens.fontSizes && tokens.fontSizes.length > 0) {
+    lines.push("### Type Scale (px)");
+    lines.push("");
+    lines.push(tokens.fontSizes.join(", "));
+    lines.push("");
+  }
+
+  // Named text styles (richer info if available)
+  if (ds.textStyles && ds.textStyles.length > 0) {
+    lines.push("### Named Text Styles");
+    lines.push("");
+    lines.push("| Name | Font | Size | Line Height | Letter Spacing |");
+    lines.push("|------|------|------|-------------|----------------|");
+    for (const s of ds.textStyles as any[]) {
+      const font = s.fontFamily ? `${s.fontFamily} ${s.fontStyle || ""}`.trim() : "—";
+      const size = s.fontSize ? `${s.fontSize}px` : "—";
+      const lh = s.lineHeight !== undefined ? (s.lineHeight === "AUTO" ? "Auto" : `${s.lineHeight}`) : "—";
+      const ls = s.letterSpacing !== undefined ? `${s.letterSpacing}` : "—";
+      lines.push(`| ${s.name} | ${font} | ${size} | ${lh} | ${ls} |`);
+    }
+    lines.push("");
+  }
+
+  // ── Spacing ──
+  lines.push("## Spacing Scale (px)");
+  lines.push("");
+  if (tokens.spacings && tokens.spacings.length > 0) {
+    lines.push(tokens.spacings.join(", "));
+  } else {
+    lines.push("_No spacing values detected._");
+  }
+  lines.push("");
+
+  if (tokens.paddings && tokens.paddings.length > 0) {
+    lines.push("### Padding Values (px)");
+    lines.push("");
+    lines.push(tokens.paddings.join(", "));
+    lines.push("");
+  }
+
+  // ── Corner Radii ──
+  lines.push("## Corner Radii (px)");
+  lines.push("");
+  if (tokens.cornerRadii && tokens.cornerRadii.length > 0) {
+    lines.push(tokens.cornerRadii.join(", "));
+  } else {
+    lines.push("_No corner radii detected._");
+  }
+  lines.push("");
+
+  // ── Component Specs: Buttons ──
+  lines.push("## Components");
+  lines.push("");
+  if (tokens.buttonStyles && tokens.buttonStyles.length > 0) {
+    lines.push("### Buttons");
+    lines.push("");
+    for (const btn of tokens.buttonStyles) {
+      lines.push(`**${btn.name || "Button"}**`);
+      lines.push("");
+      const props: string[] = [];
+      if (btn.fillColor) props.push(`- Fill: \`${btn.fillColor}\``);
+      if (btn.strokeColor) props.push(`- Border: \`${btn.strokeColor}\` (${btn.strokeWeight || 1}px)`);
+      if (btn.cornerRadius !== undefined) props.push(`- Corner radius: ${btn.cornerRadius}px`);
+      if (btn.height) props.push(`- Height: ${btn.height}px`);
+      if (btn.width) props.push(`- Width: ${btn.width}px`);
+      if (btn.fontSize) props.push(`- Font size: ${btn.fontSize}px`);
+      if (btn.fontFamily) props.push(`- Font: ${btn.fontFamily} ${btn.fontStyle || ""}`.trim());
+      if (btn.textColor) props.push(`- Text color: \`${btn.textColor}\``);
+      if (btn.layoutMode) {
+        props.push(`- Layout: ${btn.layoutMode}`);
+        const pad = [btn.paddingTop, btn.paddingRight, btn.paddingBottom, btn.paddingLeft].filter((v: number) => v !== undefined);
+        if (pad.length > 0) props.push(`- Padding: ${pad.join(" / ")}px`);
+      }
+      if (btn.layoutSizingHorizontal) props.push(`- Horizontal sizing: ${btn.layoutSizingHorizontal}`);
+      lines.push(props.join("\n"));
+      lines.push("");
+    }
+  }
+
+  // ── Component Specs: Inputs ──
+  if (tokens.inputStyles && tokens.inputStyles.length > 0) {
+    lines.push("### Text Inputs");
+    lines.push("");
+    for (const inp of tokens.inputStyles) {
+      lines.push(`**${inp.name || "Input"}**`);
+      lines.push("");
+      const props: string[] = [];
+      if (inp.fillColor) props.push(`- Fill: \`${inp.fillColor}\``);
+      if (inp.strokeColor) props.push(`- Border: \`${inp.strokeColor}\` (${inp.strokeWeight || 1}px)`);
+      if (inp.bottomBorderOnly) props.push(`- Bottom border only: ${inp.bottomBorderWeight || 1}px`);
+      if (inp.cornerRadius !== undefined) props.push(`- Corner radius: ${inp.cornerRadius}px`);
+      if (inp.height) props.push(`- Height: ${inp.height}px`);
+      if (inp.width) props.push(`- Width: ${inp.width}px`);
+      if (inp.fontSize) props.push(`- Font size: ${inp.fontSize}px`);
+      if (inp.fontFamily) props.push(`- Font: ${inp.fontFamily} ${inp.fontStyle || ""}`.trim());
+      if (inp.textColor) props.push(`- Text color: \`${inp.textColor}\``);
+      if (inp.layoutMode) {
+        props.push(`- Layout: ${inp.layoutMode}`);
+        const pad = [inp.paddingTop, inp.paddingRight, inp.paddingBottom, inp.paddingLeft].filter((v: number) => v !== undefined);
+        if (pad.length > 0) props.push(`- Padding: ${pad.join(" / ")}px`);
+      }
+      lines.push(props.join("\n"));
+      lines.push("");
+    }
+  }
+
+  // ── Named Components (Figma) ──
+  if (ds.components && ds.components.length > 0) {
+    lines.push("### Named Components");
+    lines.push("");
+    lines.push("| Name | Key |");
+    lines.push("|------|-----|");
+    for (const c of ds.components) {
+      lines.push(`| ${c.name} | \`${c.key}\` |`);
+    }
+    lines.push("");
+  }
+
+  // ── Variables ──
+  if (ds.variables && ds.variables.length > 0) {
+    lines.push("## Design Variables");
+    lines.push("");
+    lines.push("| Name | ID |");
+    lines.push("|------|----|");
+    for (const v of ds.variables) {
+      lines.push(`| ${v.name} | \`${v.id}\` |`);
+    }
+    lines.push("");
+  }
+
+  // ── Layout Patterns ──
+  if (tokens.rootFrameLayouts && tokens.rootFrameLayouts.length > 0) {
+    lines.push("## Layout Patterns");
+    lines.push("");
+    for (const layout of tokens.rootFrameLayouts) {
+      lines.push(`**${layout.name}** — ${layout.width}×${layout.height}`);
+      const props: string[] = [];
+      if (layout.layoutMode) props.push(`Layout: ${layout.layoutMode}`);
+      if (layout.fillColor) props.push(`Background: \`${layout.fillColor}\``);
+      if (layout.paddingTop !== undefined) {
+        props.push(`Padding: ${layout.paddingTop} / ${layout.paddingRight} / ${layout.paddingBottom} / ${layout.paddingLeft}`);
+      }
+      if (layout.itemSpacing) props.push(`Gap: ${layout.itemSpacing}px`);
+      if (props.length > 0) lines.push(props.map(p => `- ${p}`).join("\n"));
+      lines.push("");
+    }
+  }
+
+  // ── Screen Inventory ──
+  lines.push("## Screen Inventory");
+  lines.push("");
+  if (designFrames.length > 0) {
+    for (const f of designFrames) {
+      const w = Math.round(f.width);
+      const h = Math.round(f.height);
+      lines.push(`- **${f.name}** (${w}×${h})`);
+    }
+  } else {
+    lines.push("_No screens found on this page._");
+  }
+  lines.push("");
+
+  const safeName = pageName.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const filename = `design-system-${safeName}.md`;
+  return { markdown: lines.join("\n"), filename };
+}
+
 // ── 4. Operation Applicators ────────────────────────────────────────
 
 async function applyInsertComponent(op: Extract<Operation, { type: "INSERT_COMPONENT" }>) {
@@ -5541,6 +5778,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         const filename = `design-export-${safeName}.json`;
 
         sendToUI({ type: "export-json-result", data: exportData, filename });
+        break;
+      }
+
+      // ── Generate Design Docs (markdown) ────────────────────────
+      case "generate-docs": {
+        try {
+          sendToUI({ type: "status", message: "Extracting design tokens…" });
+          const result = await generateDesignDocs();
+          sendToUI({ type: "docs-result", markdown: result.markdown, filename: result.filename });
+        } catch (err: any) {
+          sendToUI({ type: "docs-error", error: err.message || "Failed to generate docs." });
+        }
         break;
       }
 

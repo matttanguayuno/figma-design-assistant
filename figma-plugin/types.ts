@@ -107,7 +107,8 @@ export type UIToPluginMessage =
   | { type: "revert-last" }
   | { type: "export-json" }
   | { type: "import-json"; data: { selection: { nodes: any[] }; [key: string]: any } }
-  | { type: "generate"; prompt: string };
+  | { type: "generate"; prompt: string }
+  | { type: "generate-docs" };
 
 export type PluginToUIMessage =
   | { type: "apply-success"; summary: string }
@@ -121,7 +122,9 @@ export type PluginToUIMessage =
   | { type: "import-json-success"; summary: string }
   | { type: "import-json-error"; error: string }
   | { type: "generate-success"; summary: string }
-  | { type: "generate-error"; error: string };
+  | { type: "generate-error"; error: string }
+  | { type: "docs-result"; markdown: string; filename: string }
+  | { type: "docs-error"; error: string };
 
 // ── Audit Log Entry ─────────────────────────────────────────────────
 
