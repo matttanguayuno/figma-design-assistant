@@ -1449,19 +1449,27 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   const now = new Date().toISOString().split("T")[0];
 
   // ── Helpers ──
-  const STATE_KEYWORDS = /Hover|Focused|Pressed|Dragged|Selected|Disabled/i;
+  const STATE_KEYWORDS = /Hover|Focus|Press|Drag|Select|Disable|Medium\s*Brush|Low\s*Brush/i;
   const FIGMA_INTERNAL = /^Figma\s*\(/i;
   const MAX_TOKEN_VALUE = 64; // cap spacing/padding outliers
 
-  // Deduplicate component specs by signature (fill + radius + height)
+  // Deduplicate component specs by signature (fill + radius, height bucketed to 4px)
   function dedupeComponents(items: any[]): any[] {
     const seen = new Set<string>();
     return items.filter(item => {
-      const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, item.height || 0].join("|");
+      const hBucket = item.height ? Math.round(item.height / 4) * 4 : 0;
+      const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, hBucket].join("|");
       if (seen.has(sig)) return false;
       seen.add(sig);
       return true;
     });
+  }
+
+  // Strip redundant group prefix from token name  (e.g. "Primary/PrimaryColor" → "PrimaryColor")
+  function stripGroupPrefix(name: string): string {
+    const slash = name.indexOf("/");
+    if (slash === -1) return name;
+    return name.substring(slash + 1);
   }
 
   // Round a number to n decimal places
@@ -1499,16 +1507,22 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   if (tokens.colors && tokens.colors.length > 0) {
     lines.push("| Hex | Role |");
     lines.push("|-----|------|");
+    // Build a set of known roles from named fill styles for smarter inference
+    const knownPrimary = new Set<string>();
+    const knownError = new Set<string>();
+    for (const s of (ds.fillStyles || []) as any[]) {
+      const lower = (s.name || "").toLowerCase();
+      if (s.hex) {
+        if (lower.includes("error")) knownError.add(s.hex);
+        else if (lower.includes("primary") && !lower.includes("on primary")) knownPrimary.add(s.hex);
+      }
+    }
     for (const hex of tokens.colors) {
-      // Auto-infer role from button/input token matches
       let role = "—";
-      const btnPrimary = tokens.buttonStyles && tokens.buttonStyles.find((b: any) => b.fillColor === hex && b.textColor);
-      const btnText = tokens.buttonStyles && tokens.buttonStyles.find((b: any) => b.textColor === hex);
-      if (btnPrimary && btnPrimary.textColor !== hex) role = "Primary";
+      if (knownPrimary.has(hex)) role = "Primary";
+      else if (knownError.has(hex)) role = "Error / Danger";
       else if (hex === "#FFFFFF" || hex === "#FCFBFF") role = "Background / Surface";
       else if (hex === "#000000" || hex === "#1C1B1F") role = "On Surface (text)";
-      else if (hex.match(/^#[A-F0-9]{2}[0-3]/i) && hex !== "#000000") role = "Error / Danger";
-      else if (btnText && btnPrimary === undefined) role = "On Primary (button text)";
       lines.push(`| \`${hex}\` | ${role} |`);
     }
   } else {
@@ -1526,11 +1540,13 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     const darkStyles = filteredFillStyles.filter((s: any) => s.name.startsWith("Dark/"));
     const otherStyles = filteredFillStyles.filter((s: any) => !s.name.startsWith("Light/") && !s.name.startsWith("Dark/"));
 
-    const renderStyleTable = (styles: any[], stripPrefix: string) => {
+    const renderStyleTable = (styles: any[], themePrefix: string) => {
       lines.push("| Token | Hex |");
       lines.push("|-------|-----|");
       for (const s of styles) {
-        const name = stripPrefix ? s.name.replace(new RegExp("^" + stripPrefix + "/"), "") : s.name;
+        // Strip theme prefix ("Light/") then strip redundant group prefix ("Primary/PrimaryColor" → "PrimaryColor")
+        let name = themePrefix ? s.name.replace(new RegExp("^" + themePrefix + "/"), "") : s.name;
+        name = stripGroupPrefix(name);
         const hex = s.hex ? `\`${s.hex}\`` : "—";
         lines.push(`| ${name} | ${hex} |`);
       }
@@ -1724,19 +1740,19 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     }
   }
 
-  // ── Screen Inventory ──
-  lines.push("## Screen Inventory");
-  lines.push("");
-  if (designFrames.length > 0) {
-    for (const f of designFrames) {
+  // ── Screen Inventory (only frames NOT already listed in Layout Patterns) ──
+  const layoutNames = new Set((tokens.rootFrameLayouts || []).map((l: any) => l.name));
+  const unlisted = designFrames.filter(f => !layoutNames.has(f.name));
+  if (unlisted.length > 0) {
+    lines.push("## Additional Screens");
+    lines.push("");
+    for (const f of unlisted) {
       const w = Math.round(f.width);
       const h = Math.round(f.height);
       lines.push(`- **${f.name}** (${w}×${h})`);
     }
-  } else {
-    lines.push("_No screens found on this page._");
+    lines.push("");
   }
-  lines.push("");
 
   const safeName = pageName.replace(/[^a-zA-Z0-9_-]/g, "_");
   const filename = `design-system-${safeName}.md`;

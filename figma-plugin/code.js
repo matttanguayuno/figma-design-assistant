@@ -1200,17 +1200,23 @@
     const ds = await extractDesignSystemSnapshot();
     const pageName = figma.currentPage.name;
     const now = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-    const STATE_KEYWORDS = /Hover|Focused|Pressed|Dragged|Selected|Disabled/i;
+    const STATE_KEYWORDS = /Hover|Focus|Press|Drag|Select|Disable|Medium\s*Brush|Low\s*Brush/i;
     const FIGMA_INTERNAL = /^Figma\s*\(/i;
     const MAX_TOKEN_VALUE = 64;
     function dedupeComponents(items) {
       const seen = /* @__PURE__ */ new Set();
       return items.filter((item) => {
-        const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, item.height || 0].join("|");
+        const hBucket = item.height ? Math.round(item.height / 4) * 4 : 0;
+        const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, hBucket].join("|");
         if (seen.has(sig)) return false;
         seen.add(sig);
         return true;
       });
+    }
+    function stripGroupPrefix(name) {
+      const slash = name.indexOf("/");
+      if (slash === -1) return name;
+      return name.substring(slash + 1);
     }
     function round(v, decimals) {
       const m = Math.pow(10, decimals);
@@ -1239,15 +1245,21 @@
     if (tokens.colors && tokens.colors.length > 0) {
       lines.push("| Hex | Role |");
       lines.push("|-----|------|");
+      const knownPrimary = /* @__PURE__ */ new Set();
+      const knownError = /* @__PURE__ */ new Set();
+      for (const s of ds.fillStyles || []) {
+        const lower = (s.name || "").toLowerCase();
+        if (s.hex) {
+          if (lower.includes("error")) knownError.add(s.hex);
+          else if (lower.includes("primary") && !lower.includes("on primary")) knownPrimary.add(s.hex);
+        }
+      }
       for (const hex of tokens.colors) {
         let role = "\u2014";
-        const btnPrimary = tokens.buttonStyles && tokens.buttonStyles.find((b) => b.fillColor === hex && b.textColor);
-        const btnText = tokens.buttonStyles && tokens.buttonStyles.find((b) => b.textColor === hex);
-        if (btnPrimary && btnPrimary.textColor !== hex) role = "Primary";
+        if (knownPrimary.has(hex)) role = "Primary";
+        else if (knownError.has(hex)) role = "Error / Danger";
         else if (hex === "#FFFFFF" || hex === "#FCFBFF") role = "Background / Surface";
         else if (hex === "#000000" || hex === "#1C1B1F") role = "On Surface (text)";
-        else if (hex.match(/^#[A-F0-9]{2}[0-3]/i) && hex !== "#000000") role = "Error / Danger";
-        else if (btnText && btnPrimary === void 0) role = "On Primary (button text)";
         lines.push(`| \`${hex}\` | ${role} |`);
       }
     } else {
@@ -1261,11 +1273,12 @@
       const lightStyles = filteredFillStyles.filter((s) => s.name.startsWith("Light/"));
       const darkStyles = filteredFillStyles.filter((s) => s.name.startsWith("Dark/"));
       const otherStyles = filteredFillStyles.filter((s) => !s.name.startsWith("Light/") && !s.name.startsWith("Dark/"));
-      const renderStyleTable = (styles, stripPrefix) => {
+      const renderStyleTable = (styles, themePrefix) => {
         lines.push("| Token | Hex |");
         lines.push("|-------|-----|");
         for (const s of styles) {
-          const name = stripPrefix ? s.name.replace(new RegExp("^" + stripPrefix + "/"), "") : s.name;
+          let name = themePrefix ? s.name.replace(new RegExp("^" + themePrefix + "/"), "") : s.name;
+          name = stripGroupPrefix(name);
           const hex = s.hex ? `\`${s.hex}\`` : "\u2014";
           lines.push(`| ${name} | ${hex} |`);
         }
@@ -1437,18 +1450,18 @@
         lines.push("");
       }
     }
-    lines.push("## Screen Inventory");
-    lines.push("");
-    if (designFrames.length > 0) {
-      for (const f of designFrames) {
+    const layoutNames = new Set((tokens.rootFrameLayouts || []).map((l) => l.name));
+    const unlisted = designFrames.filter((f) => !layoutNames.has(f.name));
+    if (unlisted.length > 0) {
+      lines.push("## Additional Screens");
+      lines.push("");
+      for (const f of unlisted) {
         const w = Math.round(f.width);
         const h = Math.round(f.height);
         lines.push(`- **${f.name}** (${w}\xD7${h})`);
       }
-    } else {
-      lines.push("_No screens found on this page._");
+      lines.push("");
     }
-    lines.push("");
     const safeName = pageName.replace(/[^a-zA-Z0-9_-]/g, "_");
     const filename = `design-system-${safeName}.md`;
     return { markdown: lines.join("\n"), filename };
