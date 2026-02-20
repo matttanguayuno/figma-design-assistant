@@ -1155,10 +1155,24 @@
       }
       return entry;
     });
-    const fillStyles = figma.getLocalPaintStyles().map((s) => ({
-      id: s.id,
-      name: s.name
-    }));
+    const fillStyles = figma.getLocalPaintStyles().map((s) => {
+      const entry = { id: s.id, name: s.name };
+      try {
+        const paints = s.paints;
+        if (Array.isArray(paints)) {
+          const solid = paints.find((p) => p.type === "SOLID" && p.visible !== false);
+          if (solid) {
+            const toH = (c) => Math.round(c * 255).toString(16).padStart(2, "0");
+            entry.hex = `#${toH(solid.color.r)}${toH(solid.color.g)}${toH(solid.color.b)}`.toUpperCase();
+            if (typeof solid.opacity === "number" && solid.opacity < 1) {
+              entry.opacity = Math.round(solid.opacity * 100);
+            }
+          }
+        }
+      } catch (_) {
+      }
+      return entry;
+    });
     const components = [];
     figma.currentPage.findAll((n) => n.type === "COMPONENT").forEach((c) => {
       const comp = c;
@@ -1186,6 +1200,22 @@
     const ds = await extractDesignSystemSnapshot();
     const pageName = figma.currentPage.name;
     const now = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+    const STATE_KEYWORDS = /Hover|Focused|Pressed|Dragged|Selected|Disabled/i;
+    const FIGMA_INTERNAL = /^Figma\s*\(/i;
+    const MAX_TOKEN_VALUE = 64;
+    function dedupeComponents(items) {
+      const seen = /* @__PURE__ */ new Set();
+      return items.filter((item) => {
+        const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, item.height || 0].join("|");
+        if (seen.has(sig)) return false;
+        seen.add(sig);
+        return true;
+      });
+    }
+    function round(v, decimals) {
+      const m = Math.pow(10, decimals);
+      return Math.round(v * m) / m;
+    }
     const validTopLevelTypes = /* @__PURE__ */ new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "SECTION"]);
     const designFrames = figma.currentPage.children.filter((c) => {
       if (!validTopLevelTypes.has(c.type)) return false;
@@ -1210,21 +1240,52 @@
       lines.push("| Hex | Role |");
       lines.push("|-----|------|");
       for (const hex of tokens.colors) {
-        lines.push(`| \`${hex}\` | \u2014 |`);
+        let role = "\u2014";
+        const btnPrimary = tokens.buttonStyles && tokens.buttonStyles.find((b) => b.fillColor === hex && b.textColor);
+        const btnText = tokens.buttonStyles && tokens.buttonStyles.find((b) => b.textColor === hex);
+        if (btnPrimary && btnPrimary.textColor !== hex) role = "Primary";
+        else if (hex === "#FFFFFF" || hex === "#FCFBFF") role = "Background / Surface";
+        else if (hex === "#000000" || hex === "#1C1B1F") role = "On Surface (text)";
+        else if (hex.match(/^#[A-F0-9]{2}[0-3]/i) && hex !== "#000000") role = "Error / Danger";
+        else if (btnText && btnPrimary === void 0) role = "On Primary (button text)";
+        lines.push(`| \`${hex}\` | ${role} |`);
       }
     } else {
       lines.push("_No colors detected._");
     }
     lines.push("");
-    if (ds.fillStyles && ds.fillStyles.length > 0) {
-      lines.push("### Named Color Styles");
-      lines.push("");
-      lines.push("| Name |");
-      lines.push("|------|");
-      for (const s of ds.fillStyles) {
-        lines.push(`| ${s.name} |`);
+    const filteredFillStyles = (ds.fillStyles || []).filter(
+      (s) => !STATE_KEYWORDS.test(s.name) && !FIGMA_INTERNAL.test(s.name)
+    );
+    if (filteredFillStyles.length > 0) {
+      const lightStyles = filteredFillStyles.filter((s) => s.name.startsWith("Light/"));
+      const darkStyles = filteredFillStyles.filter((s) => s.name.startsWith("Dark/"));
+      const otherStyles = filteredFillStyles.filter((s) => !s.name.startsWith("Light/") && !s.name.startsWith("Dark/"));
+      const renderStyleTable = (styles, stripPrefix) => {
+        lines.push("| Token | Hex |");
+        lines.push("|-------|-----|");
+        for (const s of styles) {
+          const name = stripPrefix ? s.name.replace(new RegExp("^" + stripPrefix + "/"), "") : s.name;
+          const hex = s.hex ? `\`${s.hex}\`` : "\u2014";
+          lines.push(`| ${name} | ${hex} |`);
+        }
+        lines.push("");
+      };
+      if (lightStyles.length > 0) {
+        lines.push("### Light Theme Tokens");
+        lines.push("");
+        renderStyleTable(lightStyles, "Light");
       }
-      lines.push("");
+      if (darkStyles.length > 0) {
+        lines.push("### Dark Theme Tokens");
+        lines.push("");
+        renderStyleTable(darkStyles, "Dark");
+      }
+      if (otherStyles.length > 0) {
+        lines.push("### Other Color Tokens");
+        lines.push("");
+        renderStyleTable(otherStyles, "");
+      }
     }
     lines.push("## Typography");
     lines.push("");
@@ -1242,16 +1303,19 @@
       lines.push(tokens.fontSizes.join(", "));
       lines.push("");
     }
-    if (ds.textStyles && ds.textStyles.length > 0) {
+    const filteredTextStyles = (ds.textStyles || []).filter(
+      (s) => !FIGMA_INTERNAL.test(s.name)
+    );
+    if (filteredTextStyles.length > 0) {
       lines.push("### Named Text Styles");
       lines.push("");
       lines.push("| Name | Font | Size | Line Height | Letter Spacing |");
       lines.push("|------|------|------|-------------|----------------|");
-      for (const s of ds.textStyles) {
+      for (const s of filteredTextStyles) {
         const font = s.fontFamily ? `${s.fontFamily} ${s.fontStyle || ""}`.trim() : "\u2014";
         const size = s.fontSize ? `${s.fontSize}px` : "\u2014";
         const lh = s.lineHeight !== void 0 ? s.lineHeight === "AUTO" ? "Auto" : `${s.lineHeight}` : "\u2014";
-        const ls = s.letterSpacing !== void 0 ? `${s.letterSpacing}` : "\u2014";
+        const ls = s.letterSpacing !== void 0 ? `${round(s.letterSpacing, 2)}` : "\u2014";
         lines.push(`| ${s.name} | ${font} | ${size} | ${lh} | ${ls} |`);
       }
       lines.push("");
@@ -1259,16 +1323,20 @@
     lines.push("## Spacing Scale (px)");
     lines.push("");
     if (tokens.spacings && tokens.spacings.length > 0) {
-      lines.push(tokens.spacings.join(", "));
+      const capped = tokens.spacings.filter((v) => v <= MAX_TOKEN_VALUE);
+      lines.push(capped.length > 0 ? capped.join(", ") : "_No spacing values detected._");
     } else {
       lines.push("_No spacing values detected._");
     }
     lines.push("");
     if (tokens.paddings && tokens.paddings.length > 0) {
-      lines.push("### Padding Values (px)");
-      lines.push("");
-      lines.push(tokens.paddings.join(", "));
-      lines.push("");
+      const capped = tokens.paddings.filter((v) => v <= MAX_TOKEN_VALUE);
+      if (capped.length > 0) {
+        lines.push("### Padding Values (px)");
+        lines.push("");
+        lines.push(capped.join(", "));
+        lines.push("");
+      }
     }
     lines.push("## Corner Radii (px)");
     lines.push("");
@@ -1281,17 +1349,20 @@
     lines.push("## Components");
     lines.push("");
     if (tokens.buttonStyles && tokens.buttonStyles.length > 0) {
+      const buttons = dedupeComponents(tokens.buttonStyles);
       lines.push("### Buttons");
       lines.push("");
-      for (const btn of tokens.buttonStyles) {
-        lines.push(`**${btn.name || "Button"}**`);
+      for (const btn of buttons) {
+        let label = btn.name || "Button";
+        if (btn.strokeColor && (!btn.fillColor || btn.fillColor === "#FFFFFF")) label = "Outline Button";
+        else if (btn.fillColor && btn.fillColor !== "#FFFFFF") label = "Filled Button";
+        lines.push(`**${label}**`);
         lines.push("");
         const props = [];
         if (btn.fillColor) props.push(`- Fill: \`${btn.fillColor}\``);
         if (btn.strokeColor) props.push(`- Border: \`${btn.strokeColor}\` (${typeof btn.strokeWeight === "number" ? btn.strokeWeight : 1}px)`);
         if (btn.cornerRadius !== void 0) props.push(`- Corner radius: ${btn.cornerRadius}px`);
         if (btn.height) props.push(`- Height: ${btn.height}px`);
-        if (btn.width) props.push(`- Width: ${btn.width}px`);
         if (btn.textFontSize) props.push(`- Font size: ${btn.textFontSize}px`);
         if (btn.textFontFamily) props.push(`- Font: ${btn.textFontFamily} ${btn.textFontStyle || ""}`.trim());
         if (btn.textColor) props.push(`- Text color: \`${btn.textColor}\``);
@@ -1306,9 +1377,10 @@
       }
     }
     if (tokens.inputStyles && tokens.inputStyles.length > 0) {
+      const inputs = dedupeComponents(tokens.inputStyles);
       lines.push("### Text Inputs");
       lines.push("");
-      for (const inp of tokens.inputStyles) {
+      for (const inp of inputs) {
         lines.push(`**${inp.name || "Input"}**`);
         lines.push("");
         const props = [];
@@ -1317,7 +1389,6 @@
         if (inp.bottomBorderOnly) props.push(`- Bottom border only: ${typeof inp.bottomBorderWeight === "number" ? inp.bottomBorderWeight : 1}px`);
         if (inp.cornerRadius !== void 0) props.push(`- Corner radius: ${inp.cornerRadius}px`);
         if (inp.height) props.push(`- Height: ${inp.height}px`);
-        if (inp.width) props.push(`- Width: ${inp.width}px`);
         if (inp.textFontSize) props.push(`- Font size: ${inp.textFontSize}px`);
         if (inp.textFontFamily) props.push(`- Font: ${inp.textFontFamily} ${inp.textFontStyle || ""}`.trim());
         if (inp.textColor) props.push(`- Text color: \`${inp.textColor}\``);

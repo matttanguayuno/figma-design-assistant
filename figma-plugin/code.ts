@@ -1389,10 +1389,24 @@ async function extractDesignSystemSnapshot(): Promise<DesignSystemSnapshot> {
     return entry;
   });
 
-  const fillStyles = figma.getLocalPaintStyles().map((s) => ({
-    id: s.id,
-    name: s.name,
-  }));
+  const fillStyles = figma.getLocalPaintStyles().map((s) => {
+    const entry: any = { id: s.id, name: s.name };
+    // Resolve hex value from the first solid paint
+    try {
+      const paints = s.paints;
+      if (Array.isArray(paints)) {
+        const solid = paints.find((p: Paint) => p.type === "SOLID" && p.visible !== false) as SolidPaint | undefined;
+        if (solid) {
+          const toH = (c: number) => Math.round(c * 255).toString(16).padStart(2, "0");
+          entry.hex = `#${toH(solid.color.r)}${toH(solid.color.g)}${toH(solid.color.b)}`.toUpperCase();
+          if (typeof solid.opacity === "number" && solid.opacity < 1) {
+            entry.opacity = Math.round(solid.opacity * 100);
+          }
+        }
+      }
+    } catch (_) {}
+    return entry;
+  });
 
   const components: { key: string; name: string }[] = [];
   // Only scan current page — scanning figma.root.findAll() traverses ALL pages
@@ -1434,6 +1448,28 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   const pageName = figma.currentPage.name;
   const now = new Date().toISOString().split("T")[0];
 
+  // ── Helpers ──
+  const STATE_KEYWORDS = /Hover|Focused|Pressed|Dragged|Selected|Disabled/i;
+  const FIGMA_INTERNAL = /^Figma\s*\(/i;
+  const MAX_TOKEN_VALUE = 64; // cap spacing/padding outliers
+
+  // Deduplicate component specs by signature (fill + radius + height)
+  function dedupeComponents(items: any[]): any[] {
+    const seen = new Set<string>();
+    return items.filter(item => {
+      const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0, item.height || 0].join("|");
+      if (seen.has(sig)) return false;
+      seen.add(sig);
+      return true;
+    });
+  }
+
+  // Round a number to n decimal places
+  function round(v: number, decimals: number): number {
+    const m = Math.pow(10, decimals);
+    return Math.round(v * m) / m;
+  }
+
   // Collect design frame names for screen inventory
   const validTopLevelTypes = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "SECTION"]);
   const designFrames = figma.currentPage.children.filter(c => {
@@ -1464,23 +1500,58 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     lines.push("| Hex | Role |");
     lines.push("|-----|------|");
     for (const hex of tokens.colors) {
-      lines.push(`| \`${hex}\` | — |`);
+      // Auto-infer role from button/input token matches
+      let role = "—";
+      const btnPrimary = tokens.buttonStyles && tokens.buttonStyles.find((b: any) => b.fillColor === hex && b.textColor);
+      const btnText = tokens.buttonStyles && tokens.buttonStyles.find((b: any) => b.textColor === hex);
+      if (btnPrimary && btnPrimary.textColor !== hex) role = "Primary";
+      else if (hex === "#FFFFFF" || hex === "#FCFBFF") role = "Background / Surface";
+      else if (hex === "#000000" || hex === "#1C1B1F") role = "On Surface (text)";
+      else if (hex.match(/^#[A-F0-9]{2}[0-3]/i) && hex !== "#000000") role = "Error / Danger";
+      else if (btnText && btnPrimary === undefined) role = "On Primary (button text)";
+      lines.push(`| \`${hex}\` | ${role} |`);
     }
   } else {
     lines.push("_No colors detected._");
   }
   lines.push("");
 
-  // ── Named Fill Styles (if any) ──
-  if (ds.fillStyles && ds.fillStyles.length > 0) {
-    lines.push("### Named Color Styles");
-    lines.push("");
-    lines.push("| Name |");
-    lines.push("|------|");
-    for (const s of ds.fillStyles) {
-      lines.push(`| ${s.name} |`);
+  // ── Named Fill Styles (filtered, with hex values) ──
+  const filteredFillStyles = (ds.fillStyles || []).filter((s: any) =>
+    !STATE_KEYWORDS.test(s.name) && !FIGMA_INTERNAL.test(s.name)
+  );
+  if (filteredFillStyles.length > 0) {
+    // Group by Light/Dark prefix
+    const lightStyles = filteredFillStyles.filter((s: any) => s.name.startsWith("Light/"));
+    const darkStyles = filteredFillStyles.filter((s: any) => s.name.startsWith("Dark/"));
+    const otherStyles = filteredFillStyles.filter((s: any) => !s.name.startsWith("Light/") && !s.name.startsWith("Dark/"));
+
+    const renderStyleTable = (styles: any[], stripPrefix: string) => {
+      lines.push("| Token | Hex |");
+      lines.push("|-------|-----|");
+      for (const s of styles) {
+        const name = stripPrefix ? s.name.replace(new RegExp("^" + stripPrefix + "/"), "") : s.name;
+        const hex = s.hex ? `\`${s.hex}\`` : "—";
+        lines.push(`| ${name} | ${hex} |`);
+      }
+      lines.push("");
+    };
+
+    if (lightStyles.length > 0) {
+      lines.push("### Light Theme Tokens");
+      lines.push("");
+      renderStyleTable(lightStyles, "Light");
     }
-    lines.push("");
+    if (darkStyles.length > 0) {
+      lines.push("### Dark Theme Tokens");
+      lines.push("");
+      renderStyleTable(darkStyles, "Dark");
+    }
+    if (otherStyles.length > 0) {
+      lines.push("### Other Color Tokens");
+      lines.push("");
+      renderStyleTable(otherStyles, "");
+    }
   }
 
   // ── Typography ──
@@ -1501,37 +1572,44 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     lines.push("");
   }
 
-  // Named text styles (richer info if available)
-  if (ds.textStyles && ds.textStyles.length > 0) {
+  // Named text styles (filtered, rounded)
+  const filteredTextStyles = (ds.textStyles || []).filter((s: any) =>
+    !FIGMA_INTERNAL.test(s.name)
+  );
+  if (filteredTextStyles.length > 0) {
     lines.push("### Named Text Styles");
     lines.push("");
     lines.push("| Name | Font | Size | Line Height | Letter Spacing |");
     lines.push("|------|------|------|-------------|----------------|");
-    for (const s of ds.textStyles as any[]) {
+    for (const s of filteredTextStyles as any[]) {
       const font = s.fontFamily ? `${s.fontFamily} ${s.fontStyle || ""}`.trim() : "—";
       const size = s.fontSize ? `${s.fontSize}px` : "—";
       const lh = s.lineHeight !== undefined ? (s.lineHeight === "AUTO" ? "Auto" : `${s.lineHeight}`) : "—";
-      const ls = s.letterSpacing !== undefined ? `${s.letterSpacing}` : "—";
+      const ls = s.letterSpacing !== undefined ? `${round(s.letterSpacing, 2)}` : "—";
       lines.push(`| ${s.name} | ${font} | ${size} | ${lh} | ${ls} |`);
     }
     lines.push("");
   }
 
-  // ── Spacing ──
+  // ── Spacing (capped) ──
   lines.push("## Spacing Scale (px)");
   lines.push("");
   if (tokens.spacings && tokens.spacings.length > 0) {
-    lines.push(tokens.spacings.join(", "));
+    const capped = tokens.spacings.filter((v: number) => v <= MAX_TOKEN_VALUE);
+    lines.push(capped.length > 0 ? capped.join(", ") : "_No spacing values detected._");
   } else {
     lines.push("_No spacing values detected._");
   }
   lines.push("");
 
   if (tokens.paddings && tokens.paddings.length > 0) {
-    lines.push("### Padding Values (px)");
-    lines.push("");
-    lines.push(tokens.paddings.join(", "));
-    lines.push("");
+    const capped = tokens.paddings.filter((v: number) => v <= MAX_TOKEN_VALUE);
+    if (capped.length > 0) {
+      lines.push("### Padding Values (px)");
+      lines.push("");
+      lines.push(capped.join(", "));
+      lines.push("");
+    }
   }
 
   // ── Corner Radii ──
@@ -1544,21 +1622,25 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   }
   lines.push("");
 
-  // ── Component Specs: Buttons ──
+  // ── Component Specs: Buttons (deduplicated) ──
   lines.push("## Components");
   lines.push("");
   if (tokens.buttonStyles && tokens.buttonStyles.length > 0) {
+    const buttons = dedupeComponents(tokens.buttonStyles);
     lines.push("### Buttons");
     lines.push("");
-    for (const btn of tokens.buttonStyles) {
-      lines.push(`**${btn.name || "Button"}**`);
+    for (const btn of buttons) {
+      // Use a descriptive label: "Primary Button", "Outline Button"
+      let label = btn.name || "Button";
+      if (btn.strokeColor && (!btn.fillColor || btn.fillColor === "#FFFFFF")) label = "Outline Button";
+      else if (btn.fillColor && btn.fillColor !== "#FFFFFF") label = "Filled Button";
+      lines.push(`**${label}**`);
       lines.push("");
       const props: string[] = [];
       if (btn.fillColor) props.push(`- Fill: \`${btn.fillColor}\``);
       if (btn.strokeColor) props.push(`- Border: \`${btn.strokeColor}\` (${typeof btn.strokeWeight === "number" ? btn.strokeWeight : 1}px)`);
       if (btn.cornerRadius !== undefined) props.push(`- Corner radius: ${btn.cornerRadius}px`);
       if (btn.height) props.push(`- Height: ${btn.height}px`);
-      if (btn.width) props.push(`- Width: ${btn.width}px`);
       if (btn.textFontSize) props.push(`- Font size: ${btn.textFontSize}px`);
       if (btn.textFontFamily) props.push(`- Font: ${btn.textFontFamily} ${btn.textFontStyle || ""}`.trim());
       if (btn.textColor) props.push(`- Text color: \`${btn.textColor}\``);
@@ -1573,11 +1655,12 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     }
   }
 
-  // ── Component Specs: Inputs ──
+  // ── Component Specs: Inputs (deduplicated) ──
   if (tokens.inputStyles && tokens.inputStyles.length > 0) {
+    const inputs = dedupeComponents(tokens.inputStyles);
     lines.push("### Text Inputs");
     lines.push("");
-    for (const inp of tokens.inputStyles) {
+    for (const inp of inputs) {
       lines.push(`**${inp.name || "Input"}**`);
       lines.push("");
       const props: string[] = [];
@@ -1586,7 +1669,6 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
       if (inp.bottomBorderOnly) props.push(`- Bottom border only: ${typeof inp.bottomBorderWeight === "number" ? inp.bottomBorderWeight : 1}px`);
       if (inp.cornerRadius !== undefined) props.push(`- Corner radius: ${inp.cornerRadius}px`);
       if (inp.height) props.push(`- Height: ${inp.height}px`);
-      if (inp.width) props.push(`- Width: ${inp.width}px`);
       if (inp.textFontSize) props.push(`- Font size: ${inp.textFontSize}px`);
       if (inp.textFontFamily) props.push(`- Font: ${inp.textFontFamily} ${inp.textFontStyle || ""}`.trim());
       if (inp.textColor) props.push(`- Text color: \`${inp.textColor}\``);
