@@ -426,6 +426,79 @@
     .key-status.missing .key-dot {
       background: var(--danger);
     }
+    .key-status.validating {
+      color: var(--muted);
+    }
+    .key-status.validating .key-dot {
+      background: var(--muted);
+      animation: pulse-dot 1s ease-in-out infinite;
+    }
+    .key-status.error {
+      color: var(--danger);
+    }
+    .key-status.error .key-dot {
+      background: var(--danger);
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .settings-select {
+      width: 100%;
+      padding: 6px 8px;
+      font-family: var(--font);
+      font-size: 11px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      padding-right: 24px;
+    }
+    .settings-select:focus {
+      border-color: var(--accent);
+    }
+    .settings-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .settings-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .btn-close-settings {
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      border-radius: 4px;
+      cursor: pointer;
+      flex: none;
+    }
+    .btn-close-settings:hover {
+      background: var(--border);
+      color: var(--text);
+    }
+    /* When settings view is open, hide prompt area and show only settings */
+    body.settings-open > div:first-of-type,
+    body.settings-open > .btn-row,
+    body.settings-open > #progress-container,
+    body.settings-open > #status-bar {
+      display: none !important;
+    }
   </style>
 </head>
 <body>
@@ -473,7 +546,21 @@
   </div>
 
   <div id="settings-panel" class="settings-panel">
-    <div class="settings-label">Anthropic API Key</div>
+    <div class="settings-header">
+      <span class="settings-title">Settings</span>
+      <button id="btn-close-settings" class="btn-close-settings" title="Close settings">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="settings-label">Provider</div>
+    <select id="provider-select" class="settings-select">
+      <option value="anthropic">Anthropic</option>
+      <option value="openai">OpenAI</option>
+      <option value="gemini">Google Gemini</option>
+    </select>
+    <div class="settings-label">Model</div>
+    <select id="model-select" class="settings-select"></select>
+    <div class="settings-label" id="api-key-label">Anthropic API Key</div>
     <div class="settings-row">
       <input id="api-key-input" class="settings-input" type="password" placeholder="sk-ant-api03-…" spellcheck="false" autocomplete="off" />
       <button id="btn-save-key" class="btn-save-key">Save</button>
@@ -525,12 +612,52 @@
     const keyStatus = document.getElementById("key-status");
     const keyStatusText = document.getElementById("key-status-text");
     const menuSettings = document.getElementById("menu-settings");
+    const btnCloseSettings = document.getElementById("btn-close-settings");
+    const providerSelect = document.getElementById("provider-select");
+    const modelSelect = document.getElementById("model-select");
+    const apiKeyLabel = document.getElementById("api-key-label");
+
+    // ── Provider / Model configuration ───────────────────────────
+    const PROVIDER_MODELS = {
+      anthropic: [
+        { id: "claude-opus-4-20250514", label: "Claude Opus 4" },
+        { id: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
+        { id: "claude-haiku-4-20250414", label: "Claude Haiku 4" },
+      ],
+      openai: [
+        { id: "gpt-4o", label: "GPT-4o" },
+        { id: "gpt-4o-mini", label: "GPT-4o Mini" },
+        { id: "o3-mini", label: "o3-mini" },
+      ],
+      gemini: [
+        { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+        { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+      ],
+    };
+    const PROVIDER_KEY_LABELS = {
+      anthropic: "Anthropic API Key",
+      openai: "OpenAI API Key",
+      gemini: "Google Gemini API Key",
+    };
+    const PROVIDER_KEY_PLACEHOLDERS = {
+      anthropic: "sk-ant-api03-\u2026",
+      openai: "sk-\u2026",
+      gemini: "AIza\u2026",
+    };
+
+    // ── Provider state ──────────────────────────────────────────
+    let _selectedProvider = "anthropic";
+    let _selectedModel = "claude-sonnet-4-20250514";
+    // Store keys per provider
+    let _providerKeys = { anthropic: "", openai: "", gemini: "" };
 
     // ── API Key state ────────────────────────────────────────────
     let _apiKey = "";
 
     function updateKeyStatus(key) {
       _apiKey = key || "";
+      _providerKeys[_selectedProvider] = _apiKey;
       if (_apiKey) {
         keyStatus.className = "key-status active";
         keyStatusText.textContent = "API key configured";
@@ -541,6 +668,52 @@
         btnApply.disabled = true;
       }
     }
+
+    function populateModelDropdown(provider) {
+      const models = PROVIDER_MODELS[provider] || [];
+      modelSelect.innerHTML = "";
+      models.forEach(function(m) {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.label;
+        modelSelect.appendChild(opt);
+      });
+      if (models.length > 0) {
+        _selectedModel = models[0].id;
+        modelSelect.value = _selectedModel;
+      }
+    }
+
+    function switchProvider(provider) {
+      _selectedProvider = provider;
+      providerSelect.value = provider;
+      // Update model dropdown
+      populateModelDropdown(provider);
+      // Update key label and placeholder
+      apiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider] || "API Key";
+      apiKeyInput.value = "";
+      const savedKey = _providerKeys[provider] || "";
+      if (savedKey) {
+        apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider].slice(0, -1) + savedKey.slice(-4);
+      } else {
+        apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
+      }
+      // Update key status for this provider
+      updateKeyStatus(savedKey);
+    }
+
+    // Initialize model dropdown
+    populateModelDropdown("anthropic");
+
+    providerSelect.addEventListener("change", function() {
+      switchProvider(providerSelect.value);
+      postToPlugin({ type: "save-provider-selection", provider: _selectedProvider, model: _selectedModel });
+    });
+
+    modelSelect.addEventListener("change", function() {
+      _selectedModel = modelSelect.value;
+      postToPlugin({ type: "save-provider-selection", provider: _selectedProvider, model: _selectedModel });
+    });
 
     // Track whether anything is selected to update button label
     let hasSelection = false;
@@ -720,24 +893,69 @@
     });
 
     // ── Menu: Settings ──────────────────────────────────────────
+    function openSettings() {
+      settingsPanel.classList.add("visible");
+      document.body.classList.add("settings-open");
+    }
+    function closeSettings() {
+      settingsPanel.classList.remove("visible");
+      document.body.classList.remove("settings-open");
+    }
     menuSettings.addEventListener("click", () => {
       menuDropdown.classList.remove("show");
       menuToggle.classList.remove("open");
-      settingsPanel.classList.toggle("visible");
+      openSettings();
+    });
+    btnCloseSettings.addEventListener("click", () => {
+      closeSettings();
     });
 
     // ── Save API Key ─────────────────────────────────────────────
-    btnSaveKey.addEventListener("click", () => {
+    btnSaveKey.addEventListener("click", async () => {
       const key = apiKeyInput.value.trim();
       if (!key) {
         setStatus("Please enter an API key.", "error");
         return;
       }
-      updateKeyStatus(key);
-      postToPlugin({ type: "save-api-key", key: key });
-      apiKeyInput.value = "";
-      apiKeyInput.placeholder = "sk-ant-\u2026" + key.slice(-4);
-      setStatus("API key saved.", "success");
+
+      // Show validating state
+      btnSaveKey.disabled = true;
+      btnSaveKey.textContent = "Validating…";
+      keyStatus.className = "key-status validating";
+      keyStatusText.textContent = "Validating API key…";
+
+      try {
+        const resp = await fetch(BACKEND_URL + "/validate-key", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey: key, provider: _selectedProvider }),
+        });
+        const result = await resp.json();
+
+        if (result.valid) {
+          // Key is valid — save it
+          updateKeyStatus(key);
+          postToPlugin({ type: "save-api-key", key: key, provider: _selectedProvider });
+          apiKeyInput.value = "";
+          apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[_selectedProvider].slice(0, -1) + key.slice(-4);
+          setStatus(result.warning || "API key verified and saved.", result.warning ? "warning" : "success");
+        } else {
+          // Key is invalid
+          keyStatus.className = "key-status error";
+          keyStatusText.textContent = result.error || "Invalid API key.";
+          setStatus(result.error || "Invalid API key.", "error");
+        }
+      } catch (err) {
+        // Network / backend unreachable — save anyway but warn
+        updateKeyStatus(key);
+        postToPlugin({ type: "save-api-key", key: key, provider: _selectedProvider });
+        apiKeyInput.value = "";
+        apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[_selectedProvider].slice(0, -1) + key.slice(-4);
+        setStatus("Could not validate key (backend unreachable). Key saved.", "warning");
+      } finally {
+        btnSaveKey.disabled = false;
+        btnSaveKey.textContent = "Save";
+      }
     });
 
     // ── Menu: Export design to JSON ──────────────────────────────
@@ -990,10 +1208,28 @@
         }
         case "load-api-key": {
           const key = msg.key || "";
+          const provider = msg.provider || "anthropic";
+          const model = msg.model || "";
+          // Load all saved keys
+          if (msg.allKeys) {
+            Object.assign(_providerKeys, msg.allKeys);
+          }
+          // Set provider and model
+          _selectedProvider = provider;
+          providerSelect.value = provider;
+          populateModelDropdown(provider);
+          if (model) {
+            _selectedModel = model;
+            modelSelect.value = model;
+          }
+          // Update key UI for current provider
+          apiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider] || "API Key";
           updateKeyStatus(key);
           if (key) {
             apiKeyInput.value = "";
-            apiKeyInput.placeholder = "sk-ant-\u2026" + key.slice(-4);
+            apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider].slice(0, -1) + key.slice(-4);
+          } else {
+            apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
           }
           break;
         }

@@ -6,7 +6,7 @@
   "scripts": {
     "build:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife",
     "watch:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --watch",
-    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk",
+    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk --external:openai --external:@google/generative-ai",
     "start": "node dist/server.js",
     "start:backend": "npx tsx backend/server.ts",
     "dev:backend": "npx tsx watch backend/server.ts",
@@ -15,9 +15,11 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.76.0",
+    "@google/generative-ai": "^0.24.1",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^4.21.0",
+    "openai": "^6.22.0",
     "zod": "^3.24.0"
   },
   "engines": {

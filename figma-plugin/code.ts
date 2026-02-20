@@ -32,6 +32,8 @@ let _skipResizePropagation = false;
 let _cancelled = false;
 let _working = false;
 let _userApiKey = "";
+let _selectedProvider = "anthropic";
+let _selectedModel = "claude-sonnet-4-20250514";
 
 // ── Extraction caching ──────────────────────────────────────────────
 // Caches the expensive tree-walking results so rapid cancel+re-generate
@@ -5187,6 +5189,39 @@ setTimeout(async () => {
   }
 }, 150);
 
+// ── Load saved API keys and provider/model selection ────────────────
+setTimeout(async () => {
+  try {
+    // Load provider selection
+    const savedProvider = await figma.clientStorage.getAsync("selectedProvider");
+    const savedModel = await figma.clientStorage.getAsync("selectedModel");
+    if (savedProvider) _selectedProvider = savedProvider;
+    if (savedModel) _selectedModel = savedModel;
+
+    // Load all per-provider keys
+    const allKeys: Record<string, string> = {};
+    for (const p of ["anthropic", "openai", "gemini"]) {
+      const k = await figma.clientStorage.getAsync(`apiKey_${p}`);
+      if (k) allKeys[p] = k;
+    }
+
+    // Set active key
+    _userApiKey = allKeys[_selectedProvider] || "";
+
+    // Send everything to UI
+    sendToUI({
+      type: "load-api-key",
+      key: _userApiKey,
+      provider: _selectedProvider,
+      model: _selectedModel,
+      allKeys,
+    } as any);
+    console.log(`[startup] Loaded provider=${_selectedProvider}, model=${_selectedModel}, key=${_userApiKey ? "set" : "empty"}`);
+  } catch (e) {
+    console.warn("[startup] Failed to load API key/provider:", e);
+  }
+}, 120);
+
 figma.ui.onmessage = async (msg: UIToPluginMessage) => {
   try {
     switch (msg.type) {
@@ -5244,11 +5279,31 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       case "save-api-key" as any: {
         try {
           const key = (msg as any).key || "";
+          const provider = (msg as any).provider || _selectedProvider;
           _userApiKey = key;
-          await figma.clientStorage.setAsync("anthropicApiKey", key);
-          console.log("[api-key] API key saved.");
+          await figma.clientStorage.setAsync(`apiKey_${provider}`, key);
+          console.log(`[api-key] API key saved for provider=${provider}.`);
         } catch (e) {
           console.warn("[api-key] Failed to save API key:", e);
+        }
+        return;
+      }
+
+      // ── Persist provider/model selection ───────────────────
+      case "save-provider-selection" as any: {
+        try {
+          const provider = (msg as any).provider || "anthropic";
+          const model = (msg as any).model || "";
+          _selectedProvider = provider;
+          _selectedModel = model;
+          await figma.clientStorage.setAsync("selectedProvider", provider);
+          await figma.clientStorage.setAsync("selectedModel", model);
+          // Switch to the saved key for this provider
+          const savedKey = await figma.clientStorage.getAsync(`apiKey_${provider}`);
+          _userApiKey = savedKey || "";
+          console.log(`[settings] Provider=${provider}, model=${model}, key=${_userApiKey ? "set" : "empty"}`);
+        } catch (e) {
+          console.warn("[settings] Failed to save provider selection:", e);
         }
         return;
       }
@@ -5303,7 +5358,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
           let batch: OperationBatch;
           try {
-            batch = await fetchViaUI("/plan", { ...payload, apiKey: _userApiKey }) as OperationBatch;
+            batch = await fetchViaUI("/plan", { ...payload, apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }) as OperationBatch;
           } catch (err: any) {
             if (_cancelled) {
               sendToUI({ type: "generate-cancelled" as any });
@@ -5689,6 +5744,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               styleTokens,
               designSystem,
               apiKey: _userApiKey,
+              provider: _selectedProvider,
+              model: _selectedModel,
             });
           } catch (err: any) {
             if (_cancelled) {

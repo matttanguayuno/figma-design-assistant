@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMGenerate, cancelCurrentRequest } from "./llm";
+import { callLLM, callLLMGenerate, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 
 const app = express();
@@ -63,6 +63,81 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok" });
 });
 
+// ── GET /models ─────────────────────────────────────────────────────
+
+app.get("/models", (_req: Request, res: Response) => {
+  res.json({
+    providers: Object.entries(PROVIDER_MODELS).map(([key, models]) => ({
+      id: key,
+      label: PROVIDER_LABELS[key as Provider],
+      models,
+    })),
+  });
+});
+
+// ── POST /validate-key ──────────────────────────────────────────────
+
+app.post("/validate-key", async (req: Request, res: Response) => {
+  try {
+    const { apiKey, provider } = req.body;
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(400).json({ valid: false, error: "Missing API key." });
+      return;
+    }
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ valid: false, error: `Unknown provider: ${provider}` });
+      return;
+    }
+
+    console.log(`[validate-key] Testing ${resolvedProvider} key ending …${apiKey.slice(-4)}`);
+
+    if (resolvedProvider === "anthropic") {
+      const client = new (await import("@anthropic-ai/sdk")).default({ apiKey });
+      await client.messages.create({
+        model: "claude-haiku-4-20250414",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "Hi" }],
+      });
+    } else if (resolvedProvider === "openai") {
+      const { default: OpenAILib } = await import("openai");
+      const client = new OpenAILib({ apiKey });
+      await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "Hi" }],
+      });
+    } else if (resolvedProvider === "gemini") {
+      const { GoogleGenerativeAI: GeminiLib } = await import("@google/generative-ai");
+      const client = new GeminiLib(apiKey);
+      const model = client.getGenerativeModel({ model: "gemini-2.0-flash" });
+      await model.generateContent("Hi");
+    }
+
+    console.log(`[validate-key] ${resolvedProvider} key is valid`);
+    res.json({ valid: true });
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    console.error(`[validate-key] Failed:`, msg);
+
+    // Detect common auth / billing errors
+    let userMessage = "Invalid API key or connection error.";
+    if (msg.includes("401") || msg.includes("authentication") || msg.includes("invalid") || msg.includes("Incorrect API key")) {
+      userMessage = "Invalid API key. Please check and try again.";
+    } else if (msg.includes("402") || msg.includes("insufficient") || msg.includes("billing") || msg.includes("quota")) {
+      userMessage = "API key is valid but your account has insufficient credits or billing is not set up.";
+    } else if (msg.includes("403") || msg.includes("permission")) {
+      userMessage = "API key does not have permission to access this model.";
+    } else if (msg.includes("429") || msg.includes("rate")) {
+      userMessage = "API key is valid (rate limited — try again shortly).";
+      // Rate limited means the key itself is valid
+      res.json({ valid: true, warning: userMessage });
+      return;
+    }
+    res.json({ valid: false, error: userMessage });
+  }
+});
+
 // ── POST /cancel ────────────────────────────────────────────────────
 
 app.post("/cancel", (_req: Request, res: Response) => {
@@ -74,11 +149,18 @@ app.post("/cancel", (_req: Request, res: Response) => {
 
 app.post("/plan", async (req: Request, res: Response) => {
   try {
-    const { intent, selection, designSystem, apiKey } = req.body;
+    const { intent, selection, designSystem, apiKey, provider, model } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
-      res.status(401).json({ error: "Missing API key. Please configure your Anthropic API key in Settings." });
+      res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
+      return;
+    }
+
+    // Validate provider
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
       return;
     }
 
@@ -96,10 +178,10 @@ app.post("/plan", async (req: Request, res: Response) => {
       return;
     }
 
-    console.log(`[plan] intent="${intent}", nodes=${selection.nodes.length}`);
+    console.log(`[plan] provider=${resolvedProvider}, model=${model || "default"}, intent="${intent}", nodes=${selection.nodes.length}`);
 
     // 1. Call LLM
-    const rawBatch = await callLLM(intent, selection, designSystem, apiKey);
+    const rawBatch = await callLLM(intent, selection, designSystem, apiKey, resolvedProvider, model);
     console.log(`[plan] LLM returned:`, JSON.stringify(rawBatch).slice(0, 300));
 
     // 2. Validate
@@ -146,11 +228,18 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, apiKey } = req.body;
+    const { prompt, styleTokens, designSystem, apiKey, provider, model } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
-      res.status(401).json({ error: "Missing API key. Please configure your Anthropic API key in Settings." });
+      res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
+      return;
+    }
+
+    // Validate provider
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
       return;
     }
 
@@ -159,7 +248,7 @@ app.post("/generate", async (req: Request, res: Response) => {
       return;
     }
 
-    console.log(`[generate] prompt="${prompt}"`);
+    console.log(`[generate] provider=${resolvedProvider}, model=${model || "default"}, prompt="${prompt}"`);
     console.log(`[generate] styleTokens:`, JSON.stringify(styleTokens).slice(0, 1000));
     console.log(`[generate] designSystem textStyles:`, JSON.stringify(designSystem?.textStyles || []).slice(0, 500));
 
@@ -168,7 +257,9 @@ app.post("/generate", async (req: Request, res: Response) => {
       prompt,
       styleTokens || {},
       designSystem || { textStyles: [], fillStyles: [], components: [], variables: [] },
-      apiKey
+      apiKey,
+      resolvedProvider,
+      model
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));
