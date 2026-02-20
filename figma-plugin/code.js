@@ -197,7 +197,7 @@
             if (fillHex) inputStyle.fillColor = fillHex;
             if (strokeHex) {
               inputStyle.strokeColor = strokeHex;
-              inputStyle.strokeWeight = frame.strokeWeight;
+              if (typeof frame.strokeWeight === "number") inputStyle.strokeWeight = frame.strokeWeight;
             }
             const stw = {
               top: frame.strokeTopWeight || 0,
@@ -261,7 +261,7 @@
                   cornerRadius: typeof frame.cornerRadius === "number" ? frame.cornerRadius : void 0,
                   fillColor: fillHex || "#FFFFFF",
                   strokeColor: strokeHex,
-                  strokeWeight: frame.strokeWeight,
+                  strokeWeight: typeof frame.strokeWeight === "number" ? frame.strokeWeight : 1,
                   height: Math.round(frame.height),
                   width: Math.round(frame.width)
                 };
@@ -312,7 +312,7 @@
               if (fillHex) inputStyle.fillColor = fillHex;
               if (strokeHex) {
                 inputStyle.strokeColor = strokeHex;
-                inputStyle.strokeWeight = frame.strokeWeight;
+                if (typeof frame.strokeWeight === "number") inputStyle.strokeWeight = frame.strokeWeight;
               }
               Object.assign(inputStyle, strokeInfo);
               if (frame.layoutMode && frame.layoutMode !== "NONE") {
@@ -1288,12 +1288,12 @@
         lines.push("");
         const props = [];
         if (btn.fillColor) props.push(`- Fill: \`${btn.fillColor}\``);
-        if (btn.strokeColor) props.push(`- Border: \`${btn.strokeColor}\` (${btn.strokeWeight || 1}px)`);
+        if (btn.strokeColor) props.push(`- Border: \`${btn.strokeColor}\` (${typeof btn.strokeWeight === "number" ? btn.strokeWeight : 1}px)`);
         if (btn.cornerRadius !== void 0) props.push(`- Corner radius: ${btn.cornerRadius}px`);
         if (btn.height) props.push(`- Height: ${btn.height}px`);
         if (btn.width) props.push(`- Width: ${btn.width}px`);
-        if (btn.fontSize) props.push(`- Font size: ${btn.fontSize}px`);
-        if (btn.fontFamily) props.push(`- Font: ${btn.fontFamily} ${btn.fontStyle || ""}`.trim());
+        if (btn.textFontSize) props.push(`- Font size: ${btn.textFontSize}px`);
+        if (btn.textFontFamily) props.push(`- Font: ${btn.textFontFamily} ${btn.textFontStyle || ""}`.trim());
         if (btn.textColor) props.push(`- Text color: \`${btn.textColor}\``);
         if (btn.layoutMode) {
           props.push(`- Layout: ${btn.layoutMode}`);
@@ -1313,13 +1313,13 @@
         lines.push("");
         const props = [];
         if (inp.fillColor) props.push(`- Fill: \`${inp.fillColor}\``);
-        if (inp.strokeColor) props.push(`- Border: \`${inp.strokeColor}\` (${inp.strokeWeight || 1}px)`);
-        if (inp.bottomBorderOnly) props.push(`- Bottom border only: ${inp.bottomBorderWeight || 1}px`);
+        if (inp.strokeColor) props.push(`- Border: \`${inp.strokeColor}\` (${typeof inp.strokeWeight === "number" ? inp.strokeWeight : 1}px)`);
+        if (inp.bottomBorderOnly) props.push(`- Bottom border only: ${typeof inp.bottomBorderWeight === "number" ? inp.bottomBorderWeight : 1}px`);
         if (inp.cornerRadius !== void 0) props.push(`- Corner radius: ${inp.cornerRadius}px`);
         if (inp.height) props.push(`- Height: ${inp.height}px`);
         if (inp.width) props.push(`- Width: ${inp.width}px`);
-        if (inp.fontSize) props.push(`- Font size: ${inp.fontSize}px`);
-        if (inp.fontFamily) props.push(`- Font: ${inp.fontFamily} ${inp.fontStyle || ""}`.trim());
+        if (inp.textFontSize) props.push(`- Font size: ${inp.textFontSize}px`);
+        if (inp.textFontFamily) props.push(`- Font: ${inp.textFontFamily} ${inp.textFontStyle || ""}`.trim());
         if (inp.textColor) props.push(`- Text color: \`${inp.textColor}\``);
         if (inp.layoutMode) {
           props.push(`- Layout: ${inp.layoutMode}`);
