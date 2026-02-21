@@ -57,7 +57,7 @@
       sendToUI({ type: "do-fetch", endpoint, body: safeBody, seq });
     });
   }
-  figma.showUI(__html__, { width: 340, height: 280, title: "Design Assistant" });
+  figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
   }

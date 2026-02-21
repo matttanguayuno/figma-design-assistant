@@ -81,7 +81,7 @@ function fetchViaUI(endpoint: string, body: any): Promise<any> {
 
 // ── Show UI ─────────────────────────────────────────────────────────
 
-figma.showUI(__html__, { width: 340, height: 280, title: "Design Assistant" });
+figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
 
 // ── Helpers: send message to UI ─────────────────────────────────────
 
