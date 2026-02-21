@@ -4330,6 +4330,16 @@ RULES:
     } catch (e) {
       console.warn("[startup] Failed to load phase timings:", e);
     }
+    try {
+      const rawAudit = await figma.clientStorage.getAsync("auditTimings");
+      if (rawAudit) {
+        const auditTimings = JSON.parse(rawAudit);
+        sendToUI({ type: "load-audit-timings", timings: auditTimings });
+        console.log("[startup] Loaded saved audit timings:", auditTimings);
+      }
+    } catch (e) {
+      console.warn("[startup] Failed to load audit timings:", e);
+    }
   }, 150);
   setTimeout(async () => {
     try {
@@ -4680,6 +4690,17 @@ RULES:
           }
           return;
         }
+        // ── Persist audit timings from UI ─────────────────────
+        case "save-audit-timings": {
+          try {
+            const timings = msg.timings;
+            await figma.clientStorage.setAsync("auditTimings", JSON.stringify(timings));
+            console.log("[a11y] Saved audit timings");
+          } catch (e) {
+            console.warn("[a11y] Failed to save audit timings:", e);
+          }
+          return;
+        }
         // ── Persist phase timings from UI ─────────────────────
         case "save-timings": {
           try {
@@ -4726,22 +4747,31 @@ RULES:
           try {
             sendToUI({ type: "status", message: "Running accessibility audit\u2026" });
             let nodesToAudit = [];
+            let auditScope = "all";
             if (figma.currentPage.selection.length > 0) {
               nodesToAudit = [...figma.currentPage.selection];
+              if (nodesToAudit.length === 1 && nodesToAudit[0].type === "FRAME") {
+                auditScope = "frame";
+              } else {
+                auditScope = "component";
+              }
             } else {
               nodesToAudit = figma.currentPage.children.filter(
                 (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME && n.name !== AUDIT_BADGE_FRAME_NAME && !n.name.startsWith("a11y-badge:")
               );
+              auditScope = "all";
             }
             if (nodesToAudit.length === 0) {
               sendToUI({ type: "audit-error", error: "No frames found to audit." });
               break;
             }
-            console.log(`[a11y] Auditing ${nodesToAudit.length} node(s)\u2026`);
+            sendToUI({ type: "audit-phase", phase: "scanning", scope: auditScope });
+            console.log(`[a11y] Auditing ${nodesToAudit.length} node(s) [scope=${auditScope}]\u2026`);
             const findings = runAccessibilityAudit(nodesToAudit);
             console.log(`[a11y] Found ${findings.length} issue(s).`);
             if (findings.length > 0 && _userApiKey) {
               try {
+                sendToUI({ type: "audit-phase", phase: "enhancing" });
                 sendToUI({ type: "status", message: `Found ${findings.length} issue(s) \u2014 getting AI suggestions\u2026` });
                 const auditBody = {
                   findings: findings.slice(0, 30),

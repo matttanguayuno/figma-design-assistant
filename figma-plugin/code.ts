@@ -5789,6 +5789,16 @@ setTimeout(async () => {
   } catch (e) {
     console.warn("[startup] Failed to load phase timings:", e);
   }
+  try {
+    const rawAudit = await figma.clientStorage.getAsync("auditTimings");
+    if (rawAudit) {
+      const auditTimings = JSON.parse(rawAudit);
+      sendToUI({ type: "load-audit-timings", timings: auditTimings } as any);
+      console.log("[startup] Loaded saved audit timings:", auditTimings);
+    }
+  } catch (e) {
+    console.warn("[startup] Failed to load audit timings:", e);
+  }
 }, 150);
 
 // ── Load saved API keys and provider/model selection ────────────────
@@ -6202,6 +6212,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Persist audit timings from UI ─────────────────────
+      case "save-audit-timings" as any: {
+        try {
+          const timings = (msg as any).timings;
+          await figma.clientStorage.setAsync("auditTimings", JSON.stringify(timings));
+          console.log("[a11y] Saved audit timings");
+        } catch (e) {
+          console.warn("[a11y] Failed to save audit timings:", e);
+        }
+        return;
+      }
+
       // ── Persist phase timings from UI ─────────────────────
       case "save-timings" as any: {
         try {
@@ -6254,8 +6276,15 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
           // Determine scope: selection if available, otherwise all design frames
           let nodesToAudit: SceneNode[] = [];
+          let auditScope = "all";
           if (figma.currentPage.selection.length > 0) {
             nodesToAudit = [...figma.currentPage.selection];
+            // Determine scope granularity
+            if (nodesToAudit.length === 1 && nodesToAudit[0].type === "FRAME") {
+              auditScope = "frame";
+            } else {
+              auditScope = "component";
+            }
           } else {
             // All top-level frames (skip Change Log and Audit Badge frames)
             nodesToAudit = figma.currentPage.children.filter(
@@ -6265,6 +6294,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 n.name !== AUDIT_BADGE_FRAME_NAME &&
                 !n.name.startsWith("a11y-badge:")
             ) as SceneNode[];
+            auditScope = "all";
           }
 
           if (nodesToAudit.length === 0) {
@@ -6272,13 +6302,17 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             break;
           }
 
-          console.log(`[a11y] Auditing ${nodesToAudit.length} node(s)…`);
+          // Tell UI which scope so progress estimates are accurate
+          sendToUI({ type: "audit-phase", phase: "scanning", scope: auditScope } as any);
+
+          console.log(`[a11y] Auditing ${nodesToAudit.length} node(s) [scope=${auditScope}]…`);
           const findings = runAccessibilityAudit(nodesToAudit);
           console.log(`[a11y] Found ${findings.length} issue(s).`);
 
           // Send to LLM for enrichment with suggestions
           if (findings.length > 0 && _userApiKey) {
             try {
+              sendToUI({ type: "audit-phase", phase: "enhancing" } as any);
               sendToUI({ type: "status", message: `Found ${findings.length} issue(s) — getting AI suggestions…` });
 
               const auditBody = {

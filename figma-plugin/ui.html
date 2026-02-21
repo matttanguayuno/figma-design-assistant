@@ -779,6 +779,47 @@
       color: var(--text-muted);
       margin-top: 2px;
     }
+    /* ── Audit Progress Bar ──────────────────────────────── */
+    .audit-progress {
+      padding: 6px 14px 8px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .audit-progress.hidden { display: none; }
+    .audit-progress-segments {
+      display: flex;
+      gap: 3px;
+    }
+    .audit-progress-seg {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .audit-progress-seg .seg-track {
+      height: 4px;
+      background: var(--surface);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .audit-progress-seg .seg-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 2px;
+      transition: width 0.15s linear;
+      background: var(--accent);
+    }
+    .audit-progress-seg .seg-label {
+      text-align: center;
+      font-size: 9px;
+      color: var(--text-muted);
+      opacity: 0.35;
+      transition: opacity 0.3s, color 0.3s;
+    }
+    .audit-progress-seg.active .seg-fill { background: var(--accent); }
+    .audit-progress-seg.active .seg-label { opacity: 1; color: var(--accent); font-weight: 600; }
+    .audit-progress-seg.done .seg-fill { width: 100% !important; background: var(--success); }
+    .audit-progress-seg.done .seg-label { opacity: 0.7; color: var(--success); }
   </style>
 </head>
 <body>
@@ -896,6 +937,18 @@
         </button>
       </div>
     </div>
+    <div id="audit-progress" class="audit-progress hidden">
+      <div class="audit-progress-segments">
+        <div class="audit-progress-seg" data-audit-step="scanning">
+          <div class="seg-track"><div class="seg-fill"></div></div>
+          <div class="seg-label">Scanning</div>
+        </div>
+        <div class="audit-progress-seg" data-audit-step="enhancing">
+          <div class="seg-track"><div class="seg-fill"></div></div>
+          <div class="seg-label">Enhancing</div>
+        </div>
+      </div>
+    </div>
     <div id="audit-summary" class="audit-summary"></div>
     <div id="audit-findings" class="audit-findings"></div>
   </div>
@@ -937,6 +990,7 @@
     const auditFindings = document.getElementById("audit-findings");
     const btnClearAudit = document.getElementById("btn-clear-audit");
     const btnCloseAudit = document.getElementById("btn-close-audit");
+    const auditProgressEl = document.getElementById("audit-progress");
 
     // ── Provider / Model configuration ───────────────────────────
     const PROVIDER_MODELS = {
@@ -1306,6 +1360,10 @@
     menuAuditA11y.addEventListener("click", () => {
       menuDropdown.classList.remove("show");
       menuToggle.classList.remove("open");
+      auditPanel.style.display = "flex";
+      auditSummary.textContent = "";
+      auditFindings.innerHTML = "";
+      startAuditProgress("all"); // scope will be corrected by plugin response
       setStatus("Running accessibility audit…");
       postToPlugin({ type: "audit-a11y" });
     });
@@ -1330,6 +1388,112 @@
       auditPanel.style.display = "none";
       setStatus("Audit cleared.", "success");
     });
+
+    // ── Audit Progress Bar Logic ─────────────────────────────────────
+    // Two phases: scanning (local WCAG checks) → enhancing (LLM suggestions)
+    // Estimates adjust over time per scope: all / frame / component
+    var auditEstimates = {
+      all:       { scanning: 4000, enhancing: 12000 },
+      frame:     { scanning: 1500, enhancing: 10000 },
+      component: { scanning: 500,  enhancing: 8000 }
+    };
+    var AUDIT_PHASES = ["scanning", "enhancing"];
+    var _auditProgressInterval = null;
+    var _auditPhase = "";
+    var _auditPhaseStart = 0;
+    var _auditScope = "all";
+    var _auditPhaseTimings = {};
+
+    function getAuditFill(phase) {
+      var seg = document.querySelector('.audit-progress-seg[data-audit-step="' + phase + '"]');
+      return seg ? seg.querySelector(".seg-fill") : null;
+    }
+
+    function startAuditProgress(scope) {
+      _auditScope = scope || "all";
+      _auditPhase = "scanning";
+      _auditPhaseStart = Date.now();
+      _auditPhaseTimings = {};
+      _auditPhaseTimings[_auditPhase] = Date.now();
+      auditProgressEl.classList.remove("hidden");
+      // Reset segments
+      var segs = auditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s) {
+        s.classList.remove("active", "done");
+        s.querySelector(".seg-fill").style.width = "0%";
+      });
+      updateAuditStepIndicators("scanning");
+      if (_auditProgressInterval) clearInterval(_auditProgressInterval);
+      _auditProgressInterval = setInterval(tickAuditProgress, 80);
+    }
+
+    function tickAuditProgress() {
+      var fill = getAuditFill(_auditPhase);
+      if (!fill) return;
+      var ests = auditEstimates[_auditScope] || auditEstimates.all;
+      var est = ests[_auditPhase] || 5000;
+      var elapsed = Date.now() - _auditPhaseStart;
+      var pct;
+      if (elapsed < est) {
+        pct = 85 * (elapsed / est);
+      } else {
+        var overtime = elapsed - est;
+        pct = 85 + 13 * (1 - Math.exp(-overtime / (est * 0.5)));
+      }
+      fill.style.width = Math.min(pct, 98).toFixed(1) + "%";
+    }
+
+    function advanceAuditPhase(phase) {
+      if (phase === _auditPhase) return;
+      // Record timing for finished phase
+      var prev = _auditPhase;
+      var ests = auditEstimates[_auditScope] || auditEstimates.all;
+      if (_auditPhaseTimings[prev]) {
+        var actualMs = Date.now() - _auditPhaseTimings[prev];
+        ests[prev] = Math.round(actualMs * 0.7 + (ests[prev] || 5000) * 0.3);
+      }
+      // Mark previous done
+      var prevSeg = document.querySelector('.audit-progress-seg[data-audit-step="' + prev + '"]');
+      if (prevSeg) { prevSeg.classList.remove("active"); prevSeg.classList.add("done"); }
+
+      if (phase === "done") {
+        // All done
+        var segs = auditProgressEl.querySelectorAll(".audit-progress-seg");
+        segs.forEach(function(s) { s.classList.remove("active"); s.classList.add("done"); });
+        if (_auditProgressInterval) { clearInterval(_auditProgressInterval); _auditProgressInterval = null; }
+        // Save estimates
+        postToPlugin({ type: "save-audit-timings", timings: auditEstimates });
+        // Hide after a moment
+        setTimeout(function() { auditProgressEl.classList.add("hidden"); }, 1200);
+        return;
+      }
+
+      _auditPhase = phase;
+      _auditPhaseStart = Date.now();
+      _auditPhaseTimings[phase] = Date.now();
+      updateAuditStepIndicators(phase);
+    }
+
+    function updateAuditStepIndicators(phase) {
+      var idx = AUDIT_PHASES.indexOf(phase);
+      var segs = auditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s, i) {
+        s.classList.remove("active", "done");
+        if (i < idx) s.classList.add("done");
+        else if (i === idx) s.classList.add("active");
+      });
+    }
+
+    function stopAuditProgress() {
+      if (_auditProgressInterval) clearInterval(_auditProgressInterval);
+      _auditProgressInterval = null;
+      auditProgressEl.classList.add("hidden");
+      var segs = auditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s) {
+        s.classList.remove("active", "done");
+        s.querySelector(".seg-fill").style.width = "0%";
+      });
+    }
 
     /** Human-readable labels for check types */
     var CHECK_TYPE_LABELS = {
@@ -1802,7 +1966,16 @@
           setStatus(msg.error, "error");
           break;
         }
+        case "audit-phase": {
+          if (msg.phase === "scanning") {
+            startAuditProgress(msg.scope || "all");
+          } else if (msg.phase === "enhancing") {
+            advanceAuditPhase("enhancing");
+          }
+          break;
+        }
         case "audit-results": {
+          advanceAuditPhase("done");
           auditPanel.style.display = "flex";
           renderAuditFindings(msg.findings);
           var issueCount = (msg.findings || []).length;
@@ -1810,7 +1983,16 @@
           break;
         }
         case "audit-error": {
+          stopAuditProgress();
           setStatus(msg.error, "error");
+          break;
+        }
+        case "load-audit-timings": {
+          if (msg.timings) {
+            if (msg.timings.all) auditEstimates.all = msg.timings.all;
+            if (msg.timings.frame) auditEstimates.frame = msg.timings.frame;
+            if (msg.timings.component) auditEstimates.component = msg.timings.component;
+          }
           break;
         }
         case "import-json-success": {
