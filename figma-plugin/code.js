@@ -885,11 +885,20 @@
     const darker = Math.min(l1, l2);
     return (lighter + 0.05) / (darker + 0.05);
   }
+  function isInternalTemplateName(name) {
+    return name.startsWith("Template/") || name.startsWith(".Template") || name.startsWith("_");
+  }
+  function isDecorativeLayer(name) {
+    const lower = name.toLowerCase();
+    return /^(tint|overlay|shade|mask|divider|separator|spacer|background|bg|shadow|border|stroke)(\s|$|[-_ ])/i.test(lower);
+  }
   function runAccessibilityAudit(nodes) {
     const findings = [];
-    function walk(node) {
+    function walk(node, insideInstance = false) {
       if (node.name === AUDIT_BADGE_FRAME_NAME || node.name === CHANGE_LOG_FRAME_NAME) return;
-      if (node.type === "TEXT") {
+      if ("visible" in node && node.visible === false) return;
+      if (isInternalTemplateName(node.name)) return;
+      if (node.type === "TEXT" && !insideInstance) {
         const textNode = node;
         const fg = extractFillColor(textNode);
         if (fg) {
@@ -932,7 +941,7 @@
           });
         }
       }
-      if (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT") {
+      if (!insideInstance && (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT")) {
         const nameLower = node.name.toLowerCase();
         const isInteractive = /button|btn|link|tab|toggle|switch|checkbox|radio|input|search|icon[-_ ]?btn|cta/i.test(nameLower);
         if (isInteractive && (node.width < 44 || node.height < 44)) {
@@ -945,9 +954,9 @@
           });
         }
       }
-      if ("opacity" in node && typeof node.opacity === "number") {
+      if ("opacity" in node && typeof node.opacity === "number" && !insideInstance) {
         const opacity = node.opacity;
-        if (opacity > 0 && opacity < 0.4) {
+        if (opacity > 0 && opacity < 0.4 && !isDecorativeLayer(node.name)) {
           findings.push({
             nodeId: node.id,
             nodeName: node.name,
@@ -958,28 +967,37 @@
         }
       }
       if ("children" in node) {
+        const nowInsideInstance = insideInstance || node.type === "INSTANCE";
         for (const child of node.children) {
-          walk(child);
+          walk(child, nowInsideInstance);
         }
       }
     }
     for (const node of nodes) {
       walk(node);
     }
-    return findings;
+    const dedupeKey = (f) => `${f.checkType}||${f.nodeName}||${f.severity}`;
+    const groups = /* @__PURE__ */ new Map();
+    for (const f of findings) {
+      const key = dedupeKey(f);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(f);
+    }
+    const deduped = [];
+    for (const [, group] of groups) {
+      const first = __spreadValues({}, group[0]);
+      if (group.length > 1) {
+        first.message += ` (\xD7${group.length} across audited frames)`;
+      }
+      deduped.push(first);
+    }
+    return deduped;
   }
   function createAuditBadges(findings) {
     clearAuditBadges();
     if (findings.length === 0) return;
-    const badgeContainer = figma.createFrame();
-    badgeContainer.name = AUDIT_BADGE_FRAME_NAME;
-    badgeContainer.clipsContent = false;
-    badgeContainer.fills = [];
-    badgeContainer.x = 0;
-    badgeContainer.y = 0;
-    badgeContainer.resize(1, 1);
-    badgeContainer.locked = true;
-    for (const finding of findings) {
+    const capped = findings.slice(0, 30);
+    for (const finding of capped) {
       try {
         const targetNode = figma.getNodeById(finding.nodeId);
         if (!targetNode) continue;

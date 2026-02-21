@@ -1100,16 +1100,47 @@ function auditContrastRatio(l1: number, l2: number): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-/** Run deterministic WCAG checks on nodes, return findings */
+/** Check whether a node (or any ancestor) is hidden */
+function isNodeHidden(node: SceneNode): boolean {
+  let current: BaseNode | null = node;
+  while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+    if ("visible" in current && (current as SceneNode).visible === false) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
+/** Check if a node name looks like a Figma component internal / template part */
+function isInternalTemplateName(name: string): boolean {
+  return name.startsWith("Template/") || name.startsWith(".Template") || name.startsWith("_");
+}
+
+/** Check if a name is a decorative / non-content layer */
+function isDecorativeLayer(name: string): boolean {
+  const lower = name.toLowerCase();
+  return /^(tint|overlay|shade|mask|divider|separator|spacer|background|bg|shadow|border|stroke)(\s|$|[-_ ])/i.test(lower);
+}
+
+/** Run deterministic WCAG checks on nodes, return de-duplicated findings */
 function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
   const findings: AuditFinding[] = [];
 
-  function walk(node: SceneNode) {
-    // Skip audit badge frames
+  /**
+   * @param node         the current node
+   * @param insideInstance  true when we are inside a component INSTANCE (skip most checks)
+   */
+  function walk(node: SceneNode, insideInstance: boolean = false) {
+    // Skip audit badge / changelog frames
     if (node.name === AUDIT_BADGE_FRAME_NAME || node.name === CHANGE_LOG_FRAME_NAME) return;
 
+    // Skip hidden nodes entirely
+    if ("visible" in node && node.visible === false) return;
+
+    // Skip Figma internal template children (e.g. Template/.Template_Button)
+    if (isInternalTemplateName(node.name)) return;
+
     // ── 1. Contrast check (text nodes) ──────────────────────
-    if (node.type === "TEXT") {
+    if (node.type === "TEXT" && !insideInstance) {
       const textNode = node as TextNode;
       const fg = extractFillColor(textNode);
       if (fg) {
@@ -1158,7 +1189,8 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
     }
 
     // ── 4. Touch target size (interactive-looking elements) ──
-    if (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT") {
+    // Only check top-level interactive elements, NOT children inside instances
+    if (!insideInstance && (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT")) {
       const nameLower = node.name.toLowerCase();
       const isInteractive = /button|btn|link|tab|toggle|switch|checkbox|radio|input|search|icon[-_ ]?btn|cta/i.test(nameLower);
       if (isInteractive && (node.width < 44 || node.height < 44)) {
@@ -1172,10 +1204,10 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
       }
     }
 
-    // ── 5. Low opacity ──────────────────────────────────────
-    if ("opacity" in node && typeof (node as any).opacity === "number") {
+    // ── 5. Low opacity (only on content elements, not decorative layers) ──
+    if ("opacity" in node && typeof (node as any).opacity === "number" && !insideInstance) {
       const opacity = (node as any).opacity;
-      if (opacity > 0 && opacity < 0.4) {
+      if (opacity > 0 && opacity < 0.4 && !isDecorativeLayer(node.name)) {
         findings.push({
           nodeId: node.id,
           nodeName: node.name,
@@ -1187,9 +1219,12 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
     }
 
     // ── Recurse ─────────────────────────────────────────────
+    // When we enter an INSTANCE, mark children so we skip most checks
+    // (component internals are not directly editable by the user)
     if ("children" in node) {
+      const nowInsideInstance = insideInstance || node.type === "INSTANCE";
       for (const child of (node as FrameNode).children) {
-        walk(child);
+        walk(child, nowInsideInstance);
       }
     }
   }
@@ -1198,28 +1233,40 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
     walk(node);
   }
 
-  return findings;
+  // ── De-duplicate findings ─────────────────────────────────
+  // Group by (checkType + nodeName + severity) — keep first occurrence,
+  // append count to message if duplicates exist
+  const dedupeKey = (f: AuditFinding) => `${f.checkType}||${f.nodeName}||${f.severity}`;
+  const groups = new Map<string, AuditFinding[]>();
+  for (const f of findings) {
+    const key = dedupeKey(f);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(f);
+  }
+
+  const deduped: AuditFinding[] = [];
+  for (const [, group] of groups) {
+    const first = { ...group[0] };
+    if (group.length > 1) {
+      first.message += ` (×${group.length} across audited frames)`;
+    }
+    deduped.push(first);
+  }
+
+  return deduped;
 }
 
-/** Create coloured badge annotations on the canvas next to flagged nodes */
+/** Create coloured badge annotations on the canvas next to flagged nodes (max 30) */
 function createAuditBadges(findings: AuditFinding[]): void {
   // Remove any existing badges
   clearAuditBadges();
 
   if (findings.length === 0) return;
 
-  // Group badges under a single frame
-  const badgeContainer = figma.createFrame();
-  badgeContainer.name = AUDIT_BADGE_FRAME_NAME;
-  badgeContainer.clipsContent = false;
-  badgeContainer.fills = [];
-  // Make it invisible to auto-layout but present on canvas
-  badgeContainer.x = 0;
-  badgeContainer.y = 0;
-  badgeContainer.resize(1, 1);
-  badgeContainer.locked = true;
+  // Only create badges for the first 30 findings to avoid visual noise
+  const capped = findings.slice(0, 30);
 
-  for (const finding of findings) {
+  for (const finding of capped) {
     try {
       const targetNode = figma.getNodeById(finding.nodeId) as SceneNode;
       if (!targetNode) continue;
