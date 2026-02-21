@@ -79,6 +79,37 @@ function fetchViaUI(endpoint: string, body: any): Promise<any> {
   });
 }
 
+// ── Parallel Generate Jobs ──────────────────────────────────────────
+// Multiple generate jobs can run concurrently. Each has its own cancel
+// flag, and its own pending fetch tracked in _pendingFetches.
+
+let _nextJobId = 0;
+interface GenerateJobState {
+  id: number;
+  cancelled: boolean;
+}
+const _activeJobs = new Map<number, GenerateJobState>();
+
+// Parallel-safe fetch tracking (keyed by seq, separate from _pendingFetch)
+const _pendingFetches = new Map<number, {
+  resolve: (data: any) => void;
+  reject: (err: Error) => void;
+  jobId: number;
+}>();
+
+/** Parallel-safe fetch for generate jobs. */
+function fetchViaUIForJob(endpoint: string, body: any, jobId: number): Promise<any> {
+  const seq = ++_fetchSeq;
+  return new Promise((resolve, reject) => {
+    _pendingFetches.set(seq, { resolve, reject, jobId });
+    const safeBody = JSON.parse(JSON.stringify(body));
+    sendToUI({ type: "do-fetch", endpoint, body: safeBody, seq, jobId } as any);
+  });
+}
+
+// Track next X position for frame placement (avoids overlap with parallel jobs)
+let _nextPlaceX: number | null = null;
+
 // ── Show UI ─────────────────────────────────────────────────────────
 
 figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
@@ -5542,10 +5573,138 @@ setTimeout(async () => {
   }
 }, 120);
 
+// ── Parallel Generate Job Runner ────────────────────────────────────
+// Runs a single generate job. Multiple can run concurrently. Each has
+// its own cancellation state and fetch tracking.
+
+async function runGenerateJob(job: GenerateJobState, prompt: string): Promise<void> {
+  try {
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
+
+    // Extract design system (cached for 60s)
+    console.log(`[job ${job.id}] Extracting design system...`);
+    const designSystem = await extractDesignSystemSnapshot();
+    console.log(`[job ${job.id}] Design system extracted.`);
+
+    await yieldToUI();
+    if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
+
+    // Extract style tokens
+    const styleTokens = extractStyleTokens(prompt);
+    console.log(`[job ${job.id}] Style tokens extracted.`);
+
+    await yieldToUI();
+    if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
+
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" } as any);
+
+    // Extract selection so the LLM knows what "this frame" means
+    const selectionSnapshot = extractSelectionSnapshot();
+    console.log(`[job ${job.id}] Selection: ${selectionSnapshot.nodes.length} node(s)`);
+
+    // Call backend via UI iframe (parallel-safe)
+    console.log(`[job ${job.id}] Calling backend /generate...`);
+    let result: { snapshot: any };
+    try {
+      result = await fetchViaUIForJob("/generate", {
+        prompt,
+        styleTokens,
+        designSystem,
+        selection: selectionSnapshot,
+        apiKey: _userApiKey,
+        provider: _selectedProvider,
+        model: _selectedModel,
+      }, job.id);
+    } catch (err: any) {
+      if (job.cancelled) {
+        console.log(`[job ${job.id}] Fetch cancelled by user.`);
+        sendToUI({ type: "job-cancelled", jobId: job.id } as any);
+        return;
+      }
+      console.error(`[job ${job.id}] Fetch error:`, err.message);
+      sendToUI({ type: "job-error", jobId: job.id, error: `Backend error: ${err.message}` } as any);
+      return;
+    }
+
+    const snapshot = result.snapshot;
+    if (!snapshot || !snapshot.type) {
+      console.error(`[job ${job.id}] Invalid snapshot:`, JSON.stringify(result).slice(0, 200));
+      sendToUI({ type: "job-error", jobId: job.id, error: "Backend returned invalid frame data." } as any);
+      return;
+    }
+
+    console.log(`[job ${job.id}] Snapshot received:`, snapshot.name, snapshot.type);
+
+    if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
+
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "create" } as any);
+
+    // Assign unique IDs
+    assignTempIds(snapshot);
+
+    // Reset import stats (safe because frame creation is CPU-bound / synchronous between yields)
+    _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] as string[] };
+
+    // Reserve placement position to avoid overlaps between parallel jobs
+    let placeX: number;
+    if (_nextPlaceX !== null) {
+      placeX = _nextPlaceX;
+    } else {
+      placeX = 0;
+      const existingChildren = figma.currentPage.children;
+      if (existingChildren.length > 0) {
+        let maxRight = -Infinity;
+        for (const child of existingChildren) {
+          const right = child.x + child.width;
+          if (right > maxRight) maxRight = right;
+        }
+        placeX = maxRight + 200;
+      }
+    }
+    // Reserve space for this frame (estimate from snapshot width)
+    _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
+
+    // Create the frame
+    console.log(`[job ${job.id}] Creating frame on canvas at x:${placeX}...`);
+    const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
+    if (node) {
+      node.x = placeX;
+      node.y = 0;
+      if ("setPluginData" in node) {
+        (node as SceneNode).setPluginData("generated", "true");
+      }
+      figma.currentPage.selection = [node];
+      figma.viewport.scrollAndZoomIntoView([node]);
+      // Update _nextPlaceX with actual width (may differ from estimate)
+      const actualRight = placeX + node.width + 200;
+      if (actualRight > (_nextPlaceX || 0)) _nextPlaceX = actualRight;
+      console.log(`[job ${job.id}] Frame created.`);
+    } else {
+      console.warn(`[job ${job.id}] createNodeFromSnapshot returned null`);
+    }
+
+    const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts`;
+    figma.notify(genStats, { timeout: 4000 });
+    sendToUI({ type: "job-complete", jobId: job.id, summary: genStats } as any);
+
+  } catch (err: any) {
+    console.error(`[job ${job.id}] Error:`, err.message, err.stack);
+    if (job.cancelled) {
+      sendToUI({ type: "job-cancelled", jobId: job.id } as any);
+      return;
+    }
+    sendToUI({ type: "job-error", jobId: job.id, error: `Generation failed: ${err.message}` } as any);
+  } finally {
+    _activeJobs.delete(job.id);
+    // Reset _nextPlaceX if no more active jobs
+    if (_activeJobs.size === 0) _nextPlaceX = null;
+  }
+}
+
 figma.ui.onmessage = async (msg: UIToPluginMessage) => {
   try {
     switch (msg.type) {
-      // ── Cancel in-flight request ──────────────────────────
+      // ── Cancel in-flight request (serial plan+apply) ─────
       case "cancel" as any: {
         _cancelled = true;
         _working = false;
@@ -5557,9 +5716,35 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Cancel a specific generate job ────────────────────
+      case "cancel-job" as any: {
+        const jobId = (msg as any).jobId as number;
+        const job = _activeJobs.get(jobId);
+        if (job) {
+          job.cancelled = true;
+          // Find and reject any pending fetch for this job
+          for (const [seq, pf] of _pendingFetches) {
+            if (pf.jobId === jobId) {
+              pf.reject(new Error("Cancelled"));
+              _pendingFetches.delete(seq);
+              break;
+            }
+          }
+        }
+        return;
+      }
+
       // ── Fetch proxy responses from UI iframe ──────────────
       case "fetch-result" as any: {
         const seq = (msg as any).seq;
+        // Check parallel job fetches first
+        const pf = _pendingFetches.get(seq);
+        if (pf) {
+          pf.resolve((msg as any).data);
+          _pendingFetches.delete(seq);
+          return;
+        }
+        // Fall back to serial fetch
         if (_pendingFetch && _pendingFetch.seq === seq) {
           _pendingFetch.resolve((msg as any).data);
           _pendingFetch = null;
@@ -5568,6 +5753,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       }
       case "fetch-error" as any: {
         const seq = (msg as any).seq;
+        const pf2 = _pendingFetches.get(seq);
+        if (pf2) {
+          pf2.reject(new Error((msg as any).error || "Fetch failed"));
+          _pendingFetches.delete(seq);
+          return;
+        }
         if (_pendingFetch && _pendingFetch.seq === seq) {
           _pendingFetch.reject(new Error((msg as any).error || "Fetch failed"));
           _pendingFetch = null;
@@ -5576,6 +5767,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       }
       case "fetch-aborted" as any: {
         const seq = (msg as any).seq;
+        const pf3 = _pendingFetches.get(seq);
+        if (pf3) {
+          pf3.reject(new Error("Cancelled"));
+          _pendingFetches.delete(seq);
+          return;
+        }
         if (_pendingFetch && _pendingFetch.seq === seq) {
           _pendingFetch.reject(new Error("Cancelled"));
           _pendingFetch = null;
@@ -6036,137 +6233,27 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         break;
       }
 
-      // ── Generate Frame ────────────────────────────────────────
+      // ── Generate Frame (parallel job-based) ────────────────────
       case "generate": {
-        // If already working, auto-cancel previous operation
-        if (_working) {
-          console.log("[generate] Auto-cancelling previous operation.");
-          _cancelled = true;
-          if (_pendingFetch) { _pendingFetch.reject(new Error("Cancelled")); _pendingFetch = null; }
-        }
-        _working = true;
-        _cancelled = false;
+        // Create a new job for this generate request
+        const jobId = ++_nextJobId;
+        const job: GenerateJobState = { id: jobId, cancelled: false };
+        _activeJobs.set(jobId, job);
 
-        try {
-          sendToUI({ type: "status", message: "Analyzing design system\u2026" });
+        const prompt = (msg as any).prompt || "";
+        console.log(`[generate] Starting job ${jobId}: "${prompt.slice(0, 60)}"`);
 
-          // Extract design system (cached for 60s to avoid re-freezing on cancel+retry)
-          console.log("[generate] Extracting design system...");
-          const designSystem = await extractDesignSystemSnapshot();
-          console.log("[generate] Design system extracted.");
+        // Notify UI that a parallel job has started
+        sendToUI({ type: "job-started", jobId, prompt } as any);
 
-          // Yield to event loop so cancel clicks can be processed
-          await yieldToUI();
-          if (_cancelled) { console.log("[generate] Cancelled after design system extraction"); return; }
-
-          // Extract style tokens from existing frames for design consistency
-          const userPrompt = (msg as any).prompt || "";
-          const styleTokens = extractStyleTokens(userPrompt);
-          console.log("[generate] Style tokens extracted.");
-
-          // Yield again after style tokens
-          await yieldToUI();
-          if (_cancelled) { console.log("[generate] Cancelled after style tokens"); return; }
-
-          sendToUI({ type: "status", message: "Generating frame\u2026" });
-
-          // Extract the current selection so the LLM knows what "this frame" means
-          const selectionSnapshot = extractSelectionSnapshot();
-          console.log(`[generate] Selection: ${selectionSnapshot.nodes.length} node(s) selected`);
-
-          // Call backend /generate endpoint via UI iframe (has real AbortController)
-          console.log("[generate] Calling backend /generate via UI...");
-          let result: { snapshot: any };
-          try {
-            result = await fetchViaUI("/generate", {
-              prompt: (msg as any).prompt,
-              styleTokens,
-              designSystem,
-              selection: selectionSnapshot,
-              apiKey: _userApiKey,
-              provider: _selectedProvider,
-              model: _selectedModel,
-            });
-          } catch (err: any) {
-            if (_cancelled) {
-              console.log("[generate] Fetch cancelled by user.");
-              sendToUI({ type: "generate-cancelled" as any });
-              return;
-            }
-            console.error("[generate] Fetch error:", err.message);
-            sendToUI({ type: "generate-error", error: `Backend error: ${err.message}` });
-            return;
+        // Fire and forget — don't await, allowing parallel jobs
+        runGenerateJob(job, prompt).catch((err: any) => {
+          console.error(`[generate] Unhandled error in job ${jobId}:`, err);
+          if (!job.cancelled) {
+            sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
           }
-
-          // The UI already parsed JSON; result is the response body
-          const snapshot = result.snapshot;
-          if (!snapshot || !snapshot.type) {
-            console.error("[generate] Invalid snapshot:", JSON.stringify(result).slice(0, 200));
-            sendToUI({ type: "generate-error", error: "Backend returned invalid frame data." });
-            return;
-          }
-
-          console.log("[generate] Snapshot received:", snapshot.name, snapshot.type);
-
-          if (_cancelled) { console.log("[generate] Cancelled after LLM response"); return; }
-
-          sendToUI({ type: "status", message: "Creating frame on canvas\u2026" });
-
-          // Assign unique IDs to the generated snapshot
-          assignTempIds(snapshot);
-
-          // Reset import stats
-          _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] as string[] };
-
-          // Calculate placement: right of existing content
-          let placeX = 0;
-          const existingChildren = figma.currentPage.children;
-          if (existingChildren.length > 0) {
-            let maxRight = -Infinity;
-            for (const child of existingChildren) {
-              const right = child.x + child.width;
-              if (right > maxRight) maxRight = right;
-            }
-            placeX = maxRight + 200;
-          }
-
-          // Create the frame
-          console.log("[generate] Creating frame on canvas...");
-          const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
-          if (node) {
-            node.x = placeX;
-            node.y = 0;
-            // Tag as generated so future extraction skips it
-            if ("setPluginData" in node) {
-              (node as SceneNode).setPluginData("generated", "true");
-            }
-            figma.currentPage.selection = [node];
-            figma.viewport.scrollAndZoomIntoView([node]);
-            console.log("[generate] Frame created and placed at x:", placeX);
-          } else {
-            console.warn("[generate] createNodeFromSnapshot returned null");
-          }
-
-          const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts`;
-          figma.notify(genStats, { timeout: 4000 });
-
-          sendToUI({
-            type: "generate-success",
-            summary: genStats,
-          });
-        } catch (err: any) {
-          console.error("[generate] Error:", err.message, err.stack);
-          if (_cancelled) {
-            // Cancelled by user — tell UI to finalize cancel state
-            console.log("[generate] Error occurred but cancelled, suppressing.");
-            sendToUI({ type: "generate-cancelled" as any });
-            return;
-          }
-          sendToUI({ type: "generate-error", error: `Generation failed: ${err.message}` });
-        } finally {
-          _cancelled = false;
-          _working = false;
-        }
+          _activeJobs.delete(jobId);
+        });
         break;
       }
 

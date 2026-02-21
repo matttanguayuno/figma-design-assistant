@@ -108,7 +108,8 @@ export type UIToPluginMessage =
   | { type: "export-json" }
   | { type: "import-json"; data: { selection: { nodes: any[] }; [key: string]: any } }
   | { type: "generate"; prompt: string }
-  | { type: "generate-docs" };
+  | { type: "generate-docs" }
+  | { type: "cancel-job"; jobId: number };
 
 export type PluginToUIMessage =
   | { type: "apply-success"; summary: string }
@@ -124,7 +125,12 @@ export type PluginToUIMessage =
   | { type: "generate-success"; summary: string }
   | { type: "generate-error"; error: string }
   | { type: "docs-result"; markdown: string; filename: string }
-  | { type: "docs-error"; error: string };
+  | { type: "docs-error"; error: string }
+  | { type: "job-started"; jobId: number; prompt: string }
+  | { type: "job-progress"; jobId: number; phase: string }
+  | { type: "job-complete"; jobId: number; summary: string }
+  | { type: "job-error"; jobId: number; error: string }
+  | { type: "job-cancelled"; jobId: number };
 
 // ── Audit Log Entry ─────────────────────────────────────────────────
 

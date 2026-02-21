@@ -57,6 +57,18 @@
       sendToUI({ type: "do-fetch", endpoint, body: safeBody, seq });
     });
   }
+  var _nextJobId = 0;
+  var _activeJobs = /* @__PURE__ */ new Map();
+  var _pendingFetches = /* @__PURE__ */ new Map();
+  function fetchViaUIForJob(endpoint, body, jobId) {
+    const seq = ++_fetchSeq;
+    return new Promise((resolve, reject) => {
+      _pendingFetches.set(seq, { resolve, reject, jobId });
+      const safeBody = JSON.parse(JSON.stringify(body));
+      sendToUI({ type: "do-fetch", endpoint, body: safeBody, seq, jobId });
+    });
+  }
+  var _nextPlaceX = null;
   figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
@@ -4171,11 +4183,115 @@ RULES:
       console.warn("[startup] Failed to load API key/provider:", e);
     }
   }, 120);
+  async function runGenerateJob(job, prompt) {
+    try {
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
+      console.log(`[job ${job.id}] Extracting design system...`);
+      const designSystem = await extractDesignSystemSnapshot();
+      console.log(`[job ${job.id}] Design system extracted.`);
+      await yieldToUI();
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      const styleTokens = extractStyleTokens(prompt);
+      console.log(`[job ${job.id}] Style tokens extracted.`);
+      await yieldToUI();
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
+      const selectionSnapshot = extractSelectionSnapshot();
+      console.log(`[job ${job.id}] Selection: ${selectionSnapshot.nodes.length} node(s)`);
+      console.log(`[job ${job.id}] Calling backend /generate...`);
+      let result;
+      try {
+        result = await fetchViaUIForJob("/generate", {
+          prompt,
+          styleTokens,
+          designSystem,
+          selection: selectionSnapshot,
+          apiKey: _userApiKey,
+          provider: _selectedProvider,
+          model: _selectedModel
+        }, job.id);
+      } catch (err) {
+        if (job.cancelled) {
+          console.log(`[job ${job.id}] Fetch cancelled by user.`);
+          sendToUI({ type: "job-cancelled", jobId: job.id });
+          return;
+        }
+        console.error(`[job ${job.id}] Fetch error:`, err.message);
+        sendToUI({ type: "job-error", jobId: job.id, error: `Backend error: ${err.message}` });
+        return;
+      }
+      const snapshot = result.snapshot;
+      if (!snapshot || !snapshot.type) {
+        console.error(`[job ${job.id}] Invalid snapshot:`, JSON.stringify(result).slice(0, 200));
+        sendToUI({ type: "job-error", jobId: job.id, error: "Backend returned invalid frame data." });
+        return;
+      }
+      console.log(`[job ${job.id}] Snapshot received:`, snapshot.name, snapshot.type);
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "create" });
+      assignTempIds(snapshot);
+      _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
+      let placeX;
+      if (_nextPlaceX !== null) {
+        placeX = _nextPlaceX;
+      } else {
+        placeX = 0;
+        const existingChildren = figma.currentPage.children;
+        if (existingChildren.length > 0) {
+          let maxRight = -Infinity;
+          for (const child of existingChildren) {
+            const right = child.x + child.width;
+            if (right > maxRight) maxRight = right;
+          }
+          placeX = maxRight + 200;
+        }
+      }
+      _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
+      console.log(`[job ${job.id}] Creating frame on canvas at x:${placeX}...`);
+      const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
+      if (node) {
+        node.x = placeX;
+        node.y = 0;
+        if ("setPluginData" in node) {
+          node.setPluginData("generated", "true");
+        }
+        figma.currentPage.selection = [node];
+        figma.viewport.scrollAndZoomIntoView([node]);
+        const actualRight = placeX + node.width + 200;
+        if (actualRight > (_nextPlaceX || 0)) _nextPlaceX = actualRight;
+        console.log(`[job ${job.id}] Frame created.`);
+      } else {
+        console.warn(`[job ${job.id}] createNodeFromSnapshot returned null`);
+      }
+      const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts`;
+      figma.notify(genStats, { timeout: 4e3 });
+      sendToUI({ type: "job-complete", jobId: job.id, summary: genStats });
+    } catch (err) {
+      console.error(`[job ${job.id}] Error:`, err.message, err.stack);
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-error", jobId: job.id, error: `Generation failed: ${err.message}` });
+    } finally {
+      _activeJobs.delete(job.id);
+      if (_activeJobs.size === 0) _nextPlaceX = null;
+    }
+  }
   figma.ui.onmessage = async (msg) => {
     var _a;
     try {
       switch (msg.type) {
-        // ── Cancel in-flight request ──────────────────────────
+        // ── Cancel in-flight request (serial plan+apply) ─────
         case "cancel": {
           _cancelled = true;
           _working = false;
@@ -4185,9 +4301,31 @@ RULES:
           }
           return;
         }
+        // ── Cancel a specific generate job ────────────────────
+        case "cancel-job": {
+          const jobId = msg.jobId;
+          const job = _activeJobs.get(jobId);
+          if (job) {
+            job.cancelled = true;
+            for (const [seq, pf] of _pendingFetches) {
+              if (pf.jobId === jobId) {
+                pf.reject(new Error("Cancelled"));
+                _pendingFetches.delete(seq);
+                break;
+              }
+            }
+          }
+          return;
+        }
         // ── Fetch proxy responses from UI iframe ──────────────
         case "fetch-result": {
           const seq = msg.seq;
+          const pf = _pendingFetches.get(seq);
+          if (pf) {
+            pf.resolve(msg.data);
+            _pendingFetches.delete(seq);
+            return;
+          }
           if (_pendingFetch && _pendingFetch.seq === seq) {
             _pendingFetch.resolve(msg.data);
             _pendingFetch = null;
@@ -4196,6 +4334,12 @@ RULES:
         }
         case "fetch-error": {
           const seq = msg.seq;
+          const pf2 = _pendingFetches.get(seq);
+          if (pf2) {
+            pf2.reject(new Error(msg.error || "Fetch failed"));
+            _pendingFetches.delete(seq);
+            return;
+          }
           if (_pendingFetch && _pendingFetch.seq === seq) {
             _pendingFetch.reject(new Error(msg.error || "Fetch failed"));
             _pendingFetch = null;
@@ -4204,6 +4348,12 @@ RULES:
         }
         case "fetch-aborted": {
           const seq = msg.seq;
+          const pf3 = _pendingFetches.get(seq);
+          if (pf3) {
+            pf3.reject(new Error("Cancelled"));
+            _pendingFetches.delete(seq);
+            return;
+          }
           if (_pendingFetch && _pendingFetch.seq === seq) {
             _pendingFetch.reject(new Error("Cancelled"));
             _pendingFetch = null;
@@ -4564,117 +4714,21 @@ RULES:
           }
           break;
         }
-        // ── Generate Frame ────────────────────────────────────────
+        // ── Generate Frame (parallel job-based) ────────────────────
         case "generate": {
-          if (_working) {
-            console.log("[generate] Auto-cancelling previous operation.");
-            _cancelled = true;
-            if (_pendingFetch) {
-              _pendingFetch.reject(new Error("Cancelled"));
-              _pendingFetch = null;
+          const jobId = ++_nextJobId;
+          const job = { id: jobId, cancelled: false };
+          _activeJobs.set(jobId, job);
+          const prompt = msg.prompt || "";
+          console.log(`[generate] Starting job ${jobId}: "${prompt.slice(0, 60)}"`);
+          sendToUI({ type: "job-started", jobId, prompt });
+          runGenerateJob(job, prompt).catch((err) => {
+            console.error(`[generate] Unhandled error in job ${jobId}:`, err);
+            if (!job.cancelled) {
+              sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });
             }
-          }
-          _working = true;
-          _cancelled = false;
-          try {
-            sendToUI({ type: "status", message: "Analyzing design system\u2026" });
-            console.log("[generate] Extracting design system...");
-            const designSystem = await extractDesignSystemSnapshot();
-            console.log("[generate] Design system extracted.");
-            await yieldToUI();
-            if (_cancelled) {
-              console.log("[generate] Cancelled after design system extraction");
-              return;
-            }
-            const userPrompt = msg.prompt || "";
-            const styleTokens = extractStyleTokens(userPrompt);
-            console.log("[generate] Style tokens extracted.");
-            await yieldToUI();
-            if (_cancelled) {
-              console.log("[generate] Cancelled after style tokens");
-              return;
-            }
-            sendToUI({ type: "status", message: "Generating frame\u2026" });
-            const selectionSnapshot = extractSelectionSnapshot();
-            console.log(`[generate] Selection: ${selectionSnapshot.nodes.length} node(s) selected`);
-            console.log("[generate] Calling backend /generate via UI...");
-            let result;
-            try {
-              result = await fetchViaUI("/generate", {
-                prompt: msg.prompt,
-                styleTokens,
-                designSystem,
-                selection: selectionSnapshot,
-                apiKey: _userApiKey,
-                provider: _selectedProvider,
-                model: _selectedModel
-              });
-            } catch (err) {
-              if (_cancelled) {
-                console.log("[generate] Fetch cancelled by user.");
-                sendToUI({ type: "generate-cancelled" });
-                return;
-              }
-              console.error("[generate] Fetch error:", err.message);
-              sendToUI({ type: "generate-error", error: `Backend error: ${err.message}` });
-              return;
-            }
-            const snapshot = result.snapshot;
-            if (!snapshot || !snapshot.type) {
-              console.error("[generate] Invalid snapshot:", JSON.stringify(result).slice(0, 200));
-              sendToUI({ type: "generate-error", error: "Backend returned invalid frame data." });
-              return;
-            }
-            console.log("[generate] Snapshot received:", snapshot.name, snapshot.type);
-            if (_cancelled) {
-              console.log("[generate] Cancelled after LLM response");
-              return;
-            }
-            sendToUI({ type: "status", message: "Creating frame on canvas\u2026" });
-            assignTempIds(snapshot);
-            _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
-            let placeX = 0;
-            const existingChildren = figma.currentPage.children;
-            if (existingChildren.length > 0) {
-              let maxRight = -Infinity;
-              for (const child of existingChildren) {
-                const right = child.x + child.width;
-                if (right > maxRight) maxRight = right;
-              }
-              placeX = maxRight + 200;
-            }
-            console.log("[generate] Creating frame on canvas...");
-            const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
-            if (node) {
-              node.x = placeX;
-              node.y = 0;
-              if ("setPluginData" in node) {
-                node.setPluginData("generated", "true");
-              }
-              figma.currentPage.selection = [node];
-              figma.viewport.scrollAndZoomIntoView([node]);
-              console.log("[generate] Frame created and placed at x:", placeX);
-            } else {
-              console.warn("[generate] createNodeFromSnapshot returned null");
-            }
-            const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts`;
-            figma.notify(genStats, { timeout: 4e3 });
-            sendToUI({
-              type: "generate-success",
-              summary: genStats
-            });
-          } catch (err) {
-            console.error("[generate] Error:", err.message, err.stack);
-            if (_cancelled) {
-              console.log("[generate] Error occurred but cancelled, suppressing.");
-              sendToUI({ type: "generate-cancelled" });
-              return;
-            }
-            sendToUI({ type: "generate-error", error: `Generation failed: ${err.message}` });
-          } finally {
-            _cancelled = false;
-            _working = false;
-          }
+            _activeJobs.delete(jobId);
+          });
           break;
         }
         // ── Revert ────────────────────────────────────────────────

@@ -125,6 +125,112 @@
       background: rgba(214, 48, 49, 0.1);
     }
 
+    /* ── Job List (parallel generate jobs) ───────────── */
+    .job-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .job-list:empty {
+      display: none;
+    }
+    .job-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      animation: menuFadeIn 0.15s ease;
+    }
+    .job-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .job-prompt {
+      flex: 1;
+      font-size: 11px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .job-phase {
+      flex: none;
+      font-size: 9px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .job-cancel {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 11px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+    .job-cancel:hover {
+      color: var(--danger);
+      background: rgba(214, 48, 49, 0.15);
+    }
+    .job-bar-track {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .job-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: width 0.15s linear;
+    }
+    .job-item.done {
+      border-color: var(--success);
+      opacity: 0.7;
+    }
+    .job-item.done .job-bar-fill {
+      width: 100% !important;
+      background: var(--success);
+    }
+    .job-item.done .job-phase {
+      color: var(--success);
+    }
+    .job-item.done .job-cancel {
+      display: none;
+    }
+    .job-item.error {
+      border-color: var(--danger);
+      opacity: 0.7;
+    }
+    .job-item.error .job-bar-fill {
+      background: var(--danger);
+    }
+    .job-item.error .job-phase {
+      color: var(--danger);
+    }
+    .job-item.error .job-cancel {
+      display: none;
+    }
+    .job-item.cancelled {
+      opacity: 0.4;
+    }
+    .job-item.cancelled .job-cancel {
+      display: none;
+    }
+
     /* ── Progress Bar (Segmented) ───────────────────── */
     .progress-container {
       display: none;
@@ -593,6 +699,9 @@
     </div>
   </div>
 
+  <!-- Parallel generate job list -->
+  <div id="job-list" class="job-list"></div>
+
   <div id="status-bar" class="status-bar">Nothing selected — will generate new frame</div>
 
   <!-- Hidden file input for JSON import -->
@@ -612,6 +721,7 @@
     const fileInput = document.getElementById("file-input");
     const progressContainer = document.getElementById("progress-container");
     const progressSegments = document.querySelectorAll(".progress-segment");
+    const jobListEl = document.getElementById("job-list");
     const settingsPanel = document.getElementById("settings-panel");
     const apiKeyInput = document.getElementById("api-key-input");
     const btnSaveKey = document.getElementById("btn-save-key");
@@ -1036,46 +1146,234 @@
     // ▸ For local development:  "http://localhost:3001"
     // ▸ For Render deployment:  "https://figma-design-assistant.onrender.com"
     const BACKEND_URL = "https://figma-design-assistant.onrender.com";
+
+    // Serial fetch (plan+apply) — single AbortController
     let _activeFetchAbort = null;
 
-    function doFetchForPlugin(endpoint, body, seq) {
-      // Abort any prior in-flight request
-      if (_activeFetchAbort) { _activeFetchAbort.abort(); _activeFetchAbort = null; }
-      const ac = new AbortController();
-      _activeFetchAbort = ac;
-      fetch(BACKEND_URL + endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      })
-        .then(async (resp) => {
-          _activeFetchAbort = null;
-          if (!resp.ok) {
-            const errText = await resp.text();
-            postToPlugin({ type: "fetch-error", error: "Backend error " + resp.status + ": " + errText, seq });
-          } else {
-            const data = await resp.json();
-            postToPlugin({ type: "fetch-result", data, seq });
-          }
+    // Parallel fetch (generate jobs) — per-seq AbortControllers
+    const _fetchAborts = new Map();      // seq -> AbortController
+    const _jobIdToSeqs = new Map();      // jobId -> Set<seq>
+
+    function doFetchForPlugin(endpoint, body, seq, jobId) {
+      if (jobId !== undefined) {
+        // Parallel mode — don't abort other fetches
+        const ac = new AbortController();
+        _fetchAborts.set(seq, ac);
+        if (!_jobIdToSeqs.has(jobId)) _jobIdToSeqs.set(jobId, new Set());
+        _jobIdToSeqs.get(jobId).add(seq);
+        fetch(BACKEND_URL + endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: ac.signal,
         })
-        .catch((err) => {
-          _activeFetchAbort = null;
-          if (err.name === "AbortError") {
-            postToPlugin({ type: "fetch-aborted", seq });
-          } else {
-            postToPlugin({ type: "fetch-error", error: err.message, seq });
-          }
-        });
+          .then(async (resp) => {
+            _fetchAborts.delete(seq);
+            if (!resp.ok) {
+              const errText = await resp.text();
+              postToPlugin({ type: "fetch-error", error: "Backend error " + resp.status + ": " + errText, seq });
+            } else {
+              const data = await resp.json();
+              postToPlugin({ type: "fetch-result", data, seq });
+            }
+          })
+          .catch((err) => {
+            _fetchAborts.delete(seq);
+            if (err.name === "AbortError") {
+              postToPlugin({ type: "fetch-aborted", seq });
+            } else {
+              postToPlugin({ type: "fetch-error", error: err.message, seq });
+            }
+          });
+      } else {
+        // Serial mode (plan+apply) — abort any prior serial fetch
+        if (_activeFetchAbort) { _activeFetchAbort.abort(); _activeFetchAbort = null; }
+        const ac = new AbortController();
+        _activeFetchAbort = ac;
+        fetch(BACKEND_URL + endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: ac.signal,
+        })
+          .then(async (resp) => {
+            _activeFetchAbort = null;
+            if (!resp.ok) {
+              const errText = await resp.text();
+              postToPlugin({ type: "fetch-error", error: "Backend error " + resp.status + ": " + errText, seq });
+            } else {
+              const data = await resp.json();
+              postToPlugin({ type: "fetch-result", data, seq });
+            }
+          })
+          .catch((err) => {
+            _activeFetchAbort = null;
+            if (err.name === "AbortError") {
+              postToPlugin({ type: "fetch-aborted", seq });
+            } else {
+              postToPlugin({ type: "fetch-error", error: err.message, seq });
+            }
+          });
+      }
     }
 
     function abortActiveFetch() {
+      // Abort serial fetch only (plan+apply cancel)
       if (_activeFetchAbort) {
         _activeFetchAbort.abort();
         _activeFetchAbort = null;
       }
       // Also tell the backend to stop the LLM call (fire-and-forget)
       fetch(BACKEND_URL + "/cancel", { method: "POST" }).catch(() => {});
+    }
+
+    function cancelJobFetch(jobId) {
+      // Abort all fetches for a specific job
+      const seqs = _jobIdToSeqs.get(jobId);
+      if (seqs) {
+        for (const seq of seqs) {
+          const ac = _fetchAborts.get(seq);
+          if (ac) ac.abort();
+          _fetchAborts.delete(seq);
+        }
+        _jobIdToSeqs.delete(jobId);
+      }
+      // Tell the plugin to cancel the job
+      postToPlugin({ type: "cancel-job", jobId });
+    }
+
+    // ── Parallel Job Queue ────────────────────────────────────────
+    const _jobs = new Map(); // jobId -> { prompt, phase, phaseStartTime }
+    let _jobTickInterval = null;
+
+    // Phase ranges for single progress bar (0-100%)
+    const JOB_PHASE_RANGES = {
+      analyze:  [0, 15],
+      generate: [15, 85],
+      create:   [85, 100],
+    };
+
+    function addJob(jobId, prompt) {
+      _jobs.set(jobId, {
+        prompt: prompt,
+        phase: "analyze",
+        phaseStartTime: Date.now(),
+      });
+      renderJobItem(jobId);
+      startJobTick();
+    }
+
+    function renderJobItem(jobId) {
+      const job = _jobs.get(jobId);
+      if (!job) return;
+      // Truncate prompt for display
+      const display = job.prompt.length > 40 ? job.prompt.slice(0, 37) + "…" : job.prompt;
+      const el = document.createElement("div");
+      el.className = "job-item";
+      el.dataset.jobId = String(jobId);
+      el.innerHTML =
+        '<div class="job-header">' +
+          '<span class="job-prompt" title="' + job.prompt.replace(/"/g, '&quot;') + '">' + display + '</span>' +
+          '<span class="job-phase">Analyzing</span>' +
+          '<button class="job-cancel" title="Cancel">✕</button>' +
+        '</div>' +
+        '<div class="job-bar-track"><div class="job-bar-fill"></div></div>';
+      // Cancel handler
+      el.querySelector(".job-cancel").addEventListener("click", () => {
+        cancelJobFetch(jobId);
+      });
+      jobListEl.appendChild(el);
+    }
+
+    function updateJobPhase(jobId, phase) {
+      const job = _jobs.get(jobId);
+      if (!job) return;
+      job.phase = phase;
+      job.phaseStartTime = Date.now();
+      const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
+      if (!el) return;
+      const phaseLabels = { analyze: "Analyzing", generate: "Generating", create: "Creating" };
+      const phaseEl = el.querySelector(".job-phase");
+      if (phaseEl) phaseEl.textContent = phaseLabels[phase] || phase;
+    }
+
+    function completeJob(jobId, summary) {
+      const job = _jobs.get(jobId);
+      const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
+      if (el) {
+        el.classList.add("done");
+        const phaseEl = el.querySelector(".job-phase");
+        if (phaseEl) phaseEl.textContent = "Done";
+        const fillEl = el.querySelector(".job-bar-fill");
+        if (fillEl) fillEl.style.width = "100%";
+      }
+      // Remove from job list after a delay
+      setTimeout(() => {
+        _jobs.delete(jobId);
+        if (el) el.remove();
+        maybeStopJobTick();
+      }, 3000);
+    }
+
+    function errorJob(jobId, error) {
+      const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
+      if (el) {
+        el.classList.add("error");
+        const phaseEl = el.querySelector(".job-phase");
+        if (phaseEl) phaseEl.textContent = "Failed";
+      }
+      setTimeout(() => {
+        _jobs.delete(jobId);
+        if (el) el.remove();
+        maybeStopJobTick();
+      }, 4000);
+    }
+
+    function cancelledJob(jobId) {
+      const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
+      if (el) {
+        el.classList.add("cancelled");
+        const phaseEl = el.querySelector(".job-phase");
+        if (phaseEl) phaseEl.textContent = "Cancelled";
+      }
+      setTimeout(() => {
+        _jobs.delete(jobId);
+        if (el) el.remove();
+        maybeStopJobTick();
+      }, 2000);
+    }
+
+    function startJobTick() {
+      if (_jobTickInterval) return;
+      _jobTickInterval = setInterval(tickAllJobs, 80);
+    }
+
+    function maybeStopJobTick() {
+      if (_jobs.size === 0 && _jobTickInterval) {
+        clearInterval(_jobTickInterval);
+        _jobTickInterval = null;
+      }
+    }
+
+    function tickAllJobs() {
+      for (const [jobId, job] of _jobs) {
+        if (job.phase === "done" || job.phase === "error" || job.phase === "cancelled") continue;
+        const el = jobListEl.querySelector('[data-job-id="' + jobId + '"] .job-bar-fill');
+        if (!el) continue;
+        const range = JOB_PHASE_RANGES[job.phase];
+        if (!range) continue;
+        const est = phaseEstimates[job.phase] || 30000;
+        const elapsed = Date.now() - job.phaseStartTime;
+        var phasePct;
+        if (elapsed < est) {
+          phasePct = 0.85 * (elapsed / est);
+        } else {
+          var overtime = elapsed - est;
+          phasePct = 0.85 + 0.13 * (1 - Math.exp(-overtime / (est * 0.5)));
+        }
+        var overallPct = range[0] + (range[1] - range[0]) * phasePct;
+        el.style.width = Math.min(overallPct, 98).toFixed(1) + "%";
+      }
     }
 
     // ── Cancel guard: suppress stale plugin messages after cancel ──
@@ -1153,8 +1451,8 @@
           break;
         }
         case "do-fetch": {
-          if (isCancelGuardActive()) break; // don't start fetch if cancelled
-          doFetchForPlugin(msg.endpoint, msg.body, msg.seq);
+          if (isCancelGuardActive() && !msg.jobId) break; // only guard serial fetches
+          doFetchForPlugin(msg.endpoint, msg.body, msg.seq, msg.jobId);
           break;
         }
         case "status": {
@@ -1216,6 +1514,35 @@
           stopProgress();
           hideWorking();
           setStatus("Cancelled.", "error");
+          break;
+        }
+
+        // ── Parallel Job Messages ─────────────────────────────
+        case "job-started": {
+          // Exit serial mode (showWorking/startProgress may have been called)
+          stopProgress();
+          hideWorking();
+          addJob(msg.jobId, msg.prompt);
+          intentEl.value = "";
+          setStatus("Job started — you can submit more prompts", "success");
+          break;
+        }
+        case "job-progress": {
+          updateJobPhase(msg.jobId, msg.phase);
+          break;
+        }
+        case "job-complete": {
+          completeJob(msg.jobId, msg.summary);
+          setStatus(msg.summary, "success");
+          break;
+        }
+        case "job-error": {
+          errorJob(msg.jobId, msg.error);
+          setStatus(msg.error, "error");
+          break;
+        }
+        case "job-cancelled": {
+          cancelledJob(msg.jobId);
           break;
         }
         case "selection-change": {
