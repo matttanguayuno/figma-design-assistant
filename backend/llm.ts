@@ -384,7 +384,7 @@ export async function callLLMStateAudit(
   provider: Provider = "anthropic",
   model?: string
 ): Promise<unknown> {
-  const userPrompt = \`## UI Components & Screens to Audit for State Completeness\n\${JSON.stringify(items, null, 2)}\n\nAnalyze each item and return the JSON with present and missing states.\`;
+  const userPrompt = `## UI Components & Screens to Audit for State Completeness\n${JSON.stringify(items, null, 2)}\n\nAnalyze each item and return the JSON with present and missing states.`;
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
