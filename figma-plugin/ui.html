@@ -1129,6 +1129,16 @@
   <input type="file" id="file-input" accept=".json" style="display:none" />
 
   <script>
+    // ── Minimum-size enforcement ──────────────────────────────────
+    const MIN_W = 340, MIN_H = 280;
+    new ResizeObserver(() => {
+      const w = document.documentElement.clientWidth;
+      const h = document.documentElement.clientHeight;
+      if (w < MIN_W || h < MIN_H) {
+        parent.postMessage({ pluginMessage: { type: 'resize', width: Math.max(w, MIN_W), height: Math.max(h, MIN_H) } }, '*');
+      }
+    }).observe(document.documentElement);
+
     // ── DOM References ────────────────────────────────────────────
     const intentEl = document.getElementById("intent");
     const btnApply = document.getElementById("btn-apply");

@@ -69,7 +69,9 @@
     });
   }
   var _nextPlaceX = null;
-  figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
+  var MIN_WIDTH = 340;
+  var MIN_HEIGHT = 280;
+  figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
   clearAuditBadges();
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
@@ -4631,6 +4633,13 @@ RULES:
   figma.ui.onmessage = async (msg) => {
     try {
       switch (msg.type) {
+        // ── Resize enforcement ────────────────────────────────
+        case "resize": {
+          const w = Math.max(msg.width || MIN_WIDTH, MIN_WIDTH);
+          const h = Math.max(msg.height || MIN_HEIGHT, MIN_HEIGHT);
+          figma.ui.resize(w, h);
+          return;
+        }
         // ── Cancel in-flight request (serial plan+apply) ─────
         case "cancel": {
           _cancelled = true;

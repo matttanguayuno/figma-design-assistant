@@ -113,7 +113,9 @@ let _nextPlaceX: number | null = null;
 
 // ── Show UI ─────────────────────────────────────────────────────────
 
-figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
+const MIN_WIDTH = 340;
+const MIN_HEIGHT = 280;
+figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
 
 // Clean up any leftover audit badges from a previous session
 clearAuditBadges();
@@ -6146,6 +6148,14 @@ async function runGenerateJob(job: GenerateJobState, prompt: string): Promise<vo
 figma.ui.onmessage = async (msg: UIToPluginMessage) => {
   try {
     switch (msg.type) {
+      // ── Resize enforcement ────────────────────────────────
+      case "resize" as any: {
+        const w = Math.max((msg as any).width || MIN_WIDTH, MIN_WIDTH);
+        const h = Math.max((msg as any).height || MIN_HEIGHT, MIN_HEIGHT);
+        figma.ui.resize(w, h);
+        return;
+      }
+
       // ── Cancel in-flight request (serial plan+apply) ─────
       case "cancel" as any: {
         _cancelled = true;
