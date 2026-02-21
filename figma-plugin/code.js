@@ -70,6 +70,7 @@
   }
   var _nextPlaceX = null;
   figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
+  clearAuditBadges();
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
   }

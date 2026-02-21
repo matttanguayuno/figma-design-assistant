@@ -115,6 +115,9 @@ let _nextPlaceX: number | null = null;
 
 figma.showUI(__html__, { width: 340, height: 280, title: "Uno Design Assistant" });
 
+// Clean up any leftover audit badges from a previous session
+clearAuditBadges();
+
 // ── Helpers: send message to UI ─────────────────────────────────────
 
 function sendToUI(msg: PluginToUIMessage): void {
