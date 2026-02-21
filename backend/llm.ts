@@ -138,7 +138,8 @@ async function callAnthropic(
   abort: AbortController
 ): Promise<string> {
   const client = getAnthropicClient(apiKey);
-  const message = await client.messages.create(
+  // Use streaming to avoid Anthropic's "Streaming is required for long requests" error
+  const stream = client.messages.stream(
     {
       model,
       max_tokens: maxTokens,
@@ -147,6 +148,7 @@ async function callAnthropic(
     },
     { signal: abort.signal as any }
   );
+  const message = await stream.finalMessage();
   const textBlock = message.content.find((b) => b.type === "text");
   if (!textBlock || textBlock.type !== "text") {
     throw new Error("Anthropic returned no text content");
