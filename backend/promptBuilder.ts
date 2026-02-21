@@ -239,13 +239,19 @@ Rules:
 - REFERENCE SNAPSHOTS: When reference frame snapshots are provided, they show the EXACT node structure of existing screens. This is the HIGHEST PRIORITY style source. Study every property and replicate the same styling for equivalent elements in your output. This includes fillColor, strokeColor, strokeWeight, individual stroke weights, cornerRadius, padding, spacing, alignment, font family/size/style, textDecoration, and textAlignHorizontal. If the reference snapshot shows different values than the button/input style tokens, ALWAYS follow the reference snapshot.
 
 DESKTOP LAYOUT ADAPTATION (when converting a mobile screen to desktop):
-- NEVER simply place the mobile-width content into a 1440px frame. You MUST redesign the layout for desktop.
-- Use a HORIZONTAL split layout: left panel (50-60% width) for a branded/decorative area with background color and app title/tagline, right panel (40-50% width) for the form content.
-- OR use a centered single-column layout: the form container should be 400-500px wide, horizontally centered within the 1440px root using counterAxisAlignItems:"CENTER" on the parent.
-- Form elements (inputs, buttons) inside the form container should use layoutSizingHorizontal:"FILL" to stretch to the container width, NOT stay at mobile widths like 347px.
-- Increase vertical spacing and padding for desktop — paddingTop/Bottom 60-80px, itemSpacing 20-28px.
-- Keep ALL the same content elements from the mobile screen (titles, inputs, buttons, links, dividers, social login, etc.) but arrange them in a desktop-appropriate layout.
-- Buttons and inputs on desktop should be at least 360-480px wide (the width of the form container), never the narrow mobile widths.`;
+- The root FRAME width MUST be exactly 1440. No exceptions. Do not use 720, 800, or any other width.
+- NEVER simply place the mobile-width content into a 1440px frame unchanged.
+- PREFERRED LAYOUT — horizontal split with two child FRAMEs inside the root:
+  * Root: type:"FRAME", width:1440, layoutMode:"HORIZONTAL", layoutSizingVertical:"HUG"
+  * Left panel: type:"FRAME", width:720, layoutSizingHorizontal:"FIXED", layoutSizingVertical:"FILL", layoutMode:"VERTICAL", primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER". Contains brand name, tagline text, and uses the app's primary/accent fillColor as background.
+  * Right panel: type:"FRAME", width:720, layoutSizingHorizontal:"FIXED", layoutSizingVertical:"HUG", layoutMode:"VERTICAL", counterAxisAlignItems:"CENTER", paddingTop:80, paddingBottom:60, paddingLeft:100, paddingRight:100. Contains a form wrapper FRAME (width:440, layoutMode:"VERTICAL", itemSpacing:20).
+  * Inside the form wrapper: all form elements (title, subtitle, inputs, buttons, links, divider, social login, signup) with layoutSizingHorizontal:"FILL".
+- ALTERNATIVE — centered single-column:
+  * Root: width:1440, layoutMode:"VERTICAL", counterAxisAlignItems:"CENTER", paddingTop:80, paddingBottom:60
+  * Form container: width:440, layoutMode:"VERTICAL", itemSpacing:20, with all elements using layoutSizingHorizontal:"FILL".
+- CRITICAL: Every input and button inside the form wrapper must use layoutSizingHorizontal:"FILL" so they stretch to 440px, NOT stay at mobile widths like 347px.
+- The right panel (or centered wrapper) background should match the mobile screen's background color.
+- Keep ALL content from the mobile screen — do NOT omit any text, links, inputs, or buttons.`;
 
 
 // ── Generation User Prompt ──────────────────────────────────────────
@@ -275,10 +281,14 @@ export function buildGeneratePrompt(
 
     if (isMobile && wantsDesktop) {
       parts.push("", "IMPORTANT — DESKTOP ADAPTATION REQUIRED:");
-      parts.push("The selected frame is a MOBILE screen (" + selectedWidth + "px wide). The user wants a DESKTOP version (1440px wide).");
-      parts.push("You MUST redesign the layout for desktop — do NOT just place the mobile content at mobile width inside a 1440px frame.");
-      parts.push("Use either: (a) a horizontal split layout with a branded left panel and form on the right, or (b) a centered form container (400-500px wide) within the 1440px frame.");
-      parts.push("All form elements should stretch to fill their container (layoutSizingHorizontal: FILL), not stay at the narrow mobile widths like " + selectedWidth + "px.");
+      parts.push("The selected frame is a MOBILE screen (" + selectedWidth + "px wide). The user wants a DESKTOP version.");
+      parts.push("The root frame width MUST be exactly 1440px. NOT 720, NOT 800.");
+      parts.push("Use a HORIZONTAL split layout:");
+      parts.push("- Left panel (width:720, FIXED): branded area with app name/tagline, accent background color, centered content.");
+      parts.push("- Right panel (width:720, FIXED): contains a centered form wrapper (width:440) with ALL the form elements from the mobile screen.");
+      parts.push("- Every input and button in the form wrapper MUST use layoutSizingHorizontal:FILL to stretch to 440px.");
+      parts.push("- The right panel's background should match the mobile screen's background color.");
+      parts.push("- Do NOT just dump the mobile layout at " + selectedWidth + "px width into a bigger frame.");
     }
 
     parts.push("", "### Selected Frame Node Tree");
