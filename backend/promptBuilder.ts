@@ -244,12 +244,22 @@ Rules:
 export function buildGeneratePrompt(
   prompt: string,
   styleTokens: any,
-  designSystem: DesignSystemSnapshot
+  designSystem: DesignSystemSnapshot,
+  selection?: any
 ): string {
   const parts: string[] = [
     "## User Request",
     prompt,
   ];
+
+  // Include the currently selected frame so the LLM knows what "this frame" refers to
+  if (selection && selection.nodes && selection.nodes.length > 0) {
+    parts.push("", "## Currently Selected Frame (THIS is what the user is referring to)");
+    parts.push("The user has selected the following frame. When they say 'this frame', 'this screen', or 'this', they mean the structure below. Replicate its content, layout and elements — adapting them to the user's request (e.g. desktop sizing).");
+    // Send the full node tree of the first selected node (trimmed to avoid token explosion)
+    const selectedNode = selection.nodes[0];
+    parts.push(JSON.stringify(selectedNode));
+  }
 
   // Include extracted style tokens — these are the actual design values to match
   // Trim lists to keep under rate limit

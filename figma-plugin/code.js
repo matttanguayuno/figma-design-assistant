@@ -4593,6 +4593,8 @@ RULES:
               return;
             }
             sendToUI({ type: "status", message: "Generating frame\u2026" });
+            const selectionSnapshot = extractSelectionSnapshot();
+            console.log(`[generate] Selection: ${selectionSnapshot.nodes.length} node(s) selected`);
             console.log("[generate] Calling backend /generate via UI...");
             let result;
             try {
@@ -4600,6 +4602,7 @@ RULES:
                 prompt: msg.prompt,
                 styleTokens,
                 designSystem,
+                selection: selectionSnapshot,
                 apiKey: _userApiKey,
                 provider: _selectedProvider,
                 model: _selectedModel

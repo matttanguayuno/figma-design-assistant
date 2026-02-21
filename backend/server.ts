@@ -57,6 +57,13 @@ async function resolveImagePrompt(prompt: string): Promise<string> {
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 
+// Increase server-level timeout to 5 minutes for long LLM calls
+app.use((_req, _res, next) => {
+  _req.setTimeout(300_000);  // 5 min
+  _res.setTimeout(300_000);
+  next();
+});
+
 // ── Health check ────────────────────────────────────────────────────
 
 app.get("/health", (_req: Request, res: Response) => {
@@ -228,7 +235,7 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, apiKey, provider, model } = req.body;
+    const { prompt, styleTokens, designSystem, selection, apiKey, provider, model } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -259,7 +266,8 @@ app.post("/generate", async (req: Request, res: Response) => {
       designSystem || { textStyles: [], fillStyles: [], components: [], variables: [] },
       apiKey,
       resolvedProvider,
-      model
+      model,
+      selection || null
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));

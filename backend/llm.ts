@@ -272,9 +272,10 @@ export async function callLLMGenerate(
   designSystem: DesignSystemSnapshot,
   apiKey: string,
   provider: Provider = "anthropic",
-  model?: string
+  model?: string,
+  selection?: any
 ): Promise<unknown> {
-  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem);
+  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection);
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();

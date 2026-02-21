@@ -6068,6 +6068,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
           sendToUI({ type: "status", message: "Generating frame\u2026" });
 
+          // Extract the current selection so the LLM knows what "this frame" means
+          const selectionSnapshot = extractSelectionSnapshot();
+          console.log(`[generate] Selection: ${selectionSnapshot.nodes.length} node(s) selected`);
+
           // Call backend /generate endpoint via UI iframe (has real AbortController)
           console.log("[generate] Calling backend /generate via UI...");
           let result: { snapshot: any };
@@ -6076,6 +6080,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               prompt: (msg as any).prompt,
               styleTokens,
               designSystem,
+              selection: selectionSnapshot,
               apiKey: _userApiKey,
               provider: _selectedProvider,
               model: _selectedModel,
