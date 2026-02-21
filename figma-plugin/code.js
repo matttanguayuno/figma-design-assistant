@@ -4135,18 +4135,9 @@ RULES:
   setTimeout(() => {
     sendToUI({ type: "selection-change", label: describeSelection() });
   }, 100);
-  setTimeout(async () => {
-    try {
-      console.log("[startup] Pre-caching design system...");
-      await extractDesignSystemSnapshot();
-      console.log("[startup] Pre-caching style tokens...");
-      extractStyleTokens();
-      console.log("[startup] Pre-cache complete.");
-    } catch (e) {
-      console.warn("[startup] Pre-cache failed (non-fatal):", e);
-    }
+  setTimeout(() => {
     sendToUI({ type: "startup-ready" });
-  }, 200);
+  }, 50);
   setTimeout(async () => {
     try {
       const raw = await figma.clientStorage.getAsync("phaseTimings");

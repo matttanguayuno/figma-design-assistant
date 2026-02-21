@@ -5506,23 +5506,14 @@ setTimeout(() => {
   sendToUI({ type: "selection-change", label: describeSelection() } as any);
 }, 100);
 
-// ── Pre-cache extractions at startup ────────────────────────────────
-// Run the expensive tree-walking NOW (while the user is reading/typing),
-// so when they click Generate, the cache is warm and it's instant.
-// UI shows a loading overlay until we send "startup-ready".
-setTimeout(async () => {
-  try {
-    console.log("[startup] Pre-caching design system...");
-    await extractDesignSystemSnapshot();
-    console.log("[startup] Pre-caching style tokens...");
-    extractStyleTokens();
-    console.log("[startup] Pre-cache complete.");
-  } catch (e) {
-    console.warn("[startup] Pre-cache failed (non-fatal):", e);
-  }
-  // Signal UI that startup work is done — remove loading overlay
+// ── Pre-cache: DISABLED ─────────────────────────────────────────────
+// Previously walked the entire node tree at startup to pre-warm caches.
+// This blocked Figma's UI thread for large files. Caches now populate
+// lazily on the first generate/edit job instead.
+// Signal UI that startup is ready immediately.
+setTimeout(() => {
   sendToUI({ type: "startup-ready" } as any);
-}, 200);
+}, 50);
 
 // ── Load saved phase timings from clientStorage ─────────────────────
 // Sends persisted timing estimates to UI so the progress bar can use
