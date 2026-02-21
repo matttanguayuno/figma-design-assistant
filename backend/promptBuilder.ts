@@ -220,7 +220,7 @@ export const GENERATE_SYSTEM_PROMPT = `You are a Figma frame generator. Return O
 Return a single NodeSnapshot object: a root FRAME with nested children.
 
 NodeSnapshot fields:
-- FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX", paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", strokeColor:"#HEX", strokeWeight:number, strokeTopWeight:number, strokeRightWeight:number, strokeBottomWeight:number, strokeLeftWeight:number, cornerRadius, clipsContent, opacity, effects[], children[]
+- FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX" (NEVER use "STRETCH" — it is not valid), paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", strokeColor:"#HEX", strokeWeight:number, strokeTopWeight:number, strokeRightWeight:number, strokeBottomWeight:number, strokeLeftWeight:number, cornerRadius, clipsContent, opacity, effects[], children[]
 - TEXT: name, type:"TEXT", characters, fontSize, fontFamily (use the font from style tokens), fontStyle:"Regular"|"Medium"|"Semi Bold"|"Bold", fillColor, textAlignHorizontal:"LEFT"|"CENTER"|"RIGHT", textDecoration:"UNDERLINE"|"STRIKETHROUGH", layoutSizingHorizontal, layoutSizingVertical:"HUG"
 - RECTANGLE: name, type:"RECTANGLE", width, height, fillColor, cornerRadius, layoutSizingHorizontal, layoutSizingVertical
 

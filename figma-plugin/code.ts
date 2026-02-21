@@ -1227,10 +1227,12 @@ async function createNodeFromSnapshot(
       }
 
       // Alignment (critical for centering text in buttons)
-      if (snap.primaryAxisAlignItems) {
+      const validPrimary = ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"];
+      const validCounter = ["MIN", "CENTER", "MAX", "BASELINE"];
+      if (snap.primaryAxisAlignItems && validPrimary.indexOf(snap.primaryAxisAlignItems) !== -1) {
         frame.primaryAxisAlignItems = snap.primaryAxisAlignItems;
       }
-      if (snap.counterAxisAlignItems) {
+      if (snap.counterAxisAlignItems && validCounter.indexOf(snap.counterAxisAlignItems) !== -1) {
         frame.counterAxisAlignItems = snap.counterAxisAlignItems;
       }
 
