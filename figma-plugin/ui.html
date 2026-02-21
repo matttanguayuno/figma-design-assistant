@@ -416,6 +416,26 @@
       background: var(--border);
       margin: 4px 0;
     }
+    /* Drill-down menu pages */
+    .menu-page { }
+    .menu-item-sub {
+      justify-content: flex-start;
+    }
+    .menu-chevron {
+      width: 8px;
+      height: 12px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .menu-item-back {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .menu-back-chevron {
+      width: 8px;
+      height: 12px;
+      flex-shrink: 0;
+    }
 
     /* ── Loading Overlay ─────────────────────────────── */
     .loading-overlay {
@@ -820,6 +840,111 @@
     .audit-progress-seg.active .seg-label { opacity: 1; color: var(--accent); font-weight: 600; }
     .audit-progress-seg.done .seg-fill { width: 100% !important; background: var(--success); }
     .audit-progress-seg.done .seg-label { opacity: 0.7; color: var(--success); }
+
+    /* ── State Audit Panel (full-page takeover) ──────────── */
+    .state-audit-panel {
+      position: absolute;
+      inset: 0;
+      z-index: 100;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .state-audit-findings {
+      overflow-y: auto;
+      flex: 1;
+      padding: 4px 0;
+    }
+    /* ── State card ───────────────────────────────────────── */
+    .state-card {
+      border-bottom: 1px solid var(--border);
+    }
+    .state-card:last-child { border-bottom: none; }
+    .state-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.12s;
+    }
+    .state-card-header:hover { background: rgba(255,255,255,0.04); }
+    .state-card-chevron {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      transition: transform 0.15s;
+      color: var(--text-muted);
+    }
+    .state-card.collapsed .state-card-chevron { transform: rotate(-90deg); }
+    .state-card-icon {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .state-card-icon.has-missing { background: #f39c12; }
+    .state-card-icon.all-present { background: var(--success); }
+    .state-card-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .state-card-type {
+      font-size: 9px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      flex-shrink: 0;
+    }
+    .state-card-count {
+      font-size: 10px;
+      color: var(--text-muted);
+      background: var(--surface);
+      padding: 1px 7px;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+    .state-card-body {
+      padding: 4px 14px 8px 36px;
+      overflow: hidden;
+    }
+    .state-card.collapsed .state-card-body { display: none; }
+    .state-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+    }
+    .state-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      padding: 2px 0;
+    }
+    .state-tag-present { color: var(--success); }
+    .state-tag-missing { color: #e67e22; }
+    .state-tag-icon { font-size: 10px; flex-shrink: 0; }
+    .state-missing-reason {
+      font-size: 10px;
+      color: var(--text-muted);
+      line-height: 1.3;
+      margin-top: 6px;
+      padding-left: 2px;
+    }
+    .state-missing-detail {
+      padding: 2px 0;
+    }
+    .state-missing-detail strong {
+      color: #e67e22;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
@@ -838,34 +963,53 @@
           </svg>
         </button>
         <div id="menu-dropdown" class="menu-dropdown">
-          <button class="menu-item" id="menu-export-json">
-            <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Export to JSON
-          </button>
-          <div class="menu-separator"></div>
-          <button class="menu-item" id="menu-import-json">
-            <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 11l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Import from JSON
-          </button>
-          <div class="menu-separator"></div>
-          <button class="menu-item" id="menu-export-docs">
-            <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M5 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-            Export Design Docs
-          </button>
-          <div class="menu-separator"></div>
-          <button class="menu-item" id="menu-audit-a11y">
-            <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v4M8 11h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-            Audit Accessibility
-          </button>
-          <button class="menu-item" id="menu-clear-a11y">
-            <svg viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5 4V3a1 1 0 011-1h4a1 1 0 011 1v1M6 7v5M10 7v5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 4l1 10a1 1 0 001 1h6a1 1 0 001-1l1-10" stroke="currentColor" stroke-width="1.2"/></svg>
-            Clear Accessibility Warnings
-          </button>
-          <div class="menu-separator"></div>
-          <button class="menu-item" id="menu-settings">
-            <svg viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3l.4 2 1.3.7 1.8-1 2.1 2.1-1 1.8.7 1.3 2 .4v3l-2 .4-1.3.7 1 1.8-2.1 2.1-1.8-1-.7 1.3-.4 2h-3l-.4-2-1.3-.7-1.8 1L.9 13.1l1-1.8L1.2 10l-2-.4v-3l2-.4.7-1.3-1-1.8L3 .9l1.8 1L6.1 1.2l.4-2z" stroke="currentColor" stroke-width="1.1"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.1"/></svg>
-            Settings
-          </button>
+          <div id="menu-page-root" class="menu-page">
+            <button class="menu-item" id="menu-export-json">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Export to JSON
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-import-json">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 11l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Import from JSON
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-export-docs">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M5 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              Export Design Docs
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item menu-item-sub" id="menu-analyze-drill">
+              <svg viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v4M8 11h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+              Analyze
+              <svg class="menu-chevron" viewBox="0 0 8 12" fill="none"><path d="M1.5 1l5 5-5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-settings">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3l.4 2 1.3.7 1.8-1 2.1 2.1-1 1.8.7 1.3 2 .4v3l-2 .4-1.3.7 1 1.8-2.1 2.1-1.8-1-.7 1.3-.4 2h-3l-.4-2-1.3-.7-1.8 1L.9 13.1l1-1.8L1.2 10l-2-.4v-3l2-.4.7-1.3-1-1.8L3 .9l1.8 1L6.1 1.2l.4-2z" stroke="currentColor" stroke-width="1.1"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.1"/></svg>
+              Settings
+            </button>
+          </div>
+          <div id="menu-page-analyze" class="menu-page" style="display:none;">
+            <button class="menu-item menu-item-back" id="menu-back">
+              <svg class="menu-back-chevron" viewBox="0 0 8 12" fill="none"><path d="M6.5 1l-5 5 5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Back
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-audit-a11y">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.5v1.75M5.5 8.5h5M6.5 11c.4.3.9.5 1.5.5s1.1-.2 1.5-.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              Accessibility Audit
+            </button>
+            <button class="menu-item" id="menu-audit-states">
+              <svg viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              UI State Audit
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-clear-a11y">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M2 4h12M5 4V3a1 1 0 011-1h4a1 1 0 011 1v1M6 7v5M10 7v5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 4l1 10a1 1 0 001 1h6a1 1 0 001-1l1-10" stroke="currentColor" stroke-width="1.2"/></svg>
+              Clear Warnings
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -953,6 +1097,32 @@
     <div id="audit-findings" class="audit-findings"></div>
   </div>
 
+  <!-- UI State Audit panel -->
+  <div id="state-audit-panel" class="state-audit-panel" style="display:none;">
+    <div class="audit-header">
+      <span class="audit-title">UI State Audit</span>
+      <div class="audit-header-actions">
+        <button id="btn-close-state-audit" class="btn-close-audit" title="Close panel">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="state-audit-progress" class="audit-progress hidden">
+      <div class="audit-progress-segments">
+        <div class="audit-progress-seg" data-state-step="scanning">
+          <div class="seg-track"><div class="seg-fill"></div></div>
+          <div class="seg-label">Scanning</div>
+        </div>
+        <div class="audit-progress-seg" data-state-step="analyzing">
+          <div class="seg-track"><div class="seg-fill"></div></div>
+          <div class="seg-label">Analyzing</div>
+        </div>
+      </div>
+    </div>
+    <div id="state-audit-summary" class="audit-summary"></div>
+    <div id="state-audit-findings" class="state-audit-findings"></div>
+  </div>
+
   <div id="status-bar" class="status-bar">Nothing selected — will generate new frame</div>
 
   <!-- Hidden file input for JSON import -->
@@ -985,12 +1155,22 @@
     const apiKeyLabel = document.getElementById("api-key-label");
     const menuAuditA11y = document.getElementById("menu-audit-a11y");
     const menuClearA11y = document.getElementById("menu-clear-a11y");
+    const menuAuditStates = document.getElementById("menu-audit-states");
+    const menuAnalyzeDrill = document.getElementById("menu-analyze-drill");
+    const menuBack = document.getElementById("menu-back");
+    const menuPageRoot = document.getElementById("menu-page-root");
+    const menuPageAnalyze = document.getElementById("menu-page-analyze");
     const auditPanel = document.getElementById("audit-panel");
     const auditSummary = document.getElementById("audit-summary");
     const auditFindings = document.getElementById("audit-findings");
     const btnClearAudit = document.getElementById("btn-clear-audit");
     const btnCloseAudit = document.getElementById("btn-close-audit");
     const auditProgressEl = document.getElementById("audit-progress");
+    const stateAuditPanel = document.getElementById("state-audit-panel");
+    const stateAuditSummary = document.getElementById("state-audit-summary");
+    const stateAuditFindings = document.getElementById("state-audit-findings");
+    const btnCloseStateAudit = document.getElementById("btn-close-state-audit");
+    const stateAuditProgressEl = document.getElementById("state-audit-progress");
 
     // ── Provider / Model configuration ───────────────────────────
     const PROVIDER_MODELS = {
@@ -1252,18 +1432,44 @@
       parent.postMessage({ pluginMessage: msg }, "*");
     }
 
-    // ── Menu Toggle ──────────────────────────────────────────────
+    // ── Menu Toggle (with drill-down support) ─────────────────────
+    function closeMenu() {
+      menuDropdown.classList.remove("show");
+      menuToggle.classList.remove("open");
+      // Reset to root page
+      menuPageRoot.style.display = "";
+      menuPageAnalyze.style.display = "none";
+    }
+
     menuToggle.addEventListener("click", (e) => {
       e.stopPropagation();
       const isOpen = menuDropdown.classList.toggle("show");
       menuToggle.classList.toggle("open", isOpen);
+      if (isOpen) {
+        // Always open to root page
+        menuPageRoot.style.display = "";
+        menuPageAnalyze.style.display = "none";
+      }
+    });
+
+    // Drill into Analyze submenu
+    menuAnalyzeDrill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuPageRoot.style.display = "none";
+      menuPageAnalyze.style.display = "";
+    });
+
+    // Back to root menu
+    menuBack.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuPageAnalyze.style.display = "none";
+      menuPageRoot.style.display = "";
     });
 
     // Close menu when clicking outside
     document.addEventListener("click", (e) => {
       if (!menuDropdown.contains(e.target) && e.target !== menuToggle) {
-        menuDropdown.classList.remove("show");
-        menuToggle.classList.remove("open");
+        closeMenu();
       }
     });
 
@@ -1277,8 +1483,7 @@
       document.body.classList.remove("settings-open");
     }
     menuSettings.addEventListener("click", () => {
-      menuDropdown.classList.remove("show");
-      menuToggle.classList.remove("open");
+      closeMenu();
       openSettings();
     });
     btnCloseSettings.addEventListener("click", () => {
@@ -1335,23 +1540,20 @@
 
     // ── Menu: Export design to JSON ──────────────────────────────
     menuExportJson.addEventListener("click", () => {
-      menuDropdown.classList.remove("show");
-      menuToggle.classList.remove("open");
+      closeMenu();
       setStatus("Exporting design to JSON…");
       postToPlugin({ type: "export-json" });
     });
     // \u2500\u2500 Menu: Import design from JSON \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     menuImportJson.addEventListener("click", () => {
-      menuDropdown.classList.remove("show");
-      menuToggle.classList.remove("open");
+      closeMenu();
       fileInput.value = "";
       fileInput.click();
     });
 
     // ── Menu: Export Design Docs ─────────────────────────────────
     menuExportDocs.addEventListener("click", () => {
-      menuDropdown.classList.remove("show");
-      menuToggle.classList.remove("open");
+      closeMenu();
       setStatus("Generating design docs…");
       postToPlugin({ type: "generate-docs" });
     });
@@ -1370,11 +1572,26 @@
 
     // ── Menu: Clear Accessibility Warnings ──────────────────────
     menuClearA11y.addEventListener("click", () => {
-      menuDropdown.classList.remove("show");
-      menuToggle.classList.remove("open");
+      closeMenu();
       postToPlugin({ type: "clear-audit" });
       auditPanel.style.display = "none";
       setStatus("Accessibility warnings cleared.", "success");
+    });
+
+    // ── Menu: UI State Audit ────────────────────────────────────
+    menuAuditStates.addEventListener("click", () => {
+      closeMenu();
+      stateAuditPanel.style.display = "flex";
+      stateAuditSummary.textContent = "";
+      stateAuditFindings.innerHTML = "";
+      startStateAuditProgress("all");
+      setStatus("Running UI state audit…");
+      postToPlugin({ type: "audit-states" });
+    });
+
+    // ── State Audit panel: Close ────────────────────────────────
+    btnCloseStateAudit.addEventListener("click", () => {
+      stateAuditPanel.style.display = "none";
     });
 
     // ── Audit panel: Close ──────────────────────────────────────
@@ -1492,6 +1709,196 @@
       segs.forEach(function(s) {
         s.classList.remove("active", "done");
         s.querySelector(".seg-fill").style.width = "0%";
+      });
+    }
+
+    // ── State Audit Progress Bar ─────────────────────────────────────
+    var stateAuditEstimates = {
+      all:       { scanning: 2000, analyzing: 15000 },
+      frame:     { scanning: 1000, analyzing: 12000 },
+      component: { scanning: 500,  analyzing: 10000 }
+    };
+    var STATE_AUDIT_PHASES = ["scanning", "analyzing"];
+    var _stateProgressInterval = null;
+    var _statePhase = "";
+    var _statePhaseStart = 0;
+    var _stateScope = "all";
+    var _statePhaseTimings = {};
+
+    function getStateFill(phase) {
+      var seg = stateAuditProgressEl.querySelector('.audit-progress-seg[data-state-step="' + phase + '"]');
+      return seg ? seg.querySelector(".seg-fill") : null;
+    }
+
+    function startStateAuditProgress(scope) {
+      _stateScope = scope || "all";
+      _statePhase = "scanning";
+      _statePhaseStart = Date.now();
+      _statePhaseTimings = {};
+      _statePhaseTimings[_statePhase] = Date.now();
+      stateAuditProgressEl.classList.remove("hidden");
+      var segs = stateAuditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s) {
+        s.classList.remove("active", "done");
+        s.querySelector(".seg-fill").style.width = "0%";
+      });
+      updateStateStepIndicators("scanning");
+      if (_stateProgressInterval) clearInterval(_stateProgressInterval);
+      _stateProgressInterval = setInterval(tickStateProgress, 80);
+    }
+
+    function tickStateProgress() {
+      var fill = getStateFill(_statePhase);
+      if (!fill) return;
+      var ests = stateAuditEstimates[_stateScope] || stateAuditEstimates.all;
+      var est = ests[_statePhase] || 5000;
+      var elapsed = Date.now() - _statePhaseStart;
+      var pct;
+      if (elapsed < est) {
+        pct = 85 * (elapsed / est);
+      } else {
+        var overtime = elapsed - est;
+        pct = 85 + 13 * (1 - Math.exp(-overtime / (est * 0.5)));
+      }
+      fill.style.width = Math.min(pct, 98).toFixed(1) + "%";
+    }
+
+    function advanceStatePhase(phase) {
+      if (phase === _statePhase) return;
+      var prev = _statePhase;
+      var ests = stateAuditEstimates[_stateScope] || stateAuditEstimates.all;
+      if (_statePhaseTimings[prev]) {
+        var actualMs = Date.now() - _statePhaseTimings[prev];
+        ests[prev] = Math.round(actualMs * 0.7 + (ests[prev] || 5000) * 0.3);
+      }
+      var prevSeg = stateAuditProgressEl.querySelector('.audit-progress-seg[data-state-step="' + prev + '"]');
+      if (prevSeg) { prevSeg.classList.remove("active"); prevSeg.classList.add("done"); }
+
+      if (phase === "done") {
+        var segs = stateAuditProgressEl.querySelectorAll(".audit-progress-seg");
+        segs.forEach(function(s) { s.classList.remove("active"); s.classList.add("done"); });
+        if (_stateProgressInterval) { clearInterval(_stateProgressInterval); _stateProgressInterval = null; }
+        postToPlugin({ type: "save-state-audit-timings", timings: stateAuditEstimates });
+        setTimeout(function() { stateAuditProgressEl.classList.add("hidden"); }, 1200);
+        return;
+      }
+
+      _statePhase = phase;
+      _statePhaseStart = Date.now();
+      _statePhaseTimings[phase] = Date.now();
+      updateStateStepIndicators(phase);
+    }
+
+    function updateStateStepIndicators(phase) {
+      var idx = STATE_AUDIT_PHASES.indexOf(phase);
+      var segs = stateAuditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s, i) {
+        s.classList.remove("active", "done");
+        if (i < idx) s.classList.add("done");
+        else if (i === idx) s.classList.add("active");
+      });
+    }
+
+    function stopStateAuditProgress() {
+      if (_stateProgressInterval) clearInterval(_stateProgressInterval);
+      _stateProgressInterval = null;
+      stateAuditProgressEl.classList.add("hidden");
+      var segs = stateAuditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s) {
+        s.classList.remove("active", "done");
+        s.querySelector(".seg-fill").style.width = "0%";
+      });
+    }
+
+    /** Render state audit results as checklist cards */
+    function renderStateAuditResults(items) {
+      stateAuditFindings.innerHTML = "";
+
+      if (!items || items.length === 0) {
+        stateAuditSummary.textContent = "No components or screens found to audit.";
+        return;
+      }
+
+      var totalMissing = 0;
+      items.forEach(function(item) {
+        totalMissing += (item.missingStates || []).length;
+      });
+
+      stateAuditSummary.textContent = "Analyzed " + items.length + " item" + (items.length === 1 ? "" : "s") +
+        " — " + totalMissing + " missing state" + (totalMissing === 1 ? "" : "s");
+
+      items.forEach(function(item) {
+        var hasMissing = item.missingStates && item.missingStates.length > 0;
+        var cardEl = document.createElement("div");
+        cardEl.className = "state-card collapsed";
+
+        // Card header
+        var headerEl = document.createElement("div");
+        headerEl.className = "state-card-header";
+        headerEl.innerHTML =
+          '<svg class="state-card-chevron" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '<span class="state-card-icon ' + (hasMissing ? 'has-missing' : 'all-present') + '"></span>' +
+          '<span class="state-card-label">' + escapeHtml(item.name) + '</span>' +
+          '<span class="state-card-type">' + escapeHtml(item.itemType || '') + '</span>' +
+          (hasMissing ? '<span class="state-card-count">' + item.missingStates.length + ' missing</span>' : '<span class="state-card-count" style="color:var(--success)">\u2713</span>');
+
+        headerEl.addEventListener("click", function() {
+          cardEl.classList.toggle("collapsed");
+        });
+        cardEl.appendChild(headerEl);
+
+        // Card body — state checklist
+        var bodyEl = document.createElement("div");
+        bodyEl.className = "state-card-body";
+
+        // Present states
+        var stateListEl = document.createElement("div");
+        stateListEl.className = "state-list";
+
+        (item.presentStates || []).forEach(function(s) {
+          var tag = document.createElement("span");
+          tag.className = "state-tag state-tag-present";
+          tag.innerHTML = '<span class="state-tag-icon">\u2713</span> ' + escapeHtml(s);
+          stateListEl.appendChild(tag);
+        });
+
+        (item.missingStates || []).forEach(function(s) {
+          var tag = document.createElement("span");
+          tag.className = "state-tag state-tag-missing";
+          tag.innerHTML = '<span class="state-tag-icon">\u2717</span> ' + escapeHtml(s.name || s);
+          stateListEl.appendChild(tag);
+        });
+
+        bodyEl.appendChild(stateListEl);
+
+        // Missing state reasons
+        if (hasMissing) {
+          var reasonsEl = document.createElement("div");
+          reasonsEl.className = "state-missing-reason";
+          item.missingStates.forEach(function(s) {
+            if (s.reason) {
+              var detail = document.createElement("div");
+              detail.className = "state-missing-detail";
+              detail.innerHTML = '<strong>' + escapeHtml(s.name || '') + ':</strong> ' + escapeHtml(s.reason);
+              reasonsEl.appendChild(detail);
+            }
+          });
+          if (reasonsEl.childElementCount > 0) {
+            bodyEl.appendChild(reasonsEl);
+          }
+        }
+
+        cardEl.appendChild(bodyEl);
+
+        // Click header label to select node on canvas
+        headerEl.querySelector(".state-card-label").addEventListener("click", function(e) {
+          e.stopPropagation();
+          if (item.nodeId) {
+            postToPlugin({ type: "select-node", nodeId: item.nodeId });
+          }
+        });
+
+        stateAuditFindings.appendChild(cardEl);
       });
     }
 
@@ -1992,6 +2399,34 @@
             if (msg.timings.all) auditEstimates.all = msg.timings.all;
             if (msg.timings.frame) auditEstimates.frame = msg.timings.frame;
             if (msg.timings.component) auditEstimates.component = msg.timings.component;
+          }
+          break;
+        }
+
+        // ── State Audit Messages ──────────────────────────────
+        case "state-audit-phase": {
+          advanceStatePhase(msg.phase);
+          break;
+        }
+        case "state-audit-results": {
+          advanceStatePhase("done");
+          stateAuditPanel.style.display = "flex";
+          renderStateAuditResults(msg.items);
+          var missingTotal = 0;
+          (msg.items || []).forEach(function(it) { missingTotal += (it.missingStates || []).length; });
+          setStatus("State audit complete: " + missingTotal + " missing state" + (missingTotal === 1 ? "" : "s"), missingTotal > 0 ? "warning" : "success");
+          break;
+        }
+        case "state-audit-error": {
+          stopStateAuditProgress();
+          setStatus(msg.error, "error");
+          break;
+        }
+        case "load-state-audit-timings": {
+          if (msg.timings) {
+            if (msg.timings.all) stateAuditEstimates.all = msg.timings.all;
+            if (msg.timings.frame) stateAuditEstimates.frame = msg.timings.frame;
+            if (msg.timings.component) stateAuditEstimates.component = msg.timings.component;
           }
           break;
         }

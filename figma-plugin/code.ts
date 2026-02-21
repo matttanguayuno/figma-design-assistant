@@ -5799,6 +5799,16 @@ setTimeout(async () => {
   } catch (e) {
     console.warn("[startup] Failed to load audit timings:", e);
   }
+  try {
+    const rawStateAudit = await figma.clientStorage.getAsync("stateAuditTimings");
+    if (rawStateAudit) {
+      const stateAuditTimings = JSON.parse(rawStateAudit);
+      sendToUI({ type: "load-state-audit-timings", timings: stateAuditTimings } as any);
+      console.log("[startup] Loaded saved state audit timings:", stateAuditTimings);
+    }
+  } catch (e) {
+    console.warn("[startup] Failed to load state audit timings:", e);
+  }
 }, 150);
 
 // ── Load saved API keys and provider/model selection ────────────────
@@ -6224,6 +6234,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Persist state audit timings from UI ───────────────
+      case "save-state-audit-timings" as any: {
+        try {
+          const timings = (msg as any).timings;
+          await figma.clientStorage.setAsync("stateAuditTimings", JSON.stringify(timings));
+          console.log("[state-audit] Saved state audit timings");
+        } catch (e) {
+          console.warn("[state-audit] Failed to save state audit timings:", e);
+        }
+        return;
+      }
+
       // ── Persist phase timings from UI ─────────────────────
       case "save-timings" as any: {
         try {
@@ -6354,6 +6376,127 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       case "clear-audit" as any: {
         clearAuditBadges();
         figma.notify("Audit badges cleared.", { timeout: 2000 });
+        break;
+      }
+
+      // ── UI State Audit ────────────────────────────────────
+      case "audit-states" as any: {
+        try {
+          sendToUI({ type: "status", message: "Scanning for components and screens…" });
+
+          // Determine scope
+          let scope = "all";
+          const sel = figma.currentPage.selection;
+          if (sel.length > 0) {
+            if (sel.length === 1 && sel[0].type === "FRAME") scope = "frame";
+            else scope = "component";
+          }
+          sendToUI({ type: "state-audit-phase", phase: "scanning", scope } as any);
+
+          // Collect items to audit
+          interface StateAuditInput {
+            nodeId: string;
+            name: string;
+            itemType: "component" | "screen";
+            variants?: string[];
+            childNames?: string[];
+          }
+          const items: StateAuditInput[] = [];
+          const MAX_ITEMS = 20;
+
+          const roots: readonly SceneNode[] = sel.length > 0
+            ? sel
+            : figma.currentPage.children.filter(
+                (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME &&
+                  n.name !== AUDIT_BADGE_FRAME_NAME && !n.name.startsWith("a11y-badge:")
+              ) as SceneNode[];
+
+          function walkForStateAudit(node: SceneNode) {
+            if (items.length >= MAX_ITEMS) return;
+
+            if (node.type === "COMPONENT_SET") {
+              // Collect variant names
+              const variantNames = (node as ComponentSetNode).children.map(c => c.name);
+              items.push({
+                nodeId: node.id,
+                name: node.name,
+                itemType: "component",
+                variants: variantNames.slice(0, 30),
+              });
+              return; // Don't recurse into variant children
+            }
+
+            if (node.type === "COMPONENT") {
+              // Standalone component (not inside a COMPONENT_SET)
+              if (node.parent?.type !== "COMPONENT_SET") {
+                items.push({
+                  nodeId: node.id,
+                  name: node.name,
+                  itemType: "component",
+                  childNames: ("children" in node) ? (node as any).children.map((c: any) => c.name).slice(0, 20) : [],
+                });
+              }
+              return;
+            }
+
+            // Top-level frames are treated as screens
+            if (node.type === "FRAME" && (node.parent === figma.currentPage || sel.includes(node))) {
+              // Check if this looks like a screen (has children, reasonable size)
+              if ("children" in node && (node as FrameNode).children.length > 0) {
+                const childNames = (node as FrameNode).children.map(c => c.name).slice(0, 30);
+                items.push({
+                  nodeId: node.id,
+                  name: node.name,
+                  itemType: "screen",
+                  childNames,
+                });
+              }
+            }
+
+            // Recurse into children to find components
+            if ("children" in node) {
+              for (const child of (node as any).children) {
+                if (items.length >= MAX_ITEMS) break;
+                walkForStateAudit(child as SceneNode);
+              }
+            }
+          }
+
+          for (const root of roots) {
+            if (items.length >= MAX_ITEMS) break;
+            walkForStateAudit(root);
+          }
+
+          if (items.length === 0) {
+            sendToUI({ type: "state-audit-error", error: "No components or screens found to audit." } as any);
+            break;
+          }
+
+          console.log(`[state-audit] Found ${items.length} item(s) to audit [scope=${scope}]`);
+
+          // Send to LLM for analysis
+          sendToUI({ type: "state-audit-phase", phase: "analyzing" } as any);
+          sendToUI({ type: "status", message: `Analyzing ${items.length} item(s) for UI states…` });
+
+          const stateBody = {
+            items,
+            apiKey: _userApiKey,
+            provider: _selectedProvider,
+            model: _selectedModel,
+          };
+
+          const result = await fetchViaUI("/audit-states", stateBody);
+          if (result && result.items) {
+            sendToUI({ type: "state-audit-results", items: result.items } as any);
+            const missingCount = result.items.reduce((sum: number, it: any) => sum + (it.missingStates?.length || 0), 0);
+            figma.notify(`State audit: ${missingCount} missing state(s) found across ${result.items.length} item(s).`, { timeout: 4000 });
+          } else {
+            sendToUI({ type: "state-audit-error", error: "No results returned from analysis." } as any);
+          }
+        } catch (err: any) {
+          console.error("[state-audit] Error:", err);
+          sendToUI({ type: "state-audit-error", error: err.message || "State audit failed." } as any);
+        }
         break;
       }
 

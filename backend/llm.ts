@@ -337,3 +337,65 @@ export async function callLLMAudit(
 
   return parseJsonResponse(raw, "llm-audit");
 }
+
+// ── Call LLM for UI State Audit ─────────────────────────────────────
+
+const STATE_AUDIT_SYSTEM_PROMPT = `You are a senior UX designer reviewing Figma design files for completeness of UI states.
+
+You receive a JSON array of components and screens found in a Figma file. For EACH item, determine which interaction/visual states are present and which are missing.
+
+**For components** (buttons, inputs, cards, toggles, etc.), check for these typical states:
+- Default, Hover, Pressed/Active, Focused, Disabled, Loading, Error
+
+Not every state applies to every component. A simple divider needs no states. A button needs Default, Hover, Pressed, Disabled at minimum. An input field also needs Focused, Error, Filled. Use your judgment.
+
+**For screens**, check for these typical states:
+- Default (populated with data), Empty state, Loading state, Error state, Partial/skeleton state
+
+Again, use judgment — a simple settings screen may not need all of these.
+
+Return a JSON object with this structure:
+{
+  "items": [
+    {
+      "nodeId": "<same nodeId from input>",
+      "name": "<component or screen name>",
+      "itemType": "component" | "screen",
+      "presentStates": ["Default", "Hover"],
+      "missingStates": [
+        { "name": "Disabled", "reason": "Users need visual feedback when the action is unavailable" },
+        { "name": "Loading", "reason": "Show progress feedback during async operations" }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Return JSON only. No markdown, no prose.
+- Be practical — only flag states that genuinely matter for the component/screen type.
+- If a component already has all appropriate states, return an empty missingStates array.
+- Keep reasons concise (1 sentence).
+- Match each item by nodeId in your response.
+- Do not invent states that don't apply (e.g., don't suggest "Hover" for a mobile-only component).`;
+
+export async function callLLMStateAudit(
+  items: any[],
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string
+): Promise<unknown> {
+  const userPrompt = \`## UI Components & Screens to Audit for State Completeness\n\${JSON.stringify(items, null, 2)}\n\nAnalyze each item and return the JSON with present and missing states.\`;
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    raw = await callProvider(provider, STATE_AUDIT_SYSTEM_PROMPT, userPrompt, resolvedModel, 8192, apiKey, abort);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "llm-state-audit");
+}

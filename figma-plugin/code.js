@@ -4340,6 +4340,16 @@ RULES:
     } catch (e) {
       console.warn("[startup] Failed to load audit timings:", e);
     }
+    try {
+      const rawStateAudit = await figma.clientStorage.getAsync("stateAuditTimings");
+      if (rawStateAudit) {
+        const stateAuditTimings = JSON.parse(rawStateAudit);
+        sendToUI({ type: "load-state-audit-timings", timings: stateAuditTimings });
+        console.log("[startup] Loaded saved state audit timings:", stateAuditTimings);
+      }
+    } catch (e) {
+      console.warn("[startup] Failed to load state audit timings:", e);
+    }
   }, 150);
   setTimeout(async () => {
     try {
@@ -4701,6 +4711,17 @@ RULES:
           }
           return;
         }
+        // ── Persist state audit timings from UI ───────────────
+        case "save-state-audit-timings": {
+          try {
+            const timings = msg.timings;
+            await figma.clientStorage.setAsync("stateAuditTimings", JSON.stringify(timings));
+            console.log("[state-audit] Saved state audit timings");
+          } catch (e) {
+            console.warn("[state-audit] Failed to save state audit timings:", e);
+          }
+          return;
+        }
         // ── Persist phase timings from UI ─────────────────────
         case "save-timings": {
           try {
@@ -4806,6 +4827,99 @@ RULES:
         case "clear-audit": {
           clearAuditBadges();
           figma.notify("Audit badges cleared.", { timeout: 2e3 });
+          break;
+        }
+        // ── UI State Audit ────────────────────────────────────
+        case "audit-states": {
+          try {
+            let walkForStateAudit2 = function(node) {
+              var _a;
+              if (items.length >= MAX_ITEMS) return;
+              if (node.type === "COMPONENT_SET") {
+                const variantNames = node.children.map((c) => c.name);
+                items.push({
+                  nodeId: node.id,
+                  name: node.name,
+                  itemType: "component",
+                  variants: variantNames.slice(0, 30)
+                });
+                return;
+              }
+              if (node.type === "COMPONENT") {
+                if (((_a = node.parent) == null ? void 0 : _a.type) !== "COMPONENT_SET") {
+                  items.push({
+                    nodeId: node.id,
+                    name: node.name,
+                    itemType: "component",
+                    childNames: "children" in node ? node.children.map((c) => c.name).slice(0, 20) : []
+                  });
+                }
+                return;
+              }
+              if (node.type === "FRAME" && (node.parent === figma.currentPage || sel.includes(node))) {
+                if ("children" in node && node.children.length > 0) {
+                  const childNames = node.children.map((c) => c.name).slice(0, 30);
+                  items.push({
+                    nodeId: node.id,
+                    name: node.name,
+                    itemType: "screen",
+                    childNames
+                  });
+                }
+              }
+              if ("children" in node) {
+                for (const child of node.children) {
+                  if (items.length >= MAX_ITEMS) break;
+                  walkForStateAudit2(child);
+                }
+              }
+            };
+            var walkForStateAudit = walkForStateAudit2;
+            sendToUI({ type: "status", message: "Scanning for components and screens\u2026" });
+            let scope = "all";
+            const sel = figma.currentPage.selection;
+            if (sel.length > 0) {
+              if (sel.length === 1 && sel[0].type === "FRAME") scope = "frame";
+              else scope = "component";
+            }
+            sendToUI({ type: "state-audit-phase", phase: "scanning", scope });
+            const items = [];
+            const MAX_ITEMS = 20;
+            const roots = sel.length > 0 ? sel : figma.currentPage.children.filter(
+              (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME && n.name !== AUDIT_BADGE_FRAME_NAME && !n.name.startsWith("a11y-badge:")
+            );
+            for (const root of roots) {
+              if (items.length >= MAX_ITEMS) break;
+              walkForStateAudit2(root);
+            }
+            if (items.length === 0) {
+              sendToUI({ type: "state-audit-error", error: "No components or screens found to audit." });
+              break;
+            }
+            console.log(`[state-audit] Found ${items.length} item(s) to audit [scope=${scope}]`);
+            sendToUI({ type: "state-audit-phase", phase: "analyzing" });
+            sendToUI({ type: "status", message: `Analyzing ${items.length} item(s) for UI states\u2026` });
+            const stateBody = {
+              items,
+              apiKey: _userApiKey,
+              provider: _selectedProvider,
+              model: _selectedModel
+            };
+            const result = await fetchViaUI("/audit-states", stateBody);
+            if (result && result.items) {
+              sendToUI({ type: "state-audit-results", items: result.items });
+              const missingCount = result.items.reduce((sum, it) => {
+                var _a;
+                return sum + (((_a = it.missingStates) == null ? void 0 : _a.length) || 0);
+              }, 0);
+              figma.notify(`State audit: ${missingCount} missing state(s) found across ${result.items.length} item(s).`, { timeout: 4e3 });
+            } else {
+              sendToUI({ type: "state-audit-error", error: "No results returned from analysis." });
+            }
+          } catch (err) {
+            console.error("[state-audit] Error:", err);
+            sendToUI({ type: "state-audit-error", error: err.message || "State audit failed." });
+          }
           break;
         }
         // ── Select a node by ID (from audit results panel) ────

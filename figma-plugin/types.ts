@@ -111,6 +111,7 @@ export type UIToPluginMessage =
   | { type: "generate-docs" }
   | { type: "cancel-job"; jobId: number }
   | { type: "audit-a11y" }
+  | { type: "audit-states" }
   | { type: "clear-audit" }
   | { type: "select-node"; nodeId: string };
 
@@ -135,7 +136,9 @@ export type PluginToUIMessage =
   | { type: "job-error"; jobId: number; error: string }
   | { type: "job-cancelled"; jobId: number }
   | { type: "audit-results"; findings: AuditFinding[] }
-  | { type: "audit-error"; error: string };
+  | { type: "audit-error"; error: string }
+  | { type: "state-audit-results"; items: StateAuditItem[] }
+  | { type: "state-audit-error"; error: string };
 
 // ── Accessibility Audit Types ────────────────────────────────────────
 
@@ -147,6 +150,16 @@ export type AuditFinding = {
   message: string;
   details?: any;
   suggestion?: string;
+};
+
+// ── UI State Audit Types ─────────────────────────────────────────────
+
+export type StateAuditItem = {
+  nodeId: string;
+  name: string;
+  itemType: "component" | "screen";
+  presentStates: string[];
+  missingStates: { name: string; reason: string }[];
 };
 
 // ── Audit Log Entry ─────────────────────────────────────────────────
