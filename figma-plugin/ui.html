@@ -1017,6 +1017,27 @@
       color: #e67e22;
       font-weight: 600;
     }
+
+    /* ── Resize handle ─────────────────────────────────── */
+    .resize-handle {
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0.35;
+      transition: opacity 0.15s;
+    }
+    .resize-handle:hover { opacity: 0.7; }
+    .resize-handle svg {
+      width: 10px;
+      height: 10px;
+    }
   </style>
 </head>
 <body>
@@ -1229,19 +1250,49 @@
 
   <div id="status-bar" class="status-bar">Nothing selected — will generate new frame</div>
 
+  <!-- Resize handle -->
+  <div id="resize-handle" class="resize-handle">
+    <svg viewBox="0 0 10 10" fill="none">
+      <path d="M8 2L2 8" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+      <path d="M8 5L5 8" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+      <path d="M8 8L8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>
+  </div>
+
   <!-- Hidden file input for JSON import -->
   <input type="file" id="file-input" accept=".json" style="display:none" />
 
   <script>
     // ── Minimum-size enforcement ──────────────────────────────────
     const MIN_W = 340, MIN_H = 280;
-    new ResizeObserver(() => {
-      const w = document.documentElement.clientWidth;
-      const h = document.documentElement.clientHeight;
-      if (w < MIN_W || h < MIN_H) {
-        parent.postMessage({ pluginMessage: { type: 'resize', width: Math.max(w, MIN_W), height: Math.max(h, MIN_H) } }, '*');
-      }
-    }).observe(document.documentElement);
+
+    // ── Custom drag-to-resize handle ───────────────────────────
+    (function() {
+      const handle = document.getElementById('resize-handle');
+      let dragging = false, startX, startY, startW, startH;
+
+      handle.addEventListener('pointerdown', function(e) {
+        dragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        startW = document.documentElement.clientWidth;
+        startH = document.documentElement.clientHeight;
+        handle.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+
+      handle.addEventListener('pointermove', function(e) {
+        if (!dragging) return;
+        var newW = Math.max(startW + (e.clientX - startX), MIN_W);
+        var newH = Math.max(startH + (e.clientY - startY), MIN_H);
+        parent.postMessage({ pluginMessage: { type: 'resize', width: Math.round(newW), height: Math.round(newH) } }, '*');
+      });
+
+      handle.addEventListener('pointerup', function(e) {
+        dragging = false;
+        handle.releasePointerCapture(e.pointerId);
+      });
+    })();
 
     // ── DOM References ────────────────────────────────────────────
     const intentEl = document.getElementById("intent");
