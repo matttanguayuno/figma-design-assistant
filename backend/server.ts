@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMGenerate, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMGenerate, callLLMAudit, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 
 const app = express();
@@ -285,11 +285,46 @@ app.post("/generate", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /audit ─────────────────────────────────────────────────────
+
+app.post("/audit", async (req: Request, res: Response) => {
+  try {
+    const { findings, apiKey, provider, model } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key." });
+      return;
+    }
+
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+
+    if (!findings || !Array.isArray(findings) || findings.length === 0) {
+      res.status(400).json({ error: "No findings to analyze." });
+      return;
+    }
+
+    console.log(`[audit] provider=${resolvedProvider}, model=${model || "default"}, findings=${findings.length}`);
+
+    const result = await callLLMAudit(findings, apiKey, resolvedProvider, model);
+    console.log(`[audit] LLM returned:`, JSON.stringify(result).slice(0, 500));
+
+    res.json(result);
+  } catch (err: any) {
+    console.error("[audit] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ───────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`DesignOps AI backend running on http://localhost:${PORT}`);
   console.log(`  POST /plan     — generate operation batch`);
   console.log(`  POST /generate — generate new frame from prompt`);
+  console.log(`  POST /audit    — accessibility audit enrichment`);
   console.log(`  GET  /health   — health check`);
 });

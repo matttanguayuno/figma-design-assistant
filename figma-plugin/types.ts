@@ -109,7 +109,10 @@ export type UIToPluginMessage =
   | { type: "import-json"; data: { selection: { nodes: any[] }; [key: string]: any } }
   | { type: "generate"; prompt: string }
   | { type: "generate-docs" }
-  | { type: "cancel-job"; jobId: number };
+  | { type: "cancel-job"; jobId: number }
+  | { type: "audit-a11y" }
+  | { type: "clear-audit" }
+  | { type: "select-node"; nodeId: string };
 
 export type PluginToUIMessage =
   | { type: "apply-success"; summary: string }
@@ -130,7 +133,21 @@ export type PluginToUIMessage =
   | { type: "job-progress"; jobId: number; phase: string }
   | { type: "job-complete"; jobId: number; summary: string }
   | { type: "job-error"; jobId: number; error: string }
-  | { type: "job-cancelled"; jobId: number };
+  | { type: "job-cancelled"; jobId: number }
+  | { type: "audit-results"; findings: AuditFinding[] }
+  | { type: "audit-error"; error: string };
+
+// ── Accessibility Audit Types ────────────────────────────────────────
+
+export type AuditFinding = {
+  nodeId: string;
+  nodeName: string;
+  severity: "error" | "warning";
+  checkType: string;
+  message: string;
+  details?: any;
+  suggestion?: string;
+};
 
 // ── Audit Log Entry ─────────────────────────────────────────────────
 

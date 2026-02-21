@@ -290,3 +290,50 @@ export async function callLLMGenerate(
 
   return parseJsonResponse(raw, "llm-generate");
 }
+
+// ── Call LLM for Accessibility Audit Enrichment ─────────────────────
+
+const AUDIT_SYSTEM_PROMPT = `You are a WCAG accessibility expert reviewing Figma design audit findings.
+
+You receive a JSON array of accessibility issues found by automated checks. For EACH finding, provide a short, actionable suggestion for how to fix it.
+
+Return a JSON object with this structure:
+{
+  "findings": [
+    {
+      "nodeId": "<same nodeId from input>",
+      "checkType": "<same checkType from input>",
+      "suggestion": "<1-2 sentence fix recommendation>"
+    }
+  ]
+}
+
+Rules:
+- Return JSON only. No markdown, no prose.
+- Keep suggestions concise and specific (e.g. "Change text color to #333333 for 4.5:1 contrast" rather than "Increase contrast").
+- For contrast issues, suggest a specific hex color that would meet WCAG AA.
+- For touch targets, suggest a minimum size.
+- For font size, suggest a minimum px value.
+- Match each finding by nodeId + checkType in your response.`;
+
+export async function callLLMAudit(
+  findings: any[],
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string
+): Promise<unknown> {
+  const userPrompt = `## Accessibility Audit Findings\n${JSON.stringify(findings, null, 2)}\n\nReturn the enriched findings JSON now.`;
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    raw = await callProvider(provider, AUDIT_SYSTEM_PROMPT, userPrompt, resolvedModel, 4096, apiKey, abort);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "llm-audit");
+}

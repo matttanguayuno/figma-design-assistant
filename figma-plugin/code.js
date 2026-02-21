@@ -855,6 +855,174 @@
       }
     }
   }
+  var AUDIT_BADGE_FRAME_NAME = "A11y Audit Badges";
+  function extractFillColor(node) {
+    if (!("fills" in node)) return null;
+    const fills = node.fills;
+    if (!Array.isArray(fills)) return null;
+    for (const f of fills) {
+      if (f.type === "SOLID" && f.visible !== false) {
+        return { r: f.color.r, g: f.color.g, b: f.color.b };
+      }
+    }
+    return null;
+  }
+  function resolveBackgroundColor(node) {
+    let current = node.parent;
+    while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+      const col = extractFillColor(current);
+      if (col) return col;
+      current = current.parent;
+    }
+    return { r: 1, g: 1, b: 1 };
+  }
+  function auditLuminance(r, g, b) {
+    const srgb = (c) => c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    return 0.2126 * srgb(r) + 0.7152 * srgb(g) + 0.0722 * srgb(b);
+  }
+  function auditContrastRatio(l1, l2) {
+    const lighter = Math.max(l1, l2);
+    const darker = Math.min(l1, l2);
+    return (lighter + 0.05) / (darker + 0.05);
+  }
+  function runAccessibilityAudit(nodes) {
+    const findings = [];
+    function walk(node) {
+      if (node.name === AUDIT_BADGE_FRAME_NAME || node.name === CHANGE_LOG_FRAME_NAME) return;
+      if (node.type === "TEXT") {
+        const textNode = node;
+        const fg = extractFillColor(textNode);
+        if (fg) {
+          const bg = resolveBackgroundColor(textNode);
+          const fgLum = auditLuminance(fg.r, fg.g, fg.b);
+          const bgLum = auditLuminance(bg.r, bg.g, bg.b);
+          const ratio = auditContrastRatio(fgLum, bgLum);
+          const fontSize2 = typeof textNode.fontSize === "number" ? textNode.fontSize : 16;
+          const isLargeText = fontSize2 >= 18 || fontSize2 >= 14 && textNode.fontWeight >= 700;
+          const threshold = isLargeText ? 3 : 4.5;
+          if (ratio < threshold) {
+            const fgHex = "#" + [fg.r, fg.g, fg.b].map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+            const bgHex = "#" + [bg.r, bg.g, bg.b].map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+            findings.push({
+              nodeId: node.id,
+              nodeName: node.name,
+              severity: ratio < 3 ? "error" : "warning",
+              checkType: "contrast",
+              message: `Low contrast ratio ${ratio.toFixed(2)}:1 (needs ${threshold}:1). Text "${(textNode.characters || "").slice(0, 30)}" (${fgHex}) on background (${bgHex}).`
+            });
+          }
+        }
+        const fontSize = typeof textNode.fontSize === "number" ? textNode.fontSize : 0;
+        if (fontSize > 0 && fontSize < 12) {
+          findings.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            severity: "warning",
+            checkType: "font-size",
+            message: `Font size ${fontSize}px is below 12px minimum for readability.`
+          });
+        }
+        if (!textNode.characters || textNode.characters.trim() === "") {
+          findings.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            severity: "warning",
+            checkType: "empty-text",
+            message: `Text node "${node.name}" has no visible content. Check if a label is missing.`
+          });
+        }
+      }
+      if (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT") {
+        const nameLower = node.name.toLowerCase();
+        const isInteractive = /button|btn|link|tab|toggle|switch|checkbox|radio|input|search|icon[-_ ]?btn|cta/i.test(nameLower);
+        if (isInteractive && (node.width < 44 || node.height < 44)) {
+          findings.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            severity: "warning",
+            checkType: "touch-target",
+            message: `Touch target "${node.name}" is ${Math.round(node.width)}\xD7${Math.round(node.height)}px \u2014 minimum 44\xD744px recommended (WCAG 2.5.5).`
+          });
+        }
+      }
+      if ("opacity" in node && typeof node.opacity === "number") {
+        const opacity = node.opacity;
+        if (opacity > 0 && opacity < 0.4) {
+          findings.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            severity: "warning",
+            checkType: "low-opacity",
+            message: `Node "${node.name}" has opacity ${(opacity * 100).toFixed(0)}% which may be hard to perceive.`
+          });
+        }
+      }
+      if ("children" in node) {
+        for (const child of node.children) {
+          walk(child);
+        }
+      }
+    }
+    for (const node of nodes) {
+      walk(node);
+    }
+    return findings;
+  }
+  function createAuditBadges(findings) {
+    clearAuditBadges();
+    if (findings.length === 0) return;
+    const badgeContainer = figma.createFrame();
+    badgeContainer.name = AUDIT_BADGE_FRAME_NAME;
+    badgeContainer.clipsContent = false;
+    badgeContainer.fills = [];
+    badgeContainer.x = 0;
+    badgeContainer.y = 0;
+    badgeContainer.resize(1, 1);
+    badgeContainer.locked = true;
+    for (const finding of findings) {
+      try {
+        const targetNode = figma.getNodeById(finding.nodeId);
+        if (!targetNode) continue;
+        const abs = targetNode.absoluteTransform;
+        const nodeX = abs[0][2];
+        const nodeY = abs[1][2];
+        const badge = figma.createFrame();
+        badge.name = `a11y-badge: ${finding.nodeName}`;
+        badge.resize(20, 20);
+        badge.cornerRadius = 10;
+        badge.fills = [
+          {
+            type: "SOLID",
+            color: finding.severity === "error" ? { r: 0.84, g: 0.19, b: 0.19 } : { r: 0.95, g: 0.61, b: 0.07 }
+            // orange
+          }
+        ];
+        badge.x = nodeX + targetNode.width - 10;
+        badge.y = nodeY - 10;
+        const iconText = figma.createText();
+        figma.loadFontAsync({ family: "Inter", style: "Bold" }).then(() => {
+          iconText.characters = "!";
+          iconText.fontSize = 12;
+          iconText.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+          iconText.textAlignHorizontal = "CENTER";
+          iconText.textAlignVertical = "CENTER";
+          iconText.resize(20, 20);
+          badge.appendChild(iconText);
+        });
+        figma.currentPage.appendChild(badge);
+      } catch (e) {
+        console.warn("[a11y] Badge creation failed for", finding.nodeId, e);
+      }
+    }
+  }
+  function clearAuditBadges() {
+    const badges = figma.currentPage.findAll(
+      (n) => n.name === AUDIT_BADGE_FRAME_NAME || n.name.startsWith("a11y-badge:")
+    );
+    for (const b of badges) {
+      b.remove();
+    }
+  }
   function hexToRgb(hex) {
     const h = hex.replace("#", "");
     return {
@@ -4539,6 +4707,75 @@ RULES:
             console.warn("[settings] Failed to save provider selection:", e);
           }
           return;
+        }
+        // ── Accessibility Audit ───────────────────────────────
+        case "audit-a11y": {
+          try {
+            sendToUI({ type: "status", message: "Running accessibility audit\u2026" });
+            let nodesToAudit = [];
+            if (figma.currentPage.selection.length > 0) {
+              nodesToAudit = [...figma.currentPage.selection];
+            } else {
+              nodesToAudit = figma.currentPage.children.filter(
+                (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME && n.name !== AUDIT_BADGE_FRAME_NAME && !n.name.startsWith("a11y-badge:")
+              );
+            }
+            if (nodesToAudit.length === 0) {
+              sendToUI({ type: "audit-error", error: "No frames found to audit." });
+              break;
+            }
+            console.log(`[a11y] Auditing ${nodesToAudit.length} node(s)\u2026`);
+            const findings = runAccessibilityAudit(nodesToAudit);
+            console.log(`[a11y] Found ${findings.length} issue(s).`);
+            if (findings.length > 0 && _userApiKey) {
+              try {
+                sendToUI({ type: "status", message: `Found ${findings.length} issue(s) \u2014 getting AI suggestions\u2026` });
+                const auditBody = {
+                  findings: findings.slice(0, 30),
+                  // cap for token limits
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel
+                };
+                const enriched = await fetchViaUI("/audit", auditBody);
+                if (enriched && enriched.findings) {
+                  for (const ef of enriched.findings) {
+                    const match = findings.find((f) => f.nodeId === ef.nodeId && f.checkType === ef.checkType);
+                    if (match && ef.suggestion) {
+                      match.suggestion = ef.suggestion;
+                    }
+                  }
+                }
+              } catch (llmErr) {
+                console.warn("[a11y] LLM enrichment failed, returning raw findings:", llmErr.message);
+              }
+            }
+            createAuditBadges(findings);
+            sendToUI({ type: "audit-results", findings });
+            figma.notify(`Accessibility audit: ${findings.length} issue(s) found.`, { timeout: 4e3 });
+          } catch (err) {
+            console.error("[a11y] Audit error:", err);
+            sendToUI({ type: "audit-error", error: err.message || "Audit failed." });
+          }
+          break;
+        }
+        // ── Clear Audit Badges ────────────────────────────────
+        case "clear-audit": {
+          clearAuditBadges();
+          figma.notify("Audit badges cleared.", { timeout: 2e3 });
+          break;
+        }
+        // ── Select a node by ID (from audit results panel) ────
+        case "select-node": {
+          const nodeId = msg.nodeId;
+          if (nodeId) {
+            const targetNode = figma.getNodeById(nodeId);
+            if (targetNode) {
+              figma.currentPage.selection = [targetNode];
+              figma.viewport.scrollAndZoomIntoView([targetNode]);
+            }
+          }
+          break;
         }
         // ── Run (plan + apply in one step) ─────────────────────
         case "run": {

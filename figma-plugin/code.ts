@@ -16,6 +16,7 @@ import {
   UIToPluginMessage,
   PluginToUIMessage,
   AuditLogEntry,
+  AuditFinding,
   RevertState,
 } from "./types";
 import { Operation, OperationBatch } from "../shared/operationSchema";
@@ -1054,6 +1055,224 @@ async function embedImagesInSnapshot(snap: NodeSnapshot, node: SceneNode): Promi
         await embedImagesInSnapshot(snap.children[i], childNodes[i]);
       }
     }
+  }
+}
+
+// ── 1a-bis. Accessibility Audit ─────────────────────────────────────
+
+const AUDIT_BADGE_FRAME_NAME = "A11y Audit Badges";
+
+/** Extract the first solid fill colour from a node as {r,g,b} in 0-1 range */
+function extractFillColor(node: SceneNode): { r: number; g: number; b: number } | null {
+  if (!("fills" in node)) return null;
+  const fills = (node as any).fills;
+  if (!Array.isArray(fills)) return null;
+  for (const f of fills) {
+    if (f.type === "SOLID" && f.visible !== false) {
+      return { r: f.color.r, g: f.color.g, b: f.color.b };
+    }
+  }
+  return null;
+}
+
+/** Walk up to find the nearest ancestor background colour */
+function resolveBackgroundColor(node: SceneNode): { r: number; g: number; b: number } {
+  let current: BaseNode | null = node.parent;
+  while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+    const col = extractFillColor(current as SceneNode);
+    if (col) return col;
+    current = current.parent;
+  }
+  // Default: white
+  return { r: 1, g: 1, b: 1 };
+}
+
+/** Compute WCAG luminance from 0-1 RGB (audit-local helper) */
+function auditLuminance(r: number, g: number, b: number): number {
+  const srgb = (c: number) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+  return 0.2126 * srgb(r) + 0.7152 * srgb(g) + 0.0722 * srgb(b);
+}
+
+/** Compute WCAG contrast ratio (audit-local helper) */
+function auditContrastRatio(l1: number, l2: number): number {
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+/** Run deterministic WCAG checks on nodes, return findings */
+function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
+  const findings: AuditFinding[] = [];
+
+  function walk(node: SceneNode) {
+    // Skip audit badge frames
+    if (node.name === AUDIT_BADGE_FRAME_NAME || node.name === CHANGE_LOG_FRAME_NAME) return;
+
+    // ── 1. Contrast check (text nodes) ──────────────────────
+    if (node.type === "TEXT") {
+      const textNode = node as TextNode;
+      const fg = extractFillColor(textNode);
+      if (fg) {
+        const bg = resolveBackgroundColor(textNode);
+        const fgLum = auditLuminance(fg.r, fg.g, fg.b);
+        const bgLum = auditLuminance(bg.r, bg.g, bg.b);
+        const ratio = auditContrastRatio(fgLum, bgLum);
+        const fontSize = typeof textNode.fontSize === "number" ? textNode.fontSize : 16;
+        const isLargeText = fontSize >= 18 || (fontSize >= 14 && (textNode.fontWeight as any) >= 700);
+        const threshold = isLargeText ? 3.0 : 4.5;
+        if (ratio < threshold) {
+          const fgHex = "#" + [fg.r, fg.g, fg.b].map(c => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+          const bgHex = "#" + [bg.r, bg.g, bg.b].map(c => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+          findings.push({
+            nodeId: node.id,
+            nodeName: node.name,
+            severity: ratio < 3.0 ? "error" : "warning",
+            checkType: "contrast",
+            message: `Low contrast ratio ${ratio.toFixed(2)}:1 (needs ${threshold}:1). Text "${(textNode.characters || "").slice(0, 30)}" (${fgHex}) on background (${bgHex}).`,
+          });
+        }
+      }
+
+      // ── 2. Small font size ────────────────────────────────
+      const fontSize = typeof textNode.fontSize === "number" ? textNode.fontSize : 0;
+      if (fontSize > 0 && fontSize < 12) {
+        findings.push({
+          nodeId: node.id,
+          nodeName: node.name,
+          severity: "warning",
+          checkType: "font-size",
+          message: `Font size ${fontSize}px is below 12px minimum for readability.`,
+        });
+      }
+
+      // ── 3. Empty text node ────────────────────────────────
+      if (!textNode.characters || textNode.characters.trim() === "") {
+        findings.push({
+          nodeId: node.id,
+          nodeName: node.name,
+          severity: "warning",
+          checkType: "empty-text",
+          message: `Text node "${node.name}" has no visible content. Check if a label is missing.`,
+        });
+      }
+    }
+
+    // ── 4. Touch target size (interactive-looking elements) ──
+    if (node.type === "FRAME" || node.type === "INSTANCE" || node.type === "COMPONENT") {
+      const nameLower = node.name.toLowerCase();
+      const isInteractive = /button|btn|link|tab|toggle|switch|checkbox|radio|input|search|icon[-_ ]?btn|cta/i.test(nameLower);
+      if (isInteractive && (node.width < 44 || node.height < 44)) {
+        findings.push({
+          nodeId: node.id,
+          nodeName: node.name,
+          severity: "warning",
+          checkType: "touch-target",
+          message: `Touch target "${node.name}" is ${Math.round(node.width)}×${Math.round(node.height)}px — minimum 44×44px recommended (WCAG 2.5.5).`,
+        });
+      }
+    }
+
+    // ── 5. Low opacity ──────────────────────────────────────
+    if ("opacity" in node && typeof (node as any).opacity === "number") {
+      const opacity = (node as any).opacity;
+      if (opacity > 0 && opacity < 0.4) {
+        findings.push({
+          nodeId: node.id,
+          nodeName: node.name,
+          severity: "warning",
+          checkType: "low-opacity",
+          message: `Node "${node.name}" has opacity ${(opacity * 100).toFixed(0)}% which may be hard to perceive.`,
+        });
+      }
+    }
+
+    // ── Recurse ─────────────────────────────────────────────
+    if ("children" in node) {
+      for (const child of (node as FrameNode).children) {
+        walk(child);
+      }
+    }
+  }
+
+  for (const node of nodes) {
+    walk(node);
+  }
+
+  return findings;
+}
+
+/** Create coloured badge annotations on the canvas next to flagged nodes */
+function createAuditBadges(findings: AuditFinding[]): void {
+  // Remove any existing badges
+  clearAuditBadges();
+
+  if (findings.length === 0) return;
+
+  // Group badges under a single frame
+  const badgeContainer = figma.createFrame();
+  badgeContainer.name = AUDIT_BADGE_FRAME_NAME;
+  badgeContainer.clipsContent = false;
+  badgeContainer.fills = [];
+  // Make it invisible to auto-layout but present on canvas
+  badgeContainer.x = 0;
+  badgeContainer.y = 0;
+  badgeContainer.resize(1, 1);
+  badgeContainer.locked = true;
+
+  for (const finding of findings) {
+    try {
+      const targetNode = figma.getNodeById(finding.nodeId) as SceneNode;
+      if (!targetNode) continue;
+
+      // Get absolute position of the target node
+      const abs = targetNode.absoluteTransform;
+      const nodeX = abs[0][2];
+      const nodeY = abs[1][2];
+
+      // Create badge
+      const badge = figma.createFrame();
+      badge.name = `a11y-badge: ${finding.nodeName}`;
+      badge.resize(20, 20);
+      badge.cornerRadius = 10;
+      badge.fills = [
+        {
+          type: "SOLID",
+          color: finding.severity === "error"
+            ? { r: 0.84, g: 0.19, b: 0.19 } // red
+            : { r: 0.95, g: 0.61, b: 0.07 }, // orange
+        },
+      ];
+
+      // Position at top-right corner of the target node
+      badge.x = nodeX + targetNode.width - 10;
+      badge.y = nodeY - 10;
+
+      // Add severity icon text (! or ⚠)
+      const iconText = figma.createText();
+      figma.loadFontAsync({ family: "Inter", style: "Bold" }).then(() => {
+        iconText.characters = "!";
+        iconText.fontSize = 12;
+        iconText.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+        iconText.textAlignHorizontal = "CENTER";
+        iconText.textAlignVertical = "CENTER";
+        iconText.resize(20, 20);
+        badge.appendChild(iconText);
+      });
+
+      figma.currentPage.appendChild(badge);
+    } catch (e) {
+      console.warn("[a11y] Badge creation failed for", finding.nodeId, e);
+    }
+  }
+}
+
+/** Remove all audit badge annotations from the canvas */
+function clearAuditBadges(): void {
+  const badges = figma.currentPage.findAll(
+    (n) => n.name === AUDIT_BADGE_FRAME_NAME || n.name.startsWith("a11y-badge:")
+  );
+  for (const b of badges) {
+    b.remove();
   }
 }
 
@@ -5985,6 +6204,95 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           console.warn("[settings] Failed to save provider selection:", e);
         }
         return;
+      }
+
+      // ── Accessibility Audit ───────────────────────────────
+      case "audit-a11y" as any: {
+        try {
+          sendToUI({ type: "status", message: "Running accessibility audit…" });
+
+          // Determine scope: selection if available, otherwise all design frames
+          let nodesToAudit: SceneNode[] = [];
+          if (figma.currentPage.selection.length > 0) {
+            nodesToAudit = [...figma.currentPage.selection];
+          } else {
+            // All top-level frames (skip Change Log and Audit Badge frames)
+            nodesToAudit = figma.currentPage.children.filter(
+              (n) =>
+                n.type === "FRAME" &&
+                n.name !== CHANGE_LOG_FRAME_NAME &&
+                n.name !== AUDIT_BADGE_FRAME_NAME &&
+                !n.name.startsWith("a11y-badge:")
+            ) as SceneNode[];
+          }
+
+          if (nodesToAudit.length === 0) {
+            sendToUI({ type: "audit-error", error: "No frames found to audit." } as any);
+            break;
+          }
+
+          console.log(`[a11y] Auditing ${nodesToAudit.length} node(s)…`);
+          const findings = runAccessibilityAudit(nodesToAudit);
+          console.log(`[a11y] Found ${findings.length} issue(s).`);
+
+          // Send to LLM for enrichment with suggestions
+          if (findings.length > 0 && _userApiKey) {
+            try {
+              sendToUI({ type: "status", message: `Found ${findings.length} issue(s) — getting AI suggestions…` });
+
+              const auditBody = {
+                findings: findings.slice(0, 30), // cap for token limits
+                apiKey: _userApiKey,
+                provider: _selectedProvider,
+                model: _selectedModel,
+              };
+
+              const enriched = await fetchViaUI("/audit", auditBody);
+              if (enriched && enriched.findings) {
+                // Merge suggestions back into findings
+                for (const ef of enriched.findings) {
+                  const match = findings.find((f: AuditFinding) => f.nodeId === ef.nodeId && f.checkType === ef.checkType);
+                  if (match && ef.suggestion) {
+                    match.suggestion = ef.suggestion;
+                  }
+                }
+              }
+            } catch (llmErr: any) {
+              console.warn("[a11y] LLM enrichment failed, returning raw findings:", llmErr.message);
+            }
+          }
+
+          // Create canvas badges
+          createAuditBadges(findings);
+
+          // Send results to UI
+          sendToUI({ type: "audit-results", findings } as any);
+          figma.notify(`Accessibility audit: ${findings.length} issue(s) found.`, { timeout: 4000 });
+        } catch (err: any) {
+          console.error("[a11y] Audit error:", err);
+          sendToUI({ type: "audit-error", error: err.message || "Audit failed." } as any);
+        }
+        break;
+      }
+
+      // ── Clear Audit Badges ────────────────────────────────
+      case "clear-audit" as any: {
+        clearAuditBadges();
+        figma.notify("Audit badges cleared.", { timeout: 2000 });
+        break;
+      }
+
+      // ── Select a node by ID (from audit results panel) ────
+      case "select-node" as any: {
+        const nodeId = (msg as any).nodeId;
+        if (nodeId) {
+          const targetNode = figma.getNodeById(nodeId) as SceneNode;
+          if (targetNode) {
+            figma.currentPage.selection = [targetNode];
+            figma.viewport.scrollAndZoomIntoView([targetNode]);
+          }
+        }
+        break;
       }
 
       // ── Run (plan + apply in one step) ─────────────────────
