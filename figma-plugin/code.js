@@ -4183,6 +4183,155 @@ RULES:
       console.warn("[startup] Failed to load API key/provider:", e);
     }
   }, 120);
+  async function runEditJob(job, intent, selectionSnapshot) {
+    var _a;
+    try {
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
+      console.log(`[edit-job ${job.id}] Extracting design system...`);
+      const designSystem = await extractDesignSystemSnapshot();
+      await yieldToUI();
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
+      const payload = {
+        intent,
+        selection: selectionSnapshot,
+        designSystem
+      };
+      console.log(`[edit-job ${job.id}] Calling backend /plan...`);
+      let batch;
+      try {
+        batch = await fetchViaUIForJob("/plan", __spreadProps(__spreadValues({}, payload), { apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }), job.id);
+      } catch (err) {
+        if (job.cancelled) {
+          console.log(`[edit-job ${job.id}] Cancelled during fetch.`);
+          sendToUI({ type: "job-cancelled", jobId: job.id });
+          return;
+        }
+        sendToUI({ type: "job-error", jobId: job.id, error: `Backend error: ${err.message}` });
+        return;
+      }
+      if (!batch.operations || batch.operations.length === 0) {
+        sendToUI({ type: "job-error", jobId: job.id, error: "Could not determine what to change. Try being more specific." });
+        return;
+      }
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "create" });
+      const resizeOps = batch.operations.filter(
+        (op) => op.type === "RESIZE_NODE"
+      );
+      const preResizeDims = {};
+      const preResizeCircles = {};
+      const preResizeSiblingPositions = {};
+      for (const rop of resizeOps) {
+        if (rop.type !== "RESIZE_NODE") continue;
+        const n = figma.getNodeById(rop.nodeId);
+        if (n) {
+          preResizeDims[rop.nodeId] = { w: n.width, h: n.height };
+          const circles = /* @__PURE__ */ new Set();
+          recordCircularNodes(n, circles);
+          preResizeCircles[rop.nodeId] = circles;
+          const par = n.parent;
+          if (par && "children" in par) {
+            const sibs = par.children.filter((s) => s.id !== n.id).sort((a, b) => a.y - b.y);
+            const sectionBottom = n.y + n.height;
+            preResizeSiblingPositions[rop.nodeId] = sibs.filter((s) => s.y >= sectionBottom - 5).map((s) => ({ id: s.id, y: s.y, height: s.height }));
+          }
+        }
+      }
+      const summary = await applyBatch(batch, intent);
+      if (resizeOps.length > 0) {
+        for (const rop of resizeOps) {
+          if (rop.type !== "RESIZE_NODE") continue;
+          const targetNode = figma.getNodeById(rop.nodeId);
+          if (!targetNode || !("children" in targetNode)) continue;
+          const kids = targetNode.children;
+          if (kids.length === 0) continue;
+          const pre = (_a = preResizeDims[rop.nodeId]) != null ? _a : {
+            w: targetNode.width,
+            h: targetNode.height
+          };
+          const deepSnapshot = snapshotNode(targetNode, 0);
+          const refinementPayload = {
+            intent: buildRefinementIntent(
+              targetNode.name,
+              deepSnapshot,
+              pre.w,
+              pre.h,
+              ""
+            ),
+            selection: { nodes: [deepSnapshot] },
+            designSystem: {
+              textStyles: [],
+              fillStyles: [],
+              components: [],
+              variables: []
+            },
+            apiKey: _userApiKey,
+            provider: _selectedProvider,
+            model: _selectedModel
+          };
+          try {
+            const refineBatch = await fetchViaUIForJob("/plan?lenient=true", refinementPayload, job.id);
+            if (refineBatch.operations && refineBatch.operations.length > 0) {
+              _skipResizePropagation = true;
+              try {
+                for (const refOp of refineBatch.operations) {
+                  await applyOperation(refOp);
+                }
+              } finally {
+                _skipResizePropagation = false;
+              }
+            }
+          } catch (err) {
+            console.warn(
+              `[edit-job ${job.id}] Content refinement skipped: ${err.message}`
+            );
+          }
+          const circles = preResizeCircles[rop.nodeId];
+          if (circles && circles.size > 0) {
+            enforceCirclesFromSet(circles);
+          }
+          const sectionNode = targetNode;
+          const origSiblings = preResizeSiblingPositions[rop.nodeId] || [];
+          if (origSiblings.length > 0) {
+            const sectionBottom = sectionNode.y + sectionNode.height;
+            const preDims = preResizeDims[rop.nodeId];
+            const preSectionBottom = sectionNode.y + (preDims ? preDims.h : sectionNode.height);
+            let cursor = sectionBottom;
+            for (let si = 0; si < origSiblings.length; si++) {
+              const origSib = origSiblings[si];
+              const currentSib = figma.getNodeById(origSib.id);
+              if (!currentSib) continue;
+              const origGap = si === 0 ? origSib.y - preSectionBottom : origSib.y - (origSiblings[si - 1].y + origSiblings[si - 1].height);
+              const gap = Math.max(origGap, 0);
+              const desiredY = cursor + gap;
+              if (Math.abs(currentSib.y - desiredY) > 1) {
+                currentSib.y = desiredY;
+              }
+              cursor = currentSib.y + currentSib.height;
+            }
+          }
+        }
+      }
+      figma.notify(summary, { timeout: 4e3 });
+      sendToUI({ type: "job-complete", jobId: job.id, summary });
+    } catch (err) {
+      console.error(`[edit-job ${job.id}] Error:`, err.message, err.stack);
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-error", jobId: job.id, error: `Edit failed: ${err.message}` });
+    } finally {
+      _activeJobs.delete(job.id);
+    }
+  }
   async function runGenerateJob(job, prompt) {
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
@@ -4288,7 +4437,6 @@ RULES:
     }
   }
   figma.ui.onmessage = async (msg) => {
-    var _a;
     try {
       switch (msg.type) {
         // ── Cancel in-flight request (serial plan+apply) ─────
@@ -4403,162 +4551,33 @@ RULES:
         }
         // ── Run (plan + apply in one step) ─────────────────────
         case "run": {
-          if (_working) {
-            console.log("[run] Auto-cancelling previous operation.");
-            _cancelled = true;
-            if (_pendingFetch) {
-              _pendingFetch.reject(new Error("Cancelled"));
-              _pendingFetch = null;
-            }
-          }
-          const intentText = (msg.intent || "").toLowerCase();
+          const intentText = msg.intent || "";
           const isGenerateIntent = figma.currentPage.selection.length === 0 || /\b(add|create|generate|make|build|design)\b.+\b(frame|screen|page|view|layout|mobile|desktop)\b/i.test(intentText) || /\b(new|mobile|desktop)\b.+\b(frame|screen|page|view|layout)\b/i.test(intentText) || /\b(frame|screen|page)\b.+\bfor\b/i.test(intentText);
+          const jobId = ++_nextJobId;
+          const job = { id: jobId, cancelled: false };
+          _activeJobs.set(jobId, job);
           if (isGenerateIntent) {
-            const genMsg = { type: "generate", prompt: msg.intent || "" };
-            figma.ui.onmessage(genMsg);
-            return;
-          }
-          _working = true;
-          _cancelled = false;
-          try {
-            sendToUI({ type: "status", message: "Extracting snapshots\u2026" });
-            const selection = extractSelectionSnapshot();
-            await yieldToUI();
-            if (_cancelled) return;
-            const designSystem = await extractDesignSystemSnapshot();
-            await yieldToUI();
-            if (_cancelled) return;
-            const payload = {
-              intent: msg.intent,
-              selection,
-              designSystem
-            };
-            if (_cancelled) return;
-            sendToUI({ type: "status", message: "Thinking\u2026" });
-            let batch;
-            try {
-              batch = await fetchViaUI("/plan", __spreadProps(__spreadValues({}, payload), { apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }));
-            } catch (err) {
-              if (_cancelled) {
-                sendToUI({ type: "generate-cancelled" });
-                return;
+            const prompt = intentText;
+            console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"`);
+            sendToUI({ type: "job-started", jobId, prompt });
+            runGenerateJob(job, prompt).catch((err) => {
+              console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
+              if (!job.cancelled) {
+                sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });
               }
-              sendToUI({
-                type: "apply-error",
-                error: `Backend error: ${err.message}`
-              });
-              return;
-            }
-            if (!batch.operations || batch.operations.length === 0) {
-              sendToUI({ type: "apply-error", error: "Could not determine what to change. Try being more specific." });
-              return;
-            }
-            const resizeOps = batch.operations.filter(
-              (op) => op.type === "RESIZE_NODE"
-            );
-            const preResizeDims = {};
-            const preResizeCircles = {};
-            const preResizeSiblingPositions = {};
-            for (const rop of resizeOps) {
-              if (rop.type !== "RESIZE_NODE") continue;
-              const n = figma.getNodeById(rop.nodeId);
-              if (n) {
-                preResizeDims[rop.nodeId] = { w: n.width, h: n.height };
-                const circles = /* @__PURE__ */ new Set();
-                recordCircularNodes(n, circles);
-                preResizeCircles[rop.nodeId] = circles;
-                const par = n.parent;
-                if (par && "children" in par) {
-                  const sibs = par.children.filter((s) => s.id !== n.id).sort((a, b) => a.y - b.y);
-                  const sectionBottom = n.y + n.height;
-                  preResizeSiblingPositions[rop.nodeId] = sibs.filter((s) => s.y >= sectionBottom - 5).map((s) => ({ id: s.id, y: s.y, height: s.height }));
-                  console.log(`[resize] Pre-resize section bottom: ${sectionBottom}, sibling gaps: ${preResizeSiblingPositions[rop.nodeId].map((s) => `${s.id}@${s.y} gap=${s.y - sectionBottom}`).join(", ")}`);
-                }
+              _activeJobs.delete(jobId);
+            });
+          } else {
+            const selectionSnapshot = extractSelectionSnapshot();
+            console.log(`[run] Starting edit job ${jobId}: "${intentText.slice(0, 60)}" (${selectionSnapshot.nodes.length} nodes)`);
+            sendToUI({ type: "job-started", jobId, prompt: intentText });
+            runEditJob(job, intentText, selectionSnapshot).catch((err) => {
+              console.error(`[run] Unhandled error in edit job ${jobId}:`, err);
+              if (!job.cancelled) {
+                sendToUI({ type: "job-error", jobId, error: `Edit failed: ${err.message}` });
               }
-            }
-            sendToUI({ type: "status", message: "Applying changes\u2026" });
-            const summary = await applyBatch(batch, msg.intent);
-            if (resizeOps.length > 0) {
-              for (const rop of resizeOps) {
-                if (rop.type !== "RESIZE_NODE") continue;
-                const targetNode = figma.getNodeById(rop.nodeId);
-                if (!targetNode || !("children" in targetNode)) continue;
-                const kids = targetNode.children;
-                if (kids.length === 0) continue;
-                const pre = (_a = preResizeDims[rop.nodeId]) != null ? _a : {
-                  w: targetNode.width,
-                  h: targetNode.height
-                };
-                sendToUI({ type: "status", message: "Refining layout\u2026" });
-                const deepSnapshot = snapshotNode(targetNode, 0);
-                const refinementPayload = {
-                  intent: buildRefinementIntent(
-                    targetNode.name,
-                    deepSnapshot,
-                    pre.w,
-                    pre.h,
-                    ""
-                    // no sibling context — handled mechanically
-                  ),
-                  selection: { nodes: [deepSnapshot] },
-                  designSystem: {
-                    textStyles: [],
-                    fillStyles: [],
-                    components: [],
-                    variables: []
-                  },
-                  apiKey: _userApiKey,
-                  provider: _selectedProvider,
-                  model: _selectedModel
-                };
-                try {
-                  const refineBatch = await fetchViaUI("/plan?lenient=true", refinementPayload);
-                  if (refineBatch.operations && refineBatch.operations.length > 0) {
-                    _skipResizePropagation = true;
-                    try {
-                      for (const refOp of refineBatch.operations) {
-                        await applyOperation(refOp);
-                      }
-                    } finally {
-                      _skipResizePropagation = false;
-                    }
-                  }
-                } catch (err) {
-                  console.warn(
-                    `[resize] Content refinement skipped: ${err.message}`
-                  );
-                }
-                const circles = preResizeCircles[rop.nodeId];
-                if (circles && circles.size > 0) {
-                  enforceCirclesFromSet(circles);
-                }
-                const sectionNode = targetNode;
-                const origSiblings = preResizeSiblingPositions[rop.nodeId] || [];
-                if (origSiblings.length > 0) {
-                  const sectionBottom = sectionNode.y + sectionNode.height;
-                  const preDims = preResizeDims[rop.nodeId];
-                  const preSectionBottom = sectionNode.y + (preDims ? preDims.h : sectionNode.height);
-                  let cursor = sectionBottom;
-                  for (let si = 0; si < origSiblings.length; si++) {
-                    const origSib = origSiblings[si];
-                    const currentSib = figma.getNodeById(origSib.id);
-                    if (!currentSib) continue;
-                    const origGap = si === 0 ? origSib.y - preSectionBottom : origSib.y - (origSiblings[si - 1].y + origSiblings[si - 1].height);
-                    const gap = Math.max(origGap, 0);
-                    const desiredY = cursor + gap;
-                    if (Math.abs(currentSib.y - desiredY) > 1) {
-                      console.log(`[resize] Gap restore: "${currentSib.name}" y: ${Math.round(currentSib.y)} \u2192 ${Math.round(desiredY)} (original gap: ${gap}px)`);
-                      currentSib.y = desiredY;
-                    }
-                    cursor = currentSib.y + currentSib.height;
-                  }
-                }
-              }
-            }
-            sendToUI({ type: "apply-success", summary });
-          } finally {
-            _cancelled = false;
-            _working = false;
+              _activeJobs.delete(jobId);
+            });
           }
           break;
         }

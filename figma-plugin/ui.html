@@ -1455,11 +1455,6 @@
         }
         case "status": {
           if (isCancelGuardActive()) break; // suppress stale progress updates
-          // Lazily enter serial working mode on first status message
-          if (!btnCancel.style.display || btnCancel.style.display === "none") {
-            showWorking();
-            startProgress("analyze");
-          }
           // Map status messages to progress phases (only update progress, not status bar)
           const m = (msg.message || "").toLowerCase();
           if (m.includes("analyz") || m.includes("extract") || m.includes("design system")) {

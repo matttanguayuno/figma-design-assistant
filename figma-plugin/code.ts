@@ -5577,6 +5577,177 @@ setTimeout(async () => {
 // Runs a single generate job. Multiple can run concurrently. Each has
 // its own cancellation state and fetch tracking.
 
+async function runEditJob(job: GenerateJobState, intent: string, selectionSnapshot: SelectionSnapshot): Promise<void> {
+  try {
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
+
+    console.log(`[edit-job ${job.id}] Extracting design system...`);
+    const designSystem = await extractDesignSystemSnapshot();
+    await yieldToUI();
+    if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
+
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" } as any);
+
+    const payload: BackendPayload = {
+      intent,
+      selection: selectionSnapshot,
+      designSystem,
+    };
+
+    console.log(`[edit-job ${job.id}] Calling backend /plan...`);
+    let batch: OperationBatch;
+    try {
+      batch = await fetchViaUIForJob("/plan", { ...payload, apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }, job.id);
+    } catch (err: any) {
+      if (job.cancelled) {
+        console.log(`[edit-job ${job.id}] Cancelled during fetch.`);
+        sendToUI({ type: "job-cancelled", jobId: job.id } as any);
+        return;
+      }
+      sendToUI({ type: "job-error", jobId: job.id, error: `Backend error: ${err.message}` } as any);
+      return;
+    }
+
+    if (!batch.operations || batch.operations.length === 0) {
+      sendToUI({ type: "job-error", jobId: job.id, error: "Could not determine what to change. Try being more specific." } as any);
+      return;
+    }
+
+    if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
+
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "create" } as any);
+
+    // ── Capture pre-resize dimensions, circular nodes, and sibling positions ──
+    const resizeOps = batch.operations.filter(
+      (op) => op.type === "RESIZE_NODE"
+    );
+    const preResizeDims: Record<string, { w: number; h: number }> = {};
+    const preResizeCircles: Record<string, Set<string>> = {};
+    const preResizeSiblingPositions: Record<string, { id: string; y: number; height: number }[]> = {};
+    for (const rop of resizeOps) {
+      if (rop.type !== "RESIZE_NODE") continue;
+      const n = figma.getNodeById(rop.nodeId) as SceneNode | null;
+      if (n) {
+        preResizeDims[rop.nodeId] = { w: n.width, h: n.height };
+        const circles = new Set<string>();
+        recordCircularNodes(n, circles);
+        preResizeCircles[rop.nodeId] = circles;
+        const par = n.parent;
+        if (par && "children" in par) {
+          const sibs = ((par as any).children as SceneNode[])
+            .filter((s: SceneNode) => s.id !== n.id)
+            .sort((a: SceneNode, b: SceneNode) => a.y - b.y);
+          const sectionBottom = n.y + n.height;
+          preResizeSiblingPositions[rop.nodeId] = sibs
+            .filter((s: SceneNode) => s.y >= sectionBottom - 5)
+            .map((s: SceneNode) => ({ id: s.id, y: s.y, height: s.height }));
+        }
+      }
+    }
+
+    const summary = await applyBatch(batch, intent);
+
+    // ── Post-resize AI refinement pass ──────────────────
+    if (resizeOps.length > 0) {
+      for (const rop of resizeOps) {
+        if (rop.type !== "RESIZE_NODE") continue;
+        const targetNode = figma.getNodeById(rop.nodeId);
+        if (!targetNode || !("children" in targetNode)) continue;
+        const kids = (targetNode as any).children as SceneNode[];
+        if (kids.length === 0) continue;
+
+        const pre = preResizeDims[rop.nodeId] ?? {
+          w: (targetNode as SceneNode).width,
+          h: (targetNode as SceneNode).height,
+        };
+
+        const deepSnapshot = snapshotNode(targetNode as SceneNode, 0);
+
+        const refinementPayload = {
+          intent: buildRefinementIntent(
+            targetNode.name,
+            deepSnapshot,
+            pre.w,
+            pre.h,
+            ""
+          ),
+          selection: { nodes: [deepSnapshot] },
+          designSystem: {
+            textStyles: [],
+            fillStyles: [],
+            components: [],
+            variables: [],
+          },
+          apiKey: _userApiKey,
+          provider: _selectedProvider,
+          model: _selectedModel,
+        };
+
+        try {
+          const refineBatch = await fetchViaUIForJob("/plan?lenient=true", refinementPayload, job.id) as OperationBatch;
+          if (refineBatch.operations && refineBatch.operations.length > 0) {
+            _skipResizePropagation = true;
+            try {
+              for (const refOp of refineBatch.operations) {
+                await applyOperation(refOp);
+              }
+            } finally {
+              _skipResizePropagation = false;
+            }
+          }
+        } catch (err: any) {
+          console.warn(
+            `[edit-job ${job.id}] Content refinement skipped: ${err.message}`
+          );
+        }
+
+        // Enforce circle preservation
+        const circles = preResizeCircles[rop.nodeId];
+        if (circles && circles.size > 0) {
+          enforceCirclesFromSet(circles);
+        }
+
+        // Restore original sibling gaps
+        const sectionNode = targetNode as SceneNode;
+        const origSiblings = preResizeSiblingPositions[rop.nodeId] || [];
+        if (origSiblings.length > 0) {
+          const sectionBottom = sectionNode.y + sectionNode.height;
+          const preDims = preResizeDims[rop.nodeId];
+          const preSectionBottom = sectionNode.y + (preDims ? preDims.h : sectionNode.height);
+          let cursor = sectionBottom;
+          for (let si = 0; si < origSiblings.length; si++) {
+            const origSib = origSiblings[si];
+            const currentSib = figma.getNodeById(origSib.id) as SceneNode | null;
+            if (!currentSib) continue;
+            const origGap = si === 0
+              ? origSib.y - preSectionBottom
+              : origSib.y - (origSiblings[si - 1].y + origSiblings[si - 1].height);
+            const gap = Math.max(origGap, 0);
+            const desiredY = cursor + gap;
+            if (Math.abs(currentSib.y - desiredY) > 1) {
+              currentSib.y = desiredY;
+            }
+            cursor = currentSib.y + currentSib.height;
+          }
+        }
+      }
+    }
+
+    figma.notify(summary, { timeout: 4000 });
+    sendToUI({ type: "job-complete", jobId: job.id, summary } as any);
+
+  } catch (err: any) {
+    console.error(`[edit-job ${job.id}] Error:`, err.message, err.stack);
+    if (job.cancelled) {
+      sendToUI({ type: "job-cancelled", jobId: job.id } as any);
+      return;
+    }
+    sendToUI({ type: "job-error", jobId: job.id, error: `Edit failed: ${err.message}` } as any);
+  } finally {
+    _activeJobs.delete(job.id);
+  }
+}
+
 async function runGenerateJob(job: GenerateJobState, prompt: string): Promise<void> {
   try {
     sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
@@ -5827,206 +5998,40 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
       // ── Run (plan + apply in one step) ─────────────────────
       case "run": {
-        // If already working, auto-cancel previous operation
-        if (_working) {
-          console.log("[run] Auto-cancelling previous operation.");
-          _cancelled = true;
-          if (_pendingFetch) { _pendingFetch.reject(new Error("Cancelled")); _pendingFetch = null; }
-        }
-
-        // No selection → auto-redirect to generate flow
-        // Also redirect if the prompt is clearly asking to CREATE a new frame/screen
-        const intentText = ((msg as any).intent || "").toLowerCase();
+        const intentText = ((msg as any).intent || "");
         const isGenerateIntent = figma.currentPage.selection.length === 0 ||
           /\b(add|create|generate|make|build|design)\b.+\b(frame|screen|page|view|layout|mobile|desktop)\b/i.test(intentText) ||
           /\b(new|mobile|desktop)\b.+\b(frame|screen|page|view|layout)\b/i.test(intentText) ||
           /\b(frame|screen|page)\b.+\bfor\b/i.test(intentText);
+
+        // Create a job for either flow
+        const jobId = ++_nextJobId;
+        const job: GenerateJobState = { id: jobId, cancelled: false };
+        _activeJobs.set(jobId, job);
+
         if (isGenerateIntent) {
-          // Re-dispatch as a generate message (will set _working there)
-          const genMsg = { type: "generate" as const, prompt: (msg as any).intent || "" };
-          figma.ui.onmessage!(genMsg as any);
-          return;
-        }
-
-        // Reset cancellation flag
-        _working = true;
-        _cancelled = false;
-
-        try {
-          sendToUI({ type: "status", message: "Extracting snapshots…" });
-
-          const selection = extractSelectionSnapshot();
-          await yieldToUI();
-          if (_cancelled) return;
-
-          const designSystem = await extractDesignSystemSnapshot();
-          await yieldToUI();
-          if (_cancelled) return;
-
-          const payload: BackendPayload = {
-            intent: msg.intent,
-            selection,
-            designSystem,
-          };
-
-          if (_cancelled) return;
-
-          sendToUI({ type: "status", message: "Thinking…" });
-
-          let batch: OperationBatch;
-          try {
-            batch = await fetchViaUI("/plan", { ...payload, apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }) as OperationBatch;
-          } catch (err: any) {
-            if (_cancelled) {
-              sendToUI({ type: "generate-cancelled" as any });
-              return;
+          const prompt = intentText;
+          console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"`);
+          sendToUI({ type: "job-started", jobId, prompt } as any);
+          runGenerateJob(job, prompt).catch((err: any) => {
+            console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
+            if (!job.cancelled) {
+              sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
             }
-            sendToUI({
-              type: "apply-error",
-              error: `Backend error: ${err.message}`,
-            });
-            return;
-          }
-
-        if (!batch.operations || batch.operations.length === 0) {
-          sendToUI({ type: "apply-error", error: "Could not determine what to change. Try being more specific." });
-          return;
-        }
-
-        // ── Capture pre-resize dimensions, circular nodes, and sibling positions ──
-        const resizeOps = batch.operations.filter(
-          (op) => op.type === "RESIZE_NODE"
-        );
-        const preResizeDims: Record<string, { w: number; h: number }> = {};
-        const preResizeCircles: Record<string, Set<string>> = {};
-        const preResizeSiblingPositions: Record<string, { id: string; y: number; height: number }[]> = {};
-        for (const rop of resizeOps) {
-          if (rop.type !== "RESIZE_NODE") continue;
-          const n = figma.getNodeById(rop.nodeId) as SceneNode | null;
-          if (n) {
-            preResizeDims[rop.nodeId] = { w: n.width, h: n.height };
-            // Record all circular nodes in the subtree before any changes
-            const circles = new Set<string>();
-            recordCircularNodes(n, circles);
-            preResizeCircles[rop.nodeId] = circles;
-            // Record original sibling positions for gap restoration
-            const par = n.parent;
-            if (par && "children" in par) {
-              const sibs = ((par as any).children as SceneNode[])
-                .filter((s: SceneNode) => s.id !== n.id)
-                .sort((a: SceneNode, b: SceneNode) => a.y - b.y);
-              const sectionBottom = n.y + n.height;
-              preResizeSiblingPositions[rop.nodeId] = sibs
-                .filter((s: SceneNode) => s.y >= sectionBottom - 5)
-                .map((s: SceneNode) => ({ id: s.id, y: s.y, height: s.height }));
-              console.log(`[resize] Pre-resize section bottom: ${sectionBottom}, sibling gaps: ${preResizeSiblingPositions[rop.nodeId].map(s => `${s.id}@${s.y} gap=${s.y - sectionBottom}`).join(', ')}`);
+            _activeJobs.delete(jobId);
+          });
+        } else {
+          // Edit existing selection — capture snapshot now before user changes selection
+          const selectionSnapshot = extractSelectionSnapshot();
+          console.log(`[run] Starting edit job ${jobId}: "${intentText.slice(0, 60)}" (${selectionSnapshot.nodes.length} nodes)`);
+          sendToUI({ type: "job-started", jobId, prompt: intentText } as any);
+          runEditJob(job, intentText, selectionSnapshot).catch((err: any) => {
+            console.error(`[run] Unhandled error in edit job ${jobId}:`, err);
+            if (!job.cancelled) {
+              sendToUI({ type: "job-error", jobId, error: `Edit failed: ${err.message}` } as any);
             }
-          }
-        }
-
-        sendToUI({ type: "status", message: "Applying changes…" });
-
-        const summary = await applyBatch(batch, msg.intent);
-
-        // ── Post-resize AI refinement pass ──────────────────
-        if (resizeOps.length > 0) {
-          for (const rop of resizeOps) {
-            if (rop.type !== "RESIZE_NODE") continue;
-            const targetNode = figma.getNodeById(rop.nodeId);
-            if (!targetNode || !("children" in targetNode)) continue;
-            const kids = (targetNode as any).children as SceneNode[];
-            if (kids.length === 0) continue;
-
-            const pre = preResizeDims[rop.nodeId] ?? {
-              w: (targetNode as SceneNode).width,
-              h: (targetNode as SceneNode).height,
-            };
-
-            sendToUI({ type: "status", message: "Refining layout…" });
-
-            const deepSnapshot = snapshotNode(targetNode as SceneNode, 0);
-
-            // Sibling positioning is handled mechanically — refinement only
-            // fine-tunes internal layout of the resized section.
-            const refinementPayload = {
-              intent: buildRefinementIntent(
-                targetNode.name,
-                deepSnapshot,
-                pre.w,
-                pre.h,
-                "" // no sibling context — handled mechanically
-              ),
-              selection: { nodes: [deepSnapshot] },
-              designSystem: {
-                textStyles: [],
-                fillStyles: [],
-                components: [],
-                variables: [],
-              },
-              apiKey: _userApiKey,
-              provider: _selectedProvider,
-              model: _selectedModel,
-            };
-
-            try {
-              const refineBatch = await fetchViaUI("/plan?lenient=true", refinementPayload) as OperationBatch;
-              if (refineBatch.operations && refineBatch.operations.length > 0) {
-                _skipResizePropagation = true;
-                try {
-                  for (const refOp of refineBatch.operations) {
-                    await applyOperation(refOp);
-                  }
-                } finally {
-                  _skipResizePropagation = false;
-                }
-              }
-            } catch (err: any) {
-              console.warn(
-                `[resize] Content refinement skipped: ${err.message}`
-              );
-            }
-
-            // ── Post-refinement: enforce circle preservation from pre-recorded set ──
-            const circles = preResizeCircles[rop.nodeId];
-            if (circles && circles.size > 0) {
-              enforceCirclesFromSet(circles);
-            }
-
-            // ── Post-refinement: restore original sibling gaps ──
-            // Use the pre-resize gap values to maintain consistent spacing.
-            const sectionNode = targetNode as SceneNode;
-            const origSiblings = preResizeSiblingPositions[rop.nodeId] || [];
-            if (origSiblings.length > 0) {
-              const sectionBottom = sectionNode.y + sectionNode.height;
-              // Compute original gap from first sibling
-              const preDims = preResizeDims[rop.nodeId];
-              const preSectionBottom = sectionNode.y + (preDims ? preDims.h : sectionNode.height);
-              // Use original gaps between siblings
-              let cursor = sectionBottom;
-              for (let si = 0; si < origSiblings.length; si++) {
-                const origSib = origSiblings[si];
-                const currentSib = figma.getNodeById(origSib.id) as SceneNode | null;
-                if (!currentSib) continue;
-                // Original gap = original sib y - (previous sib bottom or section bottom)
-                const origGap = si === 0
-                  ? origSib.y - preSectionBottom
-                  : origSib.y - (origSiblings[si - 1].y + origSiblings[si - 1].height);
-                const gap = Math.max(origGap, 0);
-                const desiredY = cursor + gap;
-                if (Math.abs(currentSib.y - desiredY) > 1) {
-                  console.log(`[resize] Gap restore: "${currentSib.name}" y: ${Math.round(currentSib.y)} → ${Math.round(desiredY)} (original gap: ${gap}px)`);
-                  currentSib.y = desiredY;
-                }
-                cursor = currentSib.y + currentSib.height;
-              }
-            }
-          }
-        }
-
-        sendToUI({ type: "apply-success", summary });
-        } finally {
-          _cancelled = false;
-          _working = false;
+            _activeJobs.delete(jobId);
+          });
         }
         break;
       }
