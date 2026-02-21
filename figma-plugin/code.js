@@ -976,20 +976,14 @@
     for (const node of nodes) {
       walk(node);
     }
-    const dedupeKey = (f) => `${f.checkType}||${f.nodeName}||${f.severity}`;
-    const groups = /* @__PURE__ */ new Map();
-    for (const f of findings) {
-      const key = dedupeKey(f);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(f);
-    }
+    const seen = /* @__PURE__ */ new Set();
     const deduped = [];
-    for (const [, group] of groups) {
-      const first = __spreadValues({}, group[0]);
-      if (group.length > 1) {
-        first.message += ` (\xD7${group.length} across audited frames)`;
+    for (const f of findings) {
+      const key = `${f.nodeId}||${f.checkType}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(f);
       }
-      deduped.push(first);
     }
     return deduped;
   }

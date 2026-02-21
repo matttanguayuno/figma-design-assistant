@@ -606,27 +606,27 @@
       display: none !important;
     }
 
-    /* ── Audit Panel ─────────────────────────────────────────── */
+    /* ── Audit Panel (full-page takeover) ─────────────────────── */
     .audit-panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-      max-height: 400px;
+      position: absolute;
+      inset: 0;
+      z-index: 100;
+      background: var(--bg);
       display: flex;
       flex-direction: column;
+      overflow: hidden;
     }
     .audit-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 12px;
+      padding: 12px 14px;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
     .audit-title {
       font-weight: 700;
-      font-size: 12px;
+      font-size: 13px;
       color: var(--text);
     }
     .audit-header-actions {
@@ -668,7 +668,7 @@
       color: var(--text);
     }
     .audit-summary {
-      padding: 8px 12px;
+      padding: 8px 14px;
       font-size: 11px;
       color: var(--text-muted);
       border-bottom: 1px solid var(--border);
@@ -677,62 +677,107 @@
     .audit-findings {
       overflow-y: auto;
       flex: 1;
+      padding: 4px 0;
     }
-    .audit-finding {
-      padding: 8px 12px;
+    /* ── Group header (one per check type) ──────────────────── */
+    .audit-group {
       border-bottom: 1px solid var(--border);
-      cursor: pointer;
-      transition: background 0.12s;
     }
-    .audit-finding:hover {
-      background: rgba(255,255,255,0.04);
-    }
-    .audit-finding:last-child {
+    .audit-group:last-child {
       border-bottom: none;
     }
-    .audit-finding-header {
+    .audit-group-header {
       display: flex;
       align-items: center;
-      gap: 6px;
-      margin-bottom: 3px;
+      gap: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.12s;
     }
-    .audit-severity {
+    .audit-group-header:hover {
+      background: rgba(255,255,255,0.04);
+    }
+    .audit-group-chevron {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      transition: transform 0.15s;
+      color: var(--text-muted);
+    }
+    .audit-group.collapsed .audit-group-chevron {
+      transform: rotate(-90deg);
+    }
+    .audit-group-icon {
       width: 8px;
       height: 8px;
       border-radius: 50%;
       flex-shrink: 0;
+      background: #f39c12;
     }
-    .audit-severity.error { background: #d63031; }
-    .audit-severity.warning { background: #f39c12; }
-    .audit-node-name {
-      font-size: 11px;
+    .audit-group-label {
+      font-size: 12px;
       font-weight: 600;
       color: var(--text);
+      flex: 1;
+    }
+    .audit-group-count {
+      font-size: 10px;
+      color: var(--text-muted);
+      background: var(--surface);
+      padding: 1px 7px;
+      border-radius: 8px;
+      flex-shrink: 0;
+    }
+    .audit-group-items {
+      overflow: hidden;
+    }
+    .audit-group.collapsed .audit-group-items {
+      display: none;
+    }
+    /* ── Individual finding item ──────────────────────────── */
+    .audit-finding {
+      padding: 6px 14px 6px 36px;
+      cursor: pointer;
+      transition: background 0.12s;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .audit-finding:hover {
+      background: rgba(255,255,255,0.04);
+    }
+    .audit-finding-body {
+      flex: 1;
+      min-width: 0;
+    }
+    .audit-node-name {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-    }
-    .audit-check-type {
-      font-size: 9px;
-      color: var(--text-muted);
-      background: var(--bg);
-      padding: 1px 5px;
-      border-radius: 3px;
-      flex-shrink: 0;
     }
     .audit-message {
       font-size: 11px;
       color: var(--text-muted);
       line-height: 1.4;
+      margin-top: 1px;
     }
     .audit-suggestion {
-      margin-top: 4px;
+      margin-top: 3px;
       font-size: 10px;
       color: var(--success);
       line-height: 1.3;
     }
     .audit-suggestion::before {
-      content: "💡 ";
+      content: "\1F4A1 ";
+    }
+    .audit-navigate {
+      flex-shrink: 0;
+      color: var(--text-muted);
+      margin-top: 2px;
     }
   </style>
 </head>
@@ -1272,7 +1317,16 @@
       setStatus("Audit cleared.", "success");
     });
 
-    /** Render audit findings in the panel */
+    /** Human-readable labels for check types */
+    var CHECK_TYPE_LABELS = {
+      "contrast":     "Low contrast text",
+      "font-size":    "Small font size",
+      "empty-text":   "Empty text node",
+      "touch-target": "Undersized touch target",
+      "low-opacity":  "Low opacity element"
+    };
+
+    /** Render audit findings grouped by check type */
     function renderAuditFindings(findings) {
       auditFindings.innerHTML = "";
 
@@ -1281,33 +1335,64 @@
         return;
       }
 
-      const errors = findings.filter(function(f) { return f.severity === "error"; }).length;
-      const warnings = findings.length - errors;
-      auditSummary.textContent = errors + " error(s), " + warnings + " warning(s)";
+      auditSummary.textContent = findings.length + " issue" + (findings.length === 1 ? "" : "s") + " found";
 
+      // Group findings by checkType
+      var groups = {};
+      var groupOrder = [];
       findings.forEach(function(f) {
-        var el = document.createElement("div");
-        el.className = "audit-finding";
-        el.addEventListener("click", function() {
-          postToPlugin({ type: "select-node", nodeId: f.nodeId });
+        if (!groups[f.checkType]) {
+          groups[f.checkType] = [];
+          groupOrder.push(f.checkType);
+        }
+        groups[f.checkType].push(f);
+      });
+
+      groupOrder.forEach(function(checkType) {
+        var items = groups[checkType];
+        var label = CHECK_TYPE_LABELS[checkType] || checkType;
+
+        var groupEl = document.createElement("div");
+        groupEl.className = "audit-group";
+
+        // Group header
+        var headerEl = document.createElement("div");
+        headerEl.className = "audit-group-header";
+        headerEl.innerHTML =
+          '<svg class="audit-group-chevron" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '<span class="audit-group-icon"></span>' +
+          '<span class="audit-group-label">' + escapeHtml(label) + '</span>' +
+          '<span class="audit-group-count">' + items.length + '</span>';
+        headerEl.addEventListener("click", function() {
+          groupEl.classList.toggle("collapsed");
+        });
+        groupEl.appendChild(headerEl);
+
+        // Group items container
+        var itemsEl = document.createElement("div");
+        itemsEl.className = "audit-group-items";
+
+        items.forEach(function(f) {
+          var el = document.createElement("div");
+          el.className = "audit-finding";
+          el.addEventListener("click", function() {
+            postToPlugin({ type: "select-node", nodeId: f.nodeId });
+          });
+
+          var bodyHtml =
+            '<div class="audit-finding-body">' +
+              '<div class="audit-node-name">' + escapeHtml(f.nodeName) + '</div>' +
+              '<div class="audit-message">' + escapeHtml(f.message) + '</div>' +
+              (f.suggestion ? '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>' : '') +
+            '</div>' +
+            '<svg class="audit-navigate" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+          el.innerHTML = bodyHtml;
+          itemsEl.appendChild(el);
         });
 
-        var headerHtml =
-          '<div class="audit-finding-header">' +
-            '<span class="audit-severity ' + f.severity + '"></span>' +
-            '<span class="audit-node-name">' + escapeHtml(f.nodeName) + '</span>' +
-            '<span class="audit-check-type">' + escapeHtml(f.checkType) + '</span>' +
-          '</div>';
-
-        var messageHtml = '<div class="audit-message">' + escapeHtml(f.message) + '</div>';
-
-        var suggestionHtml = "";
-        if (f.suggestion) {
-          suggestionHtml = '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>';
-        }
-
-        el.innerHTML = headerHtml + messageHtml + suggestionHtml;
-        auditFindings.appendChild(el);
+        groupEl.appendChild(itemsEl);
+        auditFindings.appendChild(groupEl);
       });
     }
 
@@ -1706,9 +1791,8 @@
         case "audit-results": {
           auditPanel.style.display = "flex";
           renderAuditFindings(msg.findings);
-          var errCount = (msg.findings || []).filter(function(f) { return f.severity === "error"; }).length;
-          var warnCount = (msg.findings || []).length - errCount;
-          setStatus("Audit complete: " + errCount + " error(s), " + warnCount + " warning(s)", errCount > 0 ? "error" : warnCount > 0 ? "warning" : "success");
+          var issueCount = (msg.findings || []).length;
+          setStatus("Audit complete: " + issueCount + " issue" + (issueCount === 1 ? "" : "s") + " found", issueCount > 0 ? "warning" : "success");
           break;
         }
         case "audit-error": {

@@ -1233,24 +1233,15 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
     walk(node);
   }
 
-  // ── De-duplicate findings ─────────────────────────────────
-  // Group by (checkType + nodeName + severity) — keep first occurrence,
-  // append count to message if duplicates exist
-  const dedupeKey = (f: AuditFinding) => `${f.checkType}||${f.nodeName}||${f.severity}`;
-  const groups = new Map<string, AuditFinding[]>();
-  for (const f of findings) {
-    const key = dedupeKey(f);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(f);
-  }
-
+  // ── De-duplicate: remove truly identical findings (same nodeId + checkType) ──
+  const seen = new Set<string>();
   const deduped: AuditFinding[] = [];
-  for (const [, group] of groups) {
-    const first = { ...group[0] };
-    if (group.length > 1) {
-      first.message += ` (×${group.length} across audited frames)`;
+  for (const f of findings) {
+    const key = `${f.nodeId}||${f.checkType}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(f);
     }
-    deduped.push(first);
   }
 
   return deduped;
