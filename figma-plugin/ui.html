@@ -1246,6 +1246,11 @@
     const _jobs = new Map(); // jobId -> { prompt, phase, phaseStartTime }
     let _jobTickInterval = null;
 
+    // Solo-job tracking: when only 1 generate job is active, use the 3-step
+    // progress bar. When a 2nd job arrives, migrate to the multi-job list.
+    let _soloJobId = null;
+    let _soloJobPrompt = "";
+
     // Phase ranges for single progress bar (0-100%)
     const JOB_PHASE_RANGES = {
       analyze:  [0, 15],
@@ -1261,6 +1266,25 @@
       });
       renderJobItem(jobId);
       startJobTick();
+    }
+
+    /** Migrate the solo job into the job list as a rendered item. */
+    function migrateSoloToJobList() {
+      if (!_soloJobId) return;
+      const savedId = _soloJobId;
+      const savedPrompt = _soloJobPrompt;
+      _soloJobId = null;
+      _soloJobPrompt = "";
+      // Stop 3-step bar
+      stopProgress();
+      hideWorking();
+      // Add the solo job into the list (it already exists in _jobs map)
+      if (_jobs.has(savedId)) {
+        renderJobItem(savedId);
+        // Update phase label to match current phase
+        const job = _jobs.get(savedId);
+        if (job) updateJobPhase(savedId, job.phase);
+      }
     }
 
     function renderJobItem(jobId) {
@@ -1401,6 +1425,17 @@
     });
 
     btnCancel.addEventListener("click", () => {
+      if (_soloJobId !== null) {
+        // Cancel the solo running job
+        cancelJobFetch(_soloJobId);
+        postToPlugin({ type: "cancel-job", jobId: _soloJobId });
+        _soloJobId = null;
+        _soloJobPrompt = "";
+        stopProgress();
+        hideWorking();
+        setStatus("Cancelled.", "error");
+        return;
+      }
       // Set cancel guard to suppress any late-arriving plugin messages
       _cancelledAt = Date.now();
       // Abort in-flight fetch instantly (AbortController)
@@ -1519,30 +1554,80 @@
 
         // ── Parallel Job Messages ─────────────────────────────
         case "job-started": {
-          // Exit serial mode (showWorking/startProgress may have been called)
-          stopProgress();
-          hideWorking();
-          addJob(msg.jobId, msg.prompt);
           intentEl.value = "";
-          setStatus("Job started — you can submit more prompts", "success");
+          // Track in the jobs map regardless
+          _jobs.set(msg.jobId, {
+            prompt: msg.prompt,
+            phase: "analyze",
+            phaseStartTime: Date.now(),
+          });
+
+          if (_soloJobId === null && _jobs.size === 1) {
+            // First job — use the 3-step progress bar
+            _soloJobId = msg.jobId;
+            _soloJobPrompt = msg.prompt;
+            showWorking();
+            startProgress("analyze");
+            startJobTick(); // still tick the _jobs map for timing
+          } else {
+            // Second+ job — migrate solo to job list, then add new one
+            if (_soloJobId !== null) migrateSoloToJobList();
+            renderJobItem(msg.jobId);
+            startJobTick();
+            setStatus("Multiple jobs running — submit more or cancel individually", "success");
+          }
           break;
         }
         case "job-progress": {
+          // Update job map
           updateJobPhase(msg.jobId, msg.phase);
+          // If this is the solo job, advance the 3-step bar
+          if (msg.jobId === _soloJobId) {
+            advanceToPhase(msg.phase);
+          }
           break;
         }
         case "job-complete": {
-          completeJob(msg.jobId, msg.summary);
+          if (msg.jobId === _soloJobId) {
+            // Solo job done — use 3-step bar completion
+            _soloJobId = null;
+            _soloJobPrompt = "";
+            advanceToPhase("done");
+            setTimeout(() => { stopProgress(); hideWorking(); }, 600);
+            _jobs.delete(msg.jobId);
+            maybeStopJobTick();
+          } else {
+            completeJob(msg.jobId, msg.summary);
+          }
           setStatus(msg.summary, "success");
           break;
         }
         case "job-error": {
-          errorJob(msg.jobId, msg.error);
+          if (msg.jobId === _soloJobId) {
+            _soloJobId = null;
+            _soloJobPrompt = "";
+            stopProgress();
+            hideWorking();
+            _jobs.delete(msg.jobId);
+            maybeStopJobTick();
+          } else {
+            errorJob(msg.jobId, msg.error);
+          }
           setStatus(msg.error, "error");
           break;
         }
         case "job-cancelled": {
-          cancelledJob(msg.jobId);
+          if (msg.jobId === _soloJobId) {
+            _soloJobId = null;
+            _soloJobPrompt = "";
+            stopProgress();
+            hideWorking();
+            _jobs.delete(msg.jobId);
+            maybeStopJobTick();
+            setStatus("Cancelled.", "error");
+          } else {
+            cancelledJob(msg.jobId);
+          }
           break;
         }
         case "selection-change": {
