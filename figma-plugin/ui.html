@@ -2576,6 +2576,16 @@
     const _jobIdToSeqs = new Map();      // jobId -> Set<seq>
 
     function doFetchForPlugin(endpoint, body, seq, jobId) {
+      // Helper: extract error message from response
+      async function extractError(resp) {
+        var text = await resp.text();
+        try {
+          var parsed = JSON.parse(text);
+          if (parsed && parsed.error) return parsed.error;
+        } catch(e) {}
+        return "Backend error " + resp.status + ": " + (text || "Unknown error").slice(0, 200);
+      }
+
       if (jobId !== undefined) {
         // Parallel mode — don't abort other fetches
         const ac = new AbortController();
@@ -2591,8 +2601,8 @@
           .then(async (resp) => {
             _fetchAborts.delete(seq);
             if (!resp.ok) {
-              const errText = await resp.text();
-              postToPlugin({ type: "fetch-error", error: "Backend error " + resp.status + ": " + errText, seq });
+              const errMsg = await extractError(resp);
+              postToPlugin({ type: "fetch-error", error: errMsg, seq });
             } else {
               const data = await resp.json();
               postToPlugin({ type: "fetch-result", data, seq });
@@ -2620,8 +2630,8 @@
           .then(async (resp) => {
             _activeFetchAbort = null;
             if (!resp.ok) {
-              const errText = await resp.text();
-              postToPlugin({ type: "fetch-error", error: "Backend error " + resp.status + ": " + errText, seq });
+              const errMsg = await extractError(resp);
+              postToPlugin({ type: "fetch-error", error: errMsg, seq });
             } else {
               const data = await resp.json();
               postToPlugin({ type: "fetch-result", data, seq });

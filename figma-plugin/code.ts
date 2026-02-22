@@ -1146,11 +1146,16 @@ function isBackgroundSimple(node: SceneNode): boolean {
 
 /** Check if a touch-target node uses auto-layout HUG/FILL sizing */
 function isTouchTargetAutoLayout(node: SceneNode): boolean {
+  // Check if the node itself uses auto-layout
+  if ("layoutMode" in node && (node as any).layoutMode !== "NONE") return true;
+  // Check if sizing is responsive (HUG/FILL) — may be inside a parent auto-layout
   if ("layoutSizingHorizontal" in node) {
     const h = (node as any).layoutSizingHorizontal;
     const v = (node as any).layoutSizingVertical;
-    return h === "HUG" || v === "HUG" || h === "FILL" || v === "FILL";
+    if (h === "HUG" || v === "HUG" || h === "FILL" || v === "FILL") return true;
   }
+  // Check parent auto-layout too (affects how resizing works)
+  if (node.parent && "layoutMode" in node.parent && (node.parent as any).layoutMode !== "NONE") return true;
   return false;
 }
 
@@ -1192,6 +1197,69 @@ function computeCompliantColor(
   };
 }
 
+/** Load all fonts used by a text node (handles mixed-font text). */
+async function loadAllFontsForTextNode(textNode: TextNode): Promise<void> {
+  const fontName = textNode.fontName;
+  if (fontName === figma.mixed) {
+    // Mixed fonts — load each unique font in the text
+    const len = textNode.characters.length || 1;
+    const loaded = new Set<string>();
+    for (let i = 0; i < len; i++) {
+      const f = textNode.getRangeFontName(i, i + 1);
+      if (f !== figma.mixed) {
+        const key = (f as FontName).family + "::" + (f as FontName).style;
+        if (!loaded.has(key)) {
+          loaded.add(key);
+          await figma.loadFontAsync(f as FontName);
+        }
+      }
+    }
+  } else {
+    await figma.loadFontAsync(fontName as FontName);
+  }
+}
+
+/** Apply a touch-target fix, handling auto-layout vs plain frames properly. */
+function applyTouchTargetFix(node: SceneNode, minW: number, minH: number): string {
+  const targetW = Math.max(node.width, minW);
+  const targetH = Math.max(node.height, minH);
+
+  // For auto-layout frames: use minWidth / minHeight constraints
+  if ("layoutMode" in node && (node as FrameNode).layoutMode !== "NONE") {
+    const frame = node as FrameNode;
+    // Set min dimensions so auto-layout respects them
+    frame.minWidth = targetW;
+    frame.minHeight = targetH;
+    // If using FIXED sizing, switch to HUG so min constraints apply
+    if (frame.layoutSizingHorizontal === "FIXED" && frame.width < minW) {
+      frame.resize(targetW, frame.height);
+    }
+    if (frame.layoutSizingVertical === "FIXED" && frame.height < minH) {
+      frame.resize(frame.width, targetH);
+    }
+    return `Set minimum size to ${Math.round(targetW)}×${Math.round(targetH)}px (auto-layout).`;
+  }
+
+  // For nodes inside a parent auto-layout: resize + ensure sizing is FIXED
+  if (node.parent && "layoutMode" in node.parent && (node.parent as FrameNode).layoutMode !== "NONE") {
+    if ("layoutSizingHorizontal" in node) {
+      const n = node as FrameNode;
+      if (n.layoutSizingHorizontal === "HUG" && node.width < minW) {
+        n.layoutSizingHorizontal = "FIXED";
+      }
+      if (n.layoutSizingVertical === "HUG" && node.height < minH) {
+        n.layoutSizingVertical = "FIXED";
+      }
+    }
+    (node as FrameNode).resize(targetW, targetH);
+    return `Resized to ${Math.round(targetW)}×${Math.round(targetH)}px.`;
+  }
+
+  // Plain frame — simple resize (respects constraints of children)
+  (node as FrameNode).resize(targetW, targetH);
+  return `Resized to ${Math.round(targetW)}×${Math.round(targetH)}px.`;
+}
+
 /** Apply a deterministic auto-fix for a single audit finding. Returns success message or throws. */
 async function applyAutoFix(finding: AuditFinding): Promise<string> {
   const node = figma.getNodeById(finding.nodeId) as SceneNode | null;
@@ -1203,8 +1271,7 @@ async function applyAutoFix(finding: AuditFinding): Promise<string> {
       const textNode = node as TextNode;
       const d = finding.details;
       if (!d || !d.fgColor || !d.bgColor) throw new Error("Missing colour data for auto-fix.");
-      // Load the font before editing text properties
-      await figma.loadFontAsync(textNode.fontName as FontName);
+      await loadAllFontsForTextNode(textNode);
       const compliant = computeCompliantColor(d.fgColor, d.bgColor, d.threshold);
       const newFills = [{ type: "SOLID" as const, color: { r: compliant.r, g: compliant.g, b: compliant.b } }];
       textNode.fills = newFills;
@@ -1215,17 +1282,14 @@ async function applyAutoFix(finding: AuditFinding): Promise<string> {
     case "font-size": {
       if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
       const textNode = node as TextNode;
-      await figma.loadFontAsync(textNode.fontName as FontName);
+      await loadAllFontsForTextNode(textNode);
       textNode.fontSize = 12;
       return "Font size increased to 12px.";
     }
 
     case "touch-target": {
       if (!("resize" in node)) throw new Error("Node cannot be resized.");
-      const newW = Math.max(node.width, 44);
-      const newH = Math.max(node.height, 44);
-      (node as FrameNode).resize(newW, newH);
-      return `Resized to ${Math.round(newW)}×${Math.round(newH)}px.`;
+      return applyTouchTargetFix(node, 44, 44);
     }
 
     case "low-opacity": {
@@ -1256,7 +1320,9 @@ async function applyLLMFix(finding: AuditFinding): Promise<string> {
   };
 
   const result = await fetchViaUI("/audit-fix", fixBody);
-  if (!result || !result.fix) throw new Error("LLM did not return a valid fix.");
+  if (!result) throw new Error("No response from server. Check your API key and network.");
+  if (result.error) throw new Error(`Server error: ${result.error}`);
+  if (!result.fix) throw new Error("LLM did not return a valid fix structure.");
 
   const node = figma.getNodeById(finding.nodeId) as SceneNode | null;
   if (!node) throw new Error(`Node "${finding.nodeName}" no longer exists.`);
@@ -1267,9 +1333,10 @@ async function applyLLMFix(finding: AuditFinding): Promise<string> {
     case "fill-color": {
       if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
       const textNode = node as TextNode;
-      await figma.loadFontAsync(textNode.fontName as FontName);
+      await loadAllFontsForTextNode(textNode);
       // Parse hex colour
       const hex = (fix.value as string).replace("#", "");
+      if (hex.length < 6) throw new Error(`Invalid colour value: "${fix.value}".`);
       const r = parseInt(hex.substring(0, 2), 16) / 255;
       const g = parseInt(hex.substring(2, 4), 16) / 255;
       const b = parseInt(hex.substring(4, 6), 16) / 255;
@@ -1280,7 +1347,7 @@ async function applyLLMFix(finding: AuditFinding): Promise<string> {
     case "font-size": {
       if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
       const textNode = node as TextNode;
-      await figma.loadFontAsync(textNode.fontName as FontName);
+      await loadAllFontsForTextNode(textNode);
       textNode.fontSize = Number(fix.value) || 12;
       return fix.explanation || `Font size set to ${fix.value}px.`;
     }
@@ -1289,8 +1356,7 @@ async function applyLLMFix(finding: AuditFinding): Promise<string> {
       if (!("resize" in node)) throw new Error("Node cannot be resized.");
       const w = Number(fix.width) || 44;
       const h = Number(fix.height) || 44;
-      (node as FrameNode).resize(Math.max(node.width, w), Math.max(node.height, h));
-      return fix.explanation || `Resized to ${w}×${h}px.`;
+      return applyTouchTargetFix(node, w, h);
     }
 
     case "opacity": {

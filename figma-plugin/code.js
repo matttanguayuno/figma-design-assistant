@@ -912,11 +912,13 @@
     return true;
   }
   function isTouchTargetAutoLayout(node) {
+    if ("layoutMode" in node && node.layoutMode !== "NONE") return true;
     if ("layoutSizingHorizontal" in node) {
       const h = node.layoutSizingHorizontal;
       const v = node.layoutSizingVertical;
-      return h === "HUG" || v === "HUG" || h === "FILL" || v === "FILL";
+      if (h === "HUG" || v === "HUG" || h === "FILL" || v === "FILL") return true;
     }
+    if (node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE") return true;
     return false;
   }
   function computeCompliantColor(fg, bg, targetRatio) {
@@ -948,6 +950,56 @@
       b: fg.b * (1 - hi) + target.b * hi
     };
   }
+  async function loadAllFontsForTextNode(textNode) {
+    const fontName = textNode.fontName;
+    if (fontName === figma.mixed) {
+      const len = textNode.characters.length || 1;
+      const loaded = /* @__PURE__ */ new Set();
+      for (let i = 0; i < len; i++) {
+        const f = textNode.getRangeFontName(i, i + 1);
+        if (f !== figma.mixed) {
+          const key = f.family + "::" + f.style;
+          if (!loaded.has(key)) {
+            loaded.add(key);
+            await figma.loadFontAsync(f);
+          }
+        }
+      }
+    } else {
+      await figma.loadFontAsync(fontName);
+    }
+  }
+  function applyTouchTargetFix(node, minW, minH) {
+    const targetW = Math.max(node.width, minW);
+    const targetH = Math.max(node.height, minH);
+    if ("layoutMode" in node && node.layoutMode !== "NONE") {
+      const frame = node;
+      frame.minWidth = targetW;
+      frame.minHeight = targetH;
+      if (frame.layoutSizingHorizontal === "FIXED" && frame.width < minW) {
+        frame.resize(targetW, frame.height);
+      }
+      if (frame.layoutSizingVertical === "FIXED" && frame.height < minH) {
+        frame.resize(frame.width, targetH);
+      }
+      return `Set minimum size to ${Math.round(targetW)}\xD7${Math.round(targetH)}px (auto-layout).`;
+    }
+    if (node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE") {
+      if ("layoutSizingHorizontal" in node) {
+        const n = node;
+        if (n.layoutSizingHorizontal === "HUG" && node.width < minW) {
+          n.layoutSizingHorizontal = "FIXED";
+        }
+        if (n.layoutSizingVertical === "HUG" && node.height < minH) {
+          n.layoutSizingVertical = "FIXED";
+        }
+      }
+      node.resize(targetW, targetH);
+      return `Resized to ${Math.round(targetW)}\xD7${Math.round(targetH)}px.`;
+    }
+    node.resize(targetW, targetH);
+    return `Resized to ${Math.round(targetW)}\xD7${Math.round(targetH)}px.`;
+  }
   async function applyAutoFix(finding) {
     const node = figma.getNodeById(finding.nodeId);
     if (!node) throw new Error(`Node "${finding.nodeName}" no longer exists.`);
@@ -957,7 +1009,7 @@
         const textNode = node;
         const d = finding.details;
         if (!d || !d.fgColor || !d.bgColor) throw new Error("Missing colour data for auto-fix.");
-        await figma.loadFontAsync(textNode.fontName);
+        await loadAllFontsForTextNode(textNode);
         const compliant = computeCompliantColor(d.fgColor, d.bgColor, d.threshold);
         const newFills = [{ type: "SOLID", color: { r: compliant.r, g: compliant.g, b: compliant.b } }];
         textNode.fills = newFills;
@@ -967,16 +1019,13 @@
       case "font-size": {
         if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
         const textNode = node;
-        await figma.loadFontAsync(textNode.fontName);
+        await loadAllFontsForTextNode(textNode);
         textNode.fontSize = 12;
         return "Font size increased to 12px.";
       }
       case "touch-target": {
         if (!("resize" in node)) throw new Error("Node cannot be resized.");
-        const newW = Math.max(node.width, 44);
-        const newH = Math.max(node.height, 44);
-        node.resize(newW, newH);
-        return `Resized to ${Math.round(newW)}\xD7${Math.round(newH)}px.`;
+        return applyTouchTargetFix(node, 44, 44);
       }
       case "low-opacity": {
         if (!("opacity" in node)) throw new Error("Node has no opacity property.");
@@ -1002,7 +1051,9 @@
       model: _selectedModel
     };
     const result = await fetchViaUI("/audit-fix", fixBody);
-    if (!result || !result.fix) throw new Error("LLM did not return a valid fix.");
+    if (!result) throw new Error("No response from server. Check your API key and network.");
+    if (result.error) throw new Error(`Server error: ${result.error}`);
+    if (!result.fix) throw new Error("LLM did not return a valid fix structure.");
     const node = figma.getNodeById(finding.nodeId);
     if (!node) throw new Error(`Node "${finding.nodeName}" no longer exists.`);
     const fix = result.fix;
@@ -1010,8 +1061,9 @@
       case "fill-color": {
         if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
         const textNode = node;
-        await figma.loadFontAsync(textNode.fontName);
+        await loadAllFontsForTextNode(textNode);
         const hex = fix.value.replace("#", "");
+        if (hex.length < 6) throw new Error(`Invalid colour value: "${fix.value}".`);
         const r = parseInt(hex.substring(0, 2), 16) / 255;
         const g = parseInt(hex.substring(2, 4), 16) / 255;
         const b = parseInt(hex.substring(4, 6), 16) / 255;
@@ -1021,7 +1073,7 @@
       case "font-size": {
         if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
         const textNode = node;
-        await figma.loadFontAsync(textNode.fontName);
+        await loadAllFontsForTextNode(textNode);
         textNode.fontSize = Number(fix.value) || 12;
         return fix.explanation || `Font size set to ${fix.value}px.`;
       }
@@ -1029,8 +1081,7 @@
         if (!("resize" in node)) throw new Error("Node cannot be resized.");
         const w = Number(fix.width) || 44;
         const h = Number(fix.height) || 44;
-        node.resize(Math.max(node.width, w), Math.max(node.height, h));
-        return fix.explanation || `Resized to ${w}\xD7${h}px.`;
+        return applyTouchTargetFix(node, w, h);
       }
       case "opacity": {
         if (!("opacity" in node)) throw new Error("Node has no opacity property.");
