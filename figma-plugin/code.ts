@@ -6295,7 +6295,7 @@ async function runEditJob(job: GenerateJobState, intent: string, selectionSnapsh
   }
 }
 
-async function runGenerateJob(job: GenerateJobState, prompt: string): Promise<void> {
+async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnapshot?: SelectionSnapshot): Promise<void> {
   try {
     sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
 
@@ -6316,8 +6316,8 @@ async function runGenerateJob(job: GenerateJobState, prompt: string): Promise<vo
 
     sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" } as any);
 
-    // Extract selection so the LLM knows what "this frame" means
-    const selectionSnapshot = extractSelectionSnapshot();
+    // Use pre-captured snapshot if provided, otherwise extract current selection
+    const selectionSnapshot = sourceSnapshot || extractSelectionSnapshot();
     console.log(`[job ${job.id}] Selection: ${selectionSnapshot.nodes.length} node(s)`);
 
     // Call backend via UI iframe (parallel-safe)
@@ -6865,15 +6865,47 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
         if (isGenerateIntent) {
           const prompt = intentText;
-          console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"`);
-          sendToUI({ type: "job-started", jobId, prompt } as any);
-          runGenerateJob(job, prompt).catch((err: any) => {
-            console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
-            if (!job.cancelled) {
-              sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
-            }
+          const currentSelection = figma.currentPage.selection;
+
+          if (currentSelection.length > 1) {
+            // Multi-frame generation: one parallel job per selected frame
+            // Remove the placeholder job we created above
             _activeJobs.delete(jobId);
-          });
+
+            // Capture all snapshots upfront before selection changes
+            const allSnapshots = currentSelection.map(node => snapshotNode(node, 0));
+
+            console.log(`[run] Multi-frame generate: ${allSnapshots.length} frames for "${prompt.slice(0, 60)}"`);
+
+            for (const nodeSnap of allSnapshots) {
+              const mjobId = ++_nextJobId;
+              const mjob: GenerateJobState = { id: mjobId, cancelled: false };
+              _activeJobs.set(mjobId, mjob);
+
+              const singleSelection: SelectionSnapshot = { nodes: [nodeSnap] };
+              console.log(`[run] Starting generate job ${mjobId} for frame "${nodeSnap.name}"`);
+              sendToUI({ type: "job-started", jobId: mjobId, prompt: `${prompt} (${nodeSnap.name})` } as any);
+
+              runGenerateJob(mjob, prompt, singleSelection).catch((err: any) => {
+                console.error(`[run] Unhandled error in generate job ${mjobId}:`, err);
+                if (!mjob.cancelled) {
+                  sendToUI({ type: "job-error", jobId: mjobId, error: `Generation failed: ${err.message}` } as any);
+                }
+                _activeJobs.delete(mjobId);
+              });
+            }
+          } else {
+            // Single frame (or no selection) — original flow
+            console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"`);
+            sendToUI({ type: "job-started", jobId, prompt } as any);
+            runGenerateJob(job, prompt).catch((err: any) => {
+              console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
+              if (!job.cancelled) {
+                sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
+              }
+              _activeJobs.delete(jobId);
+            });
+          }
         } else {
           // Edit existing selection — capture snapshot now before user changes selection
           const selectionSnapshot = extractSelectionSnapshot();
@@ -7094,25 +7126,48 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
       // ── Generate Frame (parallel job-based) ────────────────────
       case "generate": {
-        // Create a new job for this generate request
-        const jobId = ++_nextJobId;
-        const job: GenerateJobState = { id: jobId, cancelled: false };
-        _activeJobs.set(jobId, job);
-
         const prompt = (msg as any).prompt || "";
-        console.log(`[generate] Starting job ${jobId}: "${prompt.slice(0, 60)}"`);
+        const currentSelection = figma.currentPage.selection;
 
-        // Notify UI that a parallel job has started
-        sendToUI({ type: "job-started", jobId, prompt } as any);
+        if (currentSelection.length > 1) {
+          // Multi-frame generation: one job per selected frame
+          const allSnapshots = currentSelection.map(node => snapshotNode(node, 0));
+          console.log(`[generate] Multi-frame: ${allSnapshots.length} frames for "${prompt.slice(0, 60)}"`);
 
-        // Fire and forget — don't await, allowing parallel jobs
-        runGenerateJob(job, prompt).catch((err: any) => {
-          console.error(`[generate] Unhandled error in job ${jobId}:`, err);
-          if (!job.cancelled) {
-            sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
+          for (const nodeSnap of allSnapshots) {
+            const jobId = ++_nextJobId;
+            const job: GenerateJobState = { id: jobId, cancelled: false };
+            _activeJobs.set(jobId, job);
+
+            const singleSelection: SelectionSnapshot = { nodes: [nodeSnap] };
+            console.log(`[generate] Starting job ${jobId} for frame "${nodeSnap.name}"`);
+            sendToUI({ type: "job-started", jobId, prompt: `${prompt} (${nodeSnap.name})` } as any);
+
+            runGenerateJob(job, prompt, singleSelection).catch((err: any) => {
+              console.error(`[generate] Unhandled error in job ${jobId}:`, err);
+              if (!job.cancelled) {
+                sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
+              }
+              _activeJobs.delete(jobId);
+            });
           }
-          _activeJobs.delete(jobId);
-        });
+        } else {
+          // Single frame (or no selection) — original flow
+          const jobId = ++_nextJobId;
+          const job: GenerateJobState = { id: jobId, cancelled: false };
+          _activeJobs.set(jobId, job);
+
+          console.log(`[generate] Starting job ${jobId}: "${prompt.slice(0, 60)}"`);
+          sendToUI({ type: "job-started", jobId, prompt } as any);
+
+          runGenerateJob(job, prompt).catch((err: any) => {
+            console.error(`[generate] Unhandled error in job ${jobId}:`, err);
+            if (!job.cancelled) {
+              sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
+            }
+            _activeJobs.delete(jobId);
+          });
+        }
         break;
       }
 
