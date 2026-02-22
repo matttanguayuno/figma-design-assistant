@@ -608,6 +608,34 @@
       referenceSnapshots
     };
   }
+  var GENERATE_SNAPSHOT_MAX_CHARS = 3e4;
+  function _trimSnapshotToDepth(snap, currentDepth, maxDepth) {
+    if (!snap) return snap;
+    const copy = {};
+    for (const key of Object.keys(snap)) {
+      if (key === "children") {
+        if (currentDepth < maxDepth && Array.isArray(snap.children)) {
+          copy.children = snap.children.map((c) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth));
+        }
+      } else {
+        copy[key] = snap[key];
+      }
+    }
+    return copy;
+  }
+  function truncateSnapshotForGenerate(snap, maxChars = GENERATE_SNAPSHOT_MAX_CHARS) {
+    for (let depth = 8; depth >= 3; depth--) {
+      const trimmed = _trimSnapshotToDepth(snap, 0, depth);
+      const size = JSON.stringify(trimmed).length;
+      if (size <= maxChars) {
+        console.log(`[truncate] Snapshot fit at depth ${depth} (${size} chars)`);
+        return trimmed;
+      }
+    }
+    const minimal = _trimSnapshotToDepth(snap, 0, 2);
+    console.log(`[truncate] Snapshot forced to depth 2 (${JSON.stringify(minimal).length} chars)`);
+    return minimal;
+  }
   function snapshotNode(node, depth, siblingIndex) {
     const snap = {
       id: node.id,
@@ -4764,6 +4792,14 @@ RULES:
       sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
       const selectionSnapshot = sourceSnapshot || extractSelectionSnapshot();
       console.log(`[job ${job.id}] Selection: ${selectionSnapshot.nodes.length} node(s)`);
+      const truncatedSelection = {
+        nodes: selectionSnapshot.nodes.map((n) => truncateSnapshotForGenerate(n))
+      };
+      if (styleTokens && styleTokens.referenceSnapshots && styleTokens.referenceSnapshots.length > 0) {
+        styleTokens.referenceSnapshots = styleTokens.referenceSnapshots.map(
+          (s) => truncateSnapshotForGenerate(s, 2e4)
+        );
+      }
       console.log(`[job ${job.id}] Calling backend /generate...`);
       let result;
       try {
@@ -4771,7 +4807,7 @@ RULES:
           prompt,
           styleTokens,
           designSystem,
-          selection: selectionSnapshot,
+          selection: truncatedSelection,
           apiKey: _userApiKey,
           provider: _selectedProvider,
           model: _selectedModel

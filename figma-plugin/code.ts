@@ -776,6 +776,43 @@ function _buildFinalTokens(
   };
 }
 
+// ── Snapshot truncation for generate prompts ───────────────────────
+// Progressively strip children at deeper levels until the JSON fits
+// within a character budget (~30K chars ≈ ~10K tokens per frame).
+const GENERATE_SNAPSHOT_MAX_CHARS = 30000;
+
+function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number): any {
+  if (!snap) return snap;
+  const copy: any = {};
+  for (const key of Object.keys(snap)) {
+    if (key === "children") {
+      if (currentDepth < maxDepth && Array.isArray(snap.children)) {
+        copy.children = snap.children.map((c: any) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth));
+      }
+      // else: omit children (too deep)
+    } else {
+      copy[key] = snap[key];
+    }
+  }
+  return copy;
+}
+
+function truncateSnapshotForGenerate(snap: any, maxChars: number = GENERATE_SNAPSHOT_MAX_CHARS): any {
+  // Try depths from 8 down to 3 until it fits
+  for (let depth = 8; depth >= 3; depth--) {
+    const trimmed = _trimSnapshotToDepth(snap, 0, depth);
+    const size = JSON.stringify(trimmed).length;
+    if (size <= maxChars) {
+      console.log(`[truncate] Snapshot fit at depth ${depth} (${size} chars)`);
+      return trimmed;
+    }
+  }
+  // Last resort: depth 2
+  const minimal = _trimSnapshotToDepth(snap, 0, 2);
+  console.log(`[truncate] Snapshot forced to depth 2 (${JSON.stringify(minimal).length} chars)`);
+  return minimal;
+}
+
 function snapshotNode(node: SceneNode, depth: number, siblingIndex?: number): NodeSnapshot {
   const snap: NodeSnapshot = {
     id: node.id,
@@ -6320,6 +6357,17 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
     const selectionSnapshot = sourceSnapshot || extractSelectionSnapshot();
     console.log(`[job ${job.id}] Selection: ${selectionSnapshot.nodes.length} node(s)`);
 
+    // Truncate snapshot to fit within token budget for LLM prompt
+    const truncatedSelection: SelectionSnapshot = {
+      nodes: selectionSnapshot.nodes.map(n => truncateSnapshotForGenerate(n))
+    };
+    // Also truncate referenceSnapshots in style tokens if present
+    if (styleTokens && styleTokens.referenceSnapshots && styleTokens.referenceSnapshots.length > 0) {
+      styleTokens.referenceSnapshots = styleTokens.referenceSnapshots.map(
+        (s: any) => truncateSnapshotForGenerate(s, 20000)
+      );
+    }
+
     // Call backend via UI iframe (parallel-safe)
     console.log(`[job ${job.id}] Calling backend /generate...`);
     let result: { snapshot: any };
@@ -6328,7 +6376,7 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
         prompt,
         styleTokens,
         designSystem,
-        selection: selectionSnapshot,
+        selection: truncatedSelection,
         apiKey: _userApiKey,
         provider: _selectedProvider,
         model: _selectedModel,
