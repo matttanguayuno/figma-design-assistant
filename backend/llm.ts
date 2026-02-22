@@ -399,3 +399,50 @@ export async function callLLMStateAudit(
 
   return parseJsonResponse(raw, "llm-state-audit");
 }
+
+// ── Call LLM for Audit Fix ──────────────────────────────────────────
+
+const FIX_SYSTEM_PROMPT = `You are a WCAG accessibility expert helping fix specific issues in a Figma design.
+
+You receive a single accessibility finding with its context. Provide a specific, structured fix.
+
+Return a JSON object with this structure:
+{
+  "fix": {
+    "property": "<one of: fill-color, font-size, resize, opacity>",
+    "value": "<specific value — hex color for fill-color, number for font-size/opacity>",
+    "width": <number, only for resize>,
+    "height": <number, only for resize>,
+    "explanation": "<1 sentence explaining the fix>"
+  }
+}
+
+Rules:
+- Return JSON only. No markdown, no prose.
+- For contrast/fill-color issues: suggest a specific hex colour (e.g. "#2D2D2D") that meets WCAG AA against the stated background. Preserve the hue of the original colour if possible.
+- For touch-target/resize issues: suggest minimum 44×44px dimensions. If the element is in an auto-layout, consider adjusting padding proportionally.
+- For font-size issues: suggest 12px minimum, or a larger value if context suggests it (e.g. body text should be 14-16px).
+- For opacity issues: suggest 1.0 unless context suggests a different appropriate value.
+- Keep the "explanation" concise and specific.`;
+
+export async function callLLMAuditFix(
+  finding: any,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string
+): Promise<unknown> {
+  const userPrompt = `## Accessibility Finding to Fix\n${JSON.stringify(finding, null, 2)}\n\nProvide the structured fix JSON now.`;
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    raw = await callProvider(provider, FIX_SYSTEM_PROMPT, userPrompt, resolvedModel, 2048, apiKey, abort);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "llm-audit-fix");
+}

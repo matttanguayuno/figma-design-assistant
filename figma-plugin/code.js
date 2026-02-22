@@ -895,6 +895,152 @@
     const lower = name.toLowerCase();
     return /^(tint|overlay|shade|mask|divider|separator|spacer|background|bg|shadow|border|stroke)(\s|$|[-_ ])/i.test(lower);
   }
+  function isBackgroundSimple(node) {
+    let current = node.parent;
+    while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+      if ("fills" in current) {
+        const fills = current.fills;
+        if (Array.isArray(fills) && fills.length > 0) {
+          const visibleFills = fills.filter((f) => f.visible !== false);
+          if (visibleFills.length > 0) {
+            return visibleFills.every((f) => f.type === "SOLID");
+          }
+        }
+      }
+      current = current.parent;
+    }
+    return true;
+  }
+  function isTouchTargetAutoLayout(node) {
+    if ("layoutSizingHorizontal" in node) {
+      const h = node.layoutSizingHorizontal;
+      const v = node.layoutSizingVertical;
+      return h === "HUG" || v === "HUG" || h === "FILL" || v === "FILL";
+    }
+    return false;
+  }
+  function computeCompliantColor(fg, bg, targetRatio) {
+    const bgLum = auditLuminance(bg.r, bg.g, bg.b);
+    const blackLum = auditLuminance(0, 0, 0);
+    const whiteLum = auditLuminance(1, 1, 1);
+    const blackRatio = auditContrastRatio(bgLum, blackLum);
+    const whiteRatio = auditContrastRatio(bgLum, whiteLum);
+    const target = blackRatio >= whiteRatio ? { r: 0, g: 0, b: 0 } : { r: 1, g: 1, b: 1 };
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      const mixed = {
+        r: fg.r * (1 - mid) + target.r * mid,
+        g: fg.g * (1 - mid) + target.g * mid,
+        b: fg.b * (1 - mid) + target.b * mid
+      };
+      const mixedLum = auditLuminance(mixed.r, mixed.g, mixed.b);
+      const ratio = auditContrastRatio(bgLum, mixedLum);
+      if (ratio >= targetRatio) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    return {
+      r: fg.r * (1 - hi) + target.r * hi,
+      g: fg.g * (1 - hi) + target.g * hi,
+      b: fg.b * (1 - hi) + target.b * hi
+    };
+  }
+  async function applyAutoFix(finding) {
+    const node = figma.getNodeById(finding.nodeId);
+    if (!node) throw new Error(`Node "${finding.nodeName}" no longer exists.`);
+    switch (finding.checkType) {
+      case "contrast": {
+        if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
+        const textNode = node;
+        const d = finding.details;
+        if (!d || !d.fgColor || !d.bgColor) throw new Error("Missing colour data for auto-fix.");
+        await figma.loadFontAsync(textNode.fontName);
+        const compliant = computeCompliantColor(d.fgColor, d.bgColor, d.threshold);
+        const newFills = [{ type: "SOLID", color: { r: compliant.r, g: compliant.g, b: compliant.b } }];
+        textNode.fills = newFills;
+        const hex = "#" + [compliant.r, compliant.g, compliant.b].map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+        return `Text colour changed to ${hex} for ${d.threshold}:1 contrast.`;
+      }
+      case "font-size": {
+        if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
+        const textNode = node;
+        await figma.loadFontAsync(textNode.fontName);
+        textNode.fontSize = 12;
+        return "Font size increased to 12px.";
+      }
+      case "touch-target": {
+        if (!("resize" in node)) throw new Error("Node cannot be resized.");
+        const newW = Math.max(node.width, 44);
+        const newH = Math.max(node.height, 44);
+        node.resize(newW, newH);
+        return `Resized to ${Math.round(newW)}\xD7${Math.round(newH)}px.`;
+      }
+      case "low-opacity": {
+        if (!("opacity" in node)) throw new Error("Node has no opacity property.");
+        node.opacity = 1;
+        return "Opacity set to 100%.";
+      }
+      default:
+        throw new Error(`No auto-fix available for "${finding.checkType}".`);
+    }
+  }
+  async function applyLLMFix(finding) {
+    const fixBody = {
+      finding: {
+        nodeId: finding.nodeId,
+        nodeName: finding.nodeName,
+        checkType: finding.checkType,
+        message: finding.message,
+        details: finding.details,
+        suggestion: finding.suggestion
+      },
+      apiKey: _userApiKey,
+      provider: _selectedProvider,
+      model: _selectedModel
+    };
+    const result = await fetchViaUI("/audit-fix", fixBody);
+    if (!result || !result.fix) throw new Error("LLM did not return a valid fix.");
+    const node = figma.getNodeById(finding.nodeId);
+    if (!node) throw new Error(`Node "${finding.nodeName}" no longer exists.`);
+    const fix = result.fix;
+    switch (fix.property) {
+      case "fill-color": {
+        if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
+        const textNode = node;
+        await figma.loadFontAsync(textNode.fontName);
+        const hex = fix.value.replace("#", "");
+        const r = parseInt(hex.substring(0, 2), 16) / 255;
+        const g = parseInt(hex.substring(2, 4), 16) / 255;
+        const b = parseInt(hex.substring(4, 6), 16) / 255;
+        textNode.fills = [{ type: "SOLID", color: { r, g, b } }];
+        return fix.explanation || `Text colour changed to #${hex}.`;
+      }
+      case "font-size": {
+        if (node.type !== "TEXT") throw new Error("Node is not a text layer.");
+        const textNode = node;
+        await figma.loadFontAsync(textNode.fontName);
+        textNode.fontSize = Number(fix.value) || 12;
+        return fix.explanation || `Font size set to ${fix.value}px.`;
+      }
+      case "resize": {
+        if (!("resize" in node)) throw new Error("Node cannot be resized.");
+        const w = Number(fix.width) || 44;
+        const h = Number(fix.height) || 44;
+        node.resize(Math.max(node.width, w), Math.max(node.height, h));
+        return fix.explanation || `Resized to ${w}\xD7${h}px.`;
+      }
+      case "opacity": {
+        if (!("opacity" in node)) throw new Error("Node has no opacity property.");
+        node.opacity = Number(fix.value) || 1;
+        return fix.explanation || `Opacity set to ${fix.value}.`;
+      }
+      default:
+        throw new Error(`Unknown fix property "${fix.property}".`);
+    }
+  }
   function runAccessibilityAudit(nodes) {
     const findings = [];
     function walk(node, insideInstance = false) {
@@ -915,12 +1061,15 @@
           if (ratio < threshold) {
             const fgHex = "#" + [fg.r, fg.g, fg.b].map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
             const bgHex = "#" + [bg.r, bg.g, bg.b].map((c) => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+            const bgSimple = isBackgroundSimple(textNode);
             findings.push({
               nodeId: node.id,
               nodeName: node.name,
               severity: ratio < 3 ? "error" : "warning",
               checkType: "contrast",
-              message: `Low contrast ratio ${ratio.toFixed(2)}:1 (needs ${threshold}:1). Text "${(textNode.characters || "").slice(0, 30)}" (${fgHex}) on background (${bgHex}).`
+              message: `Low contrast ratio ${ratio.toFixed(2)}:1 (needs ${threshold}:1). Text "${(textNode.characters || "").slice(0, 30)}" (${fgHex}) on background (${bgHex}).`,
+              fixType: bgSimple ? "auto" : "llm",
+              details: { fgColor: fg, bgColor: bg, ratio, threshold, fgHex, bgHex, bgSimple }
             });
           }
         }
@@ -931,7 +1080,9 @@
             nodeName: node.name,
             severity: "warning",
             checkType: "font-size",
-            message: `Font size ${fontSize}px is below 12px minimum for readability.`
+            message: `Font size ${fontSize}px is below 12px minimum for readability.`,
+            fixType: "auto",
+            details: { currentSize: fontSize }
           });
         }
         if (!textNode.characters || textNode.characters.trim() === "") {
@@ -940,7 +1091,8 @@
             nodeName: node.name,
             severity: "warning",
             checkType: "empty-text",
-            message: `Text node "${node.name}" has no visible content. Check if a label is missing.`
+            message: `Text node "${node.name}" has no visible content. Check if a label is missing.`,
+            fixType: "manual"
           });
         }
       }
@@ -948,12 +1100,15 @@
         const nameLower = node.name.toLowerCase();
         const isInteractive = /button|btn|link|tab|toggle|switch|checkbox|radio|input|search|icon[-_ ]?btn|cta/i.test(nameLower);
         if (isInteractive && (node.width < 44 || node.height < 44)) {
+          const isAL = isTouchTargetAutoLayout(node);
           findings.push({
             nodeId: node.id,
             nodeName: node.name,
             severity: "warning",
             checkType: "touch-target",
-            message: `Touch target "${node.name}" is ${Math.round(node.width)}\xD7${Math.round(node.height)}px \u2014 minimum 44\xD744px recommended (WCAG 2.5.5).`
+            message: `Touch target "${node.name}" is ${Math.round(node.width)}\xD7${Math.round(node.height)}px \u2014 minimum 44\xD744px recommended (WCAG 2.5.5).`,
+            fixType: isAL ? "llm" : "auto",
+            details: { currentWidth: Math.round(node.width), currentHeight: Math.round(node.height), isAutoLayout: isAL }
           });
         }
       }
@@ -965,7 +1120,9 @@
             nodeName: node.name,
             severity: "warning",
             checkType: "low-opacity",
-            message: `Node "${node.name}" has opacity ${(opacity * 100).toFixed(0)}% which may be hard to perceive.`
+            message: `Node "${node.name}" has opacity ${(opacity * 100).toFixed(0)}% which may be hard to perceive.`,
+            fixType: "auto",
+            details: { currentOpacity: opacity }
           });
         }
       }
@@ -4836,6 +4993,57 @@ RULES:
         case "clear-audit": {
           clearAuditBadges();
           figma.notify("Audit badges cleared.", { timeout: 2e3 });
+          break;
+        }
+        // ── Fix Single Finding ────────────────────────────────
+        case "fix-finding": {
+          const finding = msg.finding;
+          if (!finding) {
+            sendToUI({ type: "fix-result", nodeId: "", checkType: "", success: false, message: "No finding provided." });
+            break;
+          }
+          try {
+            let resultMsg;
+            if (finding.fixType === "auto") {
+              resultMsg = await applyAutoFix(finding);
+            } else if (finding.fixType === "llm") {
+              sendToUI({ type: "status", message: `Getting AI fix for "${finding.nodeName}"\u2026` });
+              resultMsg = await applyLLMFix(finding);
+            } else {
+              sendToUI({ type: "fix-result", nodeId: finding.nodeId, checkType: finding.checkType, success: false, message: "This issue requires manual fixing." });
+              break;
+            }
+            sendToUI({ type: "fix-result", nodeId: finding.nodeId, checkType: finding.checkType, success: true, message: resultMsg });
+            figma.notify(`Fixed: ${resultMsg}`, { timeout: 3e3 });
+          } catch (err) {
+            console.error("[fix] Error:", err);
+            sendToUI({ type: "fix-result", nodeId: finding.nodeId, checkType: finding.checkType, success: false, message: err.message || "Fix failed." });
+            figma.notify(`Fix failed: ${err.message}`, { timeout: 3e3, error: true });
+          }
+          break;
+        }
+        // ── Fix All Auto-Fixable Findings ─────────────────────
+        case "fix-all-auto": {
+          const allFindings = msg.findings || [];
+          const autoFindings = allFindings.filter((f) => f.fixType === "auto");
+          if (autoFindings.length === 0) {
+            sendToUI({ type: "fix-all-complete", results: [] });
+            figma.notify("No auto-fixable issues found.", { timeout: 3e3 });
+            break;
+          }
+          sendToUI({ type: "status", message: `Fixing ${autoFindings.length} issue(s)\u2026` });
+          const results = [];
+          for (const f of autoFindings) {
+            try {
+              const resultMsg = await applyAutoFix(f);
+              results.push({ nodeId: f.nodeId, checkType: f.checkType, success: true, message: resultMsg });
+            } catch (err) {
+              results.push({ nodeId: f.nodeId, checkType: f.checkType, success: false, message: err.message || "Fix failed." });
+            }
+          }
+          const successCount = results.filter((r) => r.success).length;
+          sendToUI({ type: "fix-all-complete", results });
+          figma.notify(`Fixed ${successCount} of ${autoFindings.length} issue(s).`, { timeout: 4e3 });
           break;
         }
         // ── UI State Audit ────────────────────────────────────

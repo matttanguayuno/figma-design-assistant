@@ -48,3 +48,20 @@ Prioritized list of operations to add for lead designer workflow.
 
 - [ ] **13. SET_CONSTRAINTS** — "Pin the header to the top."
   Useful for responsive design setup.
+
+## Feature Ideas (under consideration)
+
+- [ ] **Auto-fix for audit findings**
+  Add a "Fix" button to accessibility audit findings that applies deterministic corrections (e.g., increase contrast, bump font size to 12px, resize touch targets to 44px). Transforms audits from passive reports into active remediation tools. Most a11y fixes are concrete property changes — no LLM needed. *High value, moderate effort.*
+
+- [ ] **Design token extraction**
+  Scan a selection or entire page and extract all unique colors, typography styles, spacing values, border radii, etc. into a structured token file (JSON, CSS custom properties, or Tailwind config). Addresses a major pain point in design-to-dev handoff. *High value, moderate effort.*
+
+- [ ] **Design-to-code generation**
+  Select a frame and generate React / HTML+CSS / SwiftUI / Flutter code via the LLM. Leverages the existing tree walker from the audit infrastructure. High perceived value but complex to do well at production quality. *Highest perceived value, high effort.*
+
+- [ ] **Consistency checker**
+  Flag inconsistencies across a file: near-duplicate colors ("14 slightly different grays"), inconsistent spacing ("7px, 8px, 9px — should these be unified?"), mixed border radii, etc. Think of it as a design-system-readiness audit. *Medium value, moderate effort.*
+
+- [ ] **Component documentation generator**
+  Auto-generate documentation for component sets: variant names, props, usage guidelines, visual examples list. Leverages existing tree-walking code. *Medium value, low effort.*

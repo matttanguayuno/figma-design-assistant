@@ -113,7 +113,9 @@ export type UIToPluginMessage =
   | { type: "audit-a11y" }
   | { type: "audit-states" }
   | { type: "clear-audit" }
-  | { type: "select-node"; nodeId: string };
+  | { type: "select-node"; nodeId: string }
+  | { type: "fix-finding"; finding: AuditFinding }
+  | { type: "fix-all-auto"; findings: AuditFinding[] };
 
 export type PluginToUIMessage =
   | { type: "apply-success"; summary: string }
@@ -138,7 +140,9 @@ export type PluginToUIMessage =
   | { type: "audit-results"; findings: AuditFinding[] }
   | { type: "audit-error"; error: string }
   | { type: "state-audit-results"; items: StateAuditItem[] }
-  | { type: "state-audit-error"; error: string };
+  | { type: "state-audit-error"; error: string }
+  | { type: "fix-result"; nodeId: string; checkType: string; success: boolean; message: string }
+  | { type: "fix-all-complete"; results: Array<{ nodeId: string; checkType: string; success: boolean; message: string }> };
 
 // ── Accessibility Audit Types ────────────────────────────────────────
 
@@ -150,6 +154,7 @@ export type AuditFinding = {
   message: string;
   details?: any;
   suggestion?: string;
+  fixType?: "auto" | "llm" | "manual";
 };
 
 // ── UI State Audit Types ─────────────────────────────────────────────

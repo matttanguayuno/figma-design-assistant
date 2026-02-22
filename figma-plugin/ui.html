@@ -866,6 +866,75 @@
     .audit-suggestion::before {
       content: "\1F4A1 ";
     }
+    /* ── Fix buttons ─────────────────────────────────────── */
+    .btn-fix {
+      flex-shrink: 0;
+      padding: 3px 8px;
+      font-size: 9px;
+      font-weight: 700;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s, opacity 0.12s;
+      line-height: 1.4;
+    }
+    .btn-fix[data-fix-type="auto"] {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-fix[data-fix-type="auto"]:hover {
+      filter: brightness(1.15);
+    }
+    .btn-fix[data-fix-type="llm"] {
+      background: transparent;
+      border: 1px solid var(--primary);
+      color: var(--primary);
+    }
+    .btn-fix[data-fix-type="llm"]:hover {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-fix:disabled {
+      opacity: 0.5;
+      cursor: default;
+      filter: none;
+    }
+    .btn-fix.fixed {
+      background: var(--success) !important;
+      border-color: var(--success) !important;
+      color: #fff !important;
+      opacity: 1 !important;
+    }
+    .btn-fix.failed {
+      background: var(--error) !important;
+      border-color: var(--error) !important;
+      color: #fff !important;
+      opacity: 1 !important;
+    }
+    .btn-fix-all {
+      flex: none;
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      border-radius: 4px;
+      background: var(--primary);
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-fix-all:hover {
+      filter: brightness(1.15);
+    }
+    .btn-fix-all:disabled {
+      opacity: 0.5;
+      cursor: default;
+      filter: none;
+    }
     .audit-navigate {
       flex-shrink: 0;
       color: var(--text-muted);
@@ -1168,6 +1237,10 @@
     <div class="audit-header">
       <span class="audit-title">Accessibility Audit</span>
       <div class="audit-header-actions">
+        <button id="btn-fix-all" class="btn-fix-all" title="Auto-fix all deterministic issues" style="display:none;">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M2 9l4 4 8-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Fix All
+        </button>
         <div class="export-wrapper">
           <button id="btn-export-a11y" class="btn-export" title="Export results">
             Export
@@ -1340,6 +1413,7 @@
     const exportMenuA11y = document.getElementById("export-menu-a11y");
     const btnExportState = document.getElementById("btn-export-state");
     const exportMenuState = document.getElementById("export-menu-state");
+    const btnFixAll = document.getElementById("btn-fix-all");
 
     // Cached audit results for export
     var _lastA11yFindings = null;
@@ -1779,6 +1853,14 @@
       setStatus("Audit cleared.", "success");
     });
 
+    // ── Audit panel: Fix All auto-fixable ───────────────────────
+    btnFixAll.addEventListener("click", () => {
+      if (!_lastA11yFindings || _lastA11yFindings.length === 0) return;
+      btnFixAll.disabled = true;
+      btnFixAll.textContent = "Fixing…";
+      postToPlugin({ type: "fix-all-auto", findings: _lastA11yFindings });
+    });
+
     // ── Audit Progress Bar Logic ─────────────────────────────────────
     // Two phases: scanning (local WCAG checks) → enhancing (LLM suggestions)
     // Estimates adjust over time per scope: all / frame / component
@@ -2090,10 +2172,26 @@
 
       if (!findings || findings.length === 0) {
         auditSummary.textContent = "No accessibility issues found!";
+        btnFixAll.style.display = "none";
         return;
       }
 
+      // Count auto-fixable issues
+      var autoCount = findings.filter(function(f) { return f.fixType === "auto"; }).length;
+      var llmCount = findings.filter(function(f) { return f.fixType === "llm"; }).length;
+      var fixableCount = autoCount + llmCount;
+
       auditSummary.textContent = findings.length + " issue" + (findings.length === 1 ? "" : "s") + " found";
+
+      // Show/hide Fix All button
+      if (autoCount > 0) {
+        btnFixAll.style.display = "flex";
+        btnFixAll.disabled = false;
+        btnFixAll.textContent = "";
+        btnFixAll.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M2 9l4 4 8-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Fix All (' + autoCount + ')';
+      } else {
+        btnFixAll.style.display = "none";
+      }
 
       // Group findings by checkType
       var groups = {};
@@ -2133,25 +2231,74 @@
         items.forEach(function(f) {
           var el = document.createElement("div");
           el.className = "audit-finding";
-          el.addEventListener("click", function() {
+          el.setAttribute("data-node-id", f.nodeId);
+          el.setAttribute("data-check-type", f.checkType);
+
+          // Click on body area → select node; click on fix button → fix
+          var bodyEl = document.createElement("div");
+          bodyEl.className = "audit-finding-body";
+          bodyEl.style.cursor = "pointer";
+          bodyEl.innerHTML =
+            '<div class="audit-node-name">' + escapeHtml(f.nodeName) + '</div>' +
+            '<div class="audit-message">' + escapeHtml(f.message) + '</div>' +
+            (f.suggestion ? '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>' : '');
+          bodyEl.addEventListener("click", function() {
             postToPlugin({ type: "select-node", nodeId: f.nodeId });
           });
+          el.appendChild(bodyEl);
 
-          var bodyHtml =
-            '<div class="audit-finding-body">' +
-              '<div class="audit-node-name">' + escapeHtml(f.nodeName) + '</div>' +
-              '<div class="audit-message">' + escapeHtml(f.message) + '</div>' +
-              (f.suggestion ? '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>' : '') +
-            '</div>' +
-            '<svg class="audit-navigate" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          // Fix button (only for auto and llm)
+          if (f.fixType === "auto" || f.fixType === "llm") {
+            var fixBtn = document.createElement("button");
+            fixBtn.className = "btn-fix";
+            fixBtn.setAttribute("data-fix-type", f.fixType);
+            fixBtn.setAttribute("data-node-id", f.nodeId);
+            fixBtn.setAttribute("data-check-type", f.checkType);
+            fixBtn.textContent = f.fixType === "auto" ? "Fix" : "AI Fix";
+            fixBtn.title = f.fixType === "auto" ? "Apply deterministic fix" : "Use AI to suggest and apply a fix";
+            fixBtn.addEventListener("click", function(e) {
+              e.stopPropagation();
+              fixBtn.disabled = true;
+              fixBtn.textContent = "Fixing…";
+              postToPlugin({ type: "fix-finding", finding: f });
+            });
+            el.appendChild(fixBtn);
+          } else if (f.fixType === "manual") {
+            var manualTag = document.createElement("span");
+            manualTag.style.cssText = "flex-shrink:0;font-size:9px;color:var(--text-muted);padding:3px 6px;";
+            manualTag.textContent = "Manual";
+            manualTag.title = "Requires manual design decision";
+            el.appendChild(manualTag);
+          }
 
-          el.innerHTML = bodyHtml;
+          // Navigate chevron
+          var navSvg = document.createElement("span");
+          navSvg.innerHTML = '<svg class="audit-navigate" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+          navSvg.style.cursor = "pointer";
+          navSvg.addEventListener("click", function() {
+            postToPlugin({ type: "select-node", nodeId: f.nodeId });
+          });
+          el.appendChild(navSvg);
+
           itemsEl.appendChild(el);
         });
 
         groupEl.appendChild(itemsEl);
         auditFindings.appendChild(groupEl);
       });
+    }
+
+    /** Update the Fix All button count after individual fixes */
+    function updateFixAllCount() {
+      if (!_lastA11yFindings) return;
+      var remaining = _lastA11yFindings.filter(function(f) { return f.fixType === "auto"; }).length;
+      if (remaining > 0) {
+        btnFixAll.style.display = "flex";
+        btnFixAll.disabled = false;
+        btnFixAll.innerHTML = '<svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M2 9l4 4 8-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Fix All (' + remaining + ')';
+      } else {
+        btnFixAll.style.display = "none";
+      }
     }
 
     function escapeHtml(str) {
@@ -2699,6 +2846,65 @@
             if (msg.timings.frame) auditEstimates.frame = msg.timings.frame;
             if (msg.timings.component) auditEstimates.component = msg.timings.component;
           }
+          break;
+        }
+
+        // ── Fix Result (single finding) ──────────────────────
+        case "fix-result": {
+          var fixBtn = auditFindings.querySelector('.btn-fix[data-node-id="' + msg.nodeId + '"][data-check-type="' + msg.checkType + '"]');
+          if (fixBtn) {
+            fixBtn.disabled = true;
+            if (msg.success) {
+              fixBtn.className = "btn-fix fixed";
+              fixBtn.textContent = "Fixed";
+              // Remove the finding from cached results
+              if (_lastA11yFindings) {
+                _lastA11yFindings = _lastA11yFindings.filter(function(f) {
+                  return !(f.nodeId === msg.nodeId && f.checkType === msg.checkType);
+                });
+              }
+              setStatus(msg.message, "success");
+            } else {
+              fixBtn.className = "btn-fix failed";
+              fixBtn.textContent = "Failed";
+              fixBtn.title = msg.message;
+              setStatus("Fix failed: " + msg.message, "error");
+            }
+          }
+          // Update Fix All count
+          updateFixAllCount();
+          break;
+        }
+
+        // ── Fix All Complete ─────────────────────────────────
+        case "fix-all-complete": {
+          var results = msg.results || [];
+          var successes = 0;
+          results.forEach(function(r) {
+            var btn = auditFindings.querySelector('.btn-fix[data-node-id="' + r.nodeId + '"][data-check-type="' + r.checkType + '"]');
+            if (btn) {
+              btn.disabled = true;
+              if (r.success) {
+                btn.className = "btn-fix fixed";
+                btn.textContent = "Fixed";
+                successes++;
+                // Remove from cached findings
+                if (_lastA11yFindings) {
+                  _lastA11yFindings = _lastA11yFindings.filter(function(f) {
+                    return !(f.nodeId === r.nodeId && f.checkType === r.checkType);
+                  });
+                }
+              } else {
+                btn.className = "btn-fix failed";
+                btn.textContent = "Failed";
+                btn.title = r.message;
+              }
+            }
+          });
+          btnFixAll.disabled = true;
+          btnFixAll.textContent = successes + " of " + results.length + " fixed";
+          setStatus("Fixed " + successes + " of " + results.length + " issue(s).", successes === results.length ? "success" : "warning");
+          updateFixAllCount();
           break;
         }
 

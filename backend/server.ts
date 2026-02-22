@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMGenerate, callLLMAudit, callLLMStateAudit, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 
 const app = express();
@@ -319,6 +319,40 @@ app.post("/audit", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /audit-fix ──────────────────────────────────────────────────────
+
+app.post("/audit-fix", async (req: Request, res: Response) => {
+  try {
+    const { finding, apiKey, provider, model } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key." });
+      return;
+    }
+
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+
+    if (!finding || typeof finding !== "object") {
+      res.status(400).json({ error: "No finding provided." });
+      return;
+    }
+
+    console.log(`[audit-fix] provider=${resolvedProvider}, model=${model || "default"}, checkType=${finding.checkType}`);
+
+    const result = await callLLMAuditFix(finding, apiKey, resolvedProvider, model);
+    console.log(`[audit-fix] LLM returned:`, JSON.stringify(result).slice(0, 500));
+
+    res.json(result);
+  } catch (err: any) {
+    console.error("[audit-fix] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /audit-states ───────────────────────────────────────────────────
 
 app.post("/audit-states", async (req: Request, res: Response) => {
@@ -360,6 +394,7 @@ app.listen(PORT, () => {
   console.log(`  POST /plan          — generate operation batch`);
   console.log(`  POST /generate      — generate new frame from prompt`);
   console.log(`  POST /audit         — accessibility audit enrichment`);
+  console.log(`  POST /audit-fix     — LLM-assisted audit fix`);
   console.log(`  POST /audit-states  — UI state completeness audit`);
   console.log(`  GET  /health        — health check`);
 });
