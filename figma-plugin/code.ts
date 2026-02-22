@@ -1219,43 +1219,62 @@ async function loadAllFontsForTextNode(textNode: TextNode): Promise<void> {
   }
 }
 
-/** Apply a touch-target fix, handling auto-layout vs plain frames properly. */
+/** Apply a touch-target fix, handling auto-layout vs plain frames properly.
+ *  Adds padding to center existing content within the larger touch area. */
 function applyTouchTargetFix(node: SceneNode, minW: number, minH: number): string {
+  const extraW = Math.max(0, minW - node.width);
+  const extraH = Math.max(0, minH - node.height);
+  if (extraW === 0 && extraH === 0) return `Already meets ${minW}×${minH}px minimum.`;
+
   const targetW = Math.max(node.width, minW);
   const targetH = Math.max(node.height, minH);
 
-  // For auto-layout frames: use minWidth / minHeight constraints
+  // For auto-layout frames: increase padding to center content in the larger area
   if ("layoutMode" in node && (node as FrameNode).layoutMode !== "NONE") {
     const frame = node as FrameNode;
-    // Set min dimensions so auto-layout respects them
+    const padL = typeof frame.paddingLeft === "number" ? frame.paddingLeft : 0;
+    const padR = typeof frame.paddingRight === "number" ? frame.paddingRight : 0;
+    const padT = typeof frame.paddingTop === "number" ? frame.paddingTop : 0;
+    const padB = typeof frame.paddingBottom === "number" ? frame.paddingBottom : 0;
+
+    // Distribute extra space equally as padding on both sides
+    const addH = Math.ceil(extraW / 2);
+    const addV = Math.ceil(extraH / 2);
+    frame.paddingLeft = padL + addH;
+    frame.paddingRight = padR + (extraW - addH); // handles odd pixel
+    frame.paddingTop = padT + addV;
+    frame.paddingBottom = padB + (extraH - addV);
+
+    // Ensure alignment centres items
+    frame.primaryAxisAlignItems = "CENTER";
+    frame.counterAxisAlignItems = "CENTER";
+
+    // Set min dimensions as a safety net
     frame.minWidth = targetW;
     frame.minHeight = targetH;
-    // If using FIXED sizing, switch to HUG so min constraints apply
-    if (frame.layoutSizingHorizontal === "FIXED" && frame.width < minW) {
-      frame.resize(targetW, frame.height);
-    }
-    if (frame.layoutSizingVertical === "FIXED" && frame.height < minH) {
-      frame.resize(frame.width, targetH);
-    }
-    return `Set minimum size to ${Math.round(targetW)}×${Math.round(targetH)}px (auto-layout).`;
+
+    return `Added padding to reach ${Math.round(targetW)}×${Math.round(targetH)}px touch area (content centred).`;
   }
 
-  // For nodes inside a parent auto-layout: resize + ensure sizing is FIXED
-  if (node.parent && "layoutMode" in node.parent && (node.parent as FrameNode).layoutMode !== "NONE") {
-    if ("layoutSizingHorizontal" in node) {
-      const n = node as FrameNode;
-      if (n.layoutSizingHorizontal === "HUG" && node.width < minW) {
-        n.layoutSizingHorizontal = "FIXED";
-      }
-      if (n.layoutSizingVertical === "HUG" && node.height < minH) {
-        n.layoutSizingVertical = "FIXED";
+  // For frames/instances that are NOT auto-layout: resize + reposition children to centre
+  if ("children" in node) {
+    const container = node as FrameNode;
+    // Clip content so nothing spills out
+    container.clipsContent = true;
+    container.resize(targetW, targetH);
+
+    // Centre each child within the new dimensions
+    const children = container.children;
+    for (const child of children) {
+      if ("x" in child && "y" in child) {
+        child.x = child.x + extraW / 2;
+        child.y = child.y + extraH / 2;
       }
     }
-    (node as FrameNode).resize(targetW, targetH);
-    return `Resized to ${Math.round(targetW)}×${Math.round(targetH)}px.`;
+    return `Resized to ${Math.round(targetW)}×${Math.round(targetH)}px with content centred.`;
   }
 
-  // Plain frame — simple resize (respects constraints of children)
+  // Fallback for other node types (e.g. component sets)
   (node as FrameNode).resize(targetW, targetH);
   return `Resized to ${Math.round(targetW)}×${Math.round(targetH)}px.`;
 }

@@ -970,32 +970,41 @@
     }
   }
   function applyTouchTargetFix(node, minW, minH) {
+    const extraW = Math.max(0, minW - node.width);
+    const extraH = Math.max(0, minH - node.height);
+    if (extraW === 0 && extraH === 0) return `Already meets ${minW}\xD7${minH}px minimum.`;
     const targetW = Math.max(node.width, minW);
     const targetH = Math.max(node.height, minH);
     if ("layoutMode" in node && node.layoutMode !== "NONE") {
       const frame = node;
+      const padL = typeof frame.paddingLeft === "number" ? frame.paddingLeft : 0;
+      const padR = typeof frame.paddingRight === "number" ? frame.paddingRight : 0;
+      const padT = typeof frame.paddingTop === "number" ? frame.paddingTop : 0;
+      const padB = typeof frame.paddingBottom === "number" ? frame.paddingBottom : 0;
+      const addH = Math.ceil(extraW / 2);
+      const addV = Math.ceil(extraH / 2);
+      frame.paddingLeft = padL + addH;
+      frame.paddingRight = padR + (extraW - addH);
+      frame.paddingTop = padT + addV;
+      frame.paddingBottom = padB + (extraH - addV);
+      frame.primaryAxisAlignItems = "CENTER";
+      frame.counterAxisAlignItems = "CENTER";
       frame.minWidth = targetW;
       frame.minHeight = targetH;
-      if (frame.layoutSizingHorizontal === "FIXED" && frame.width < minW) {
-        frame.resize(targetW, frame.height);
-      }
-      if (frame.layoutSizingVertical === "FIXED" && frame.height < minH) {
-        frame.resize(frame.width, targetH);
-      }
-      return `Set minimum size to ${Math.round(targetW)}\xD7${Math.round(targetH)}px (auto-layout).`;
+      return `Added padding to reach ${Math.round(targetW)}\xD7${Math.round(targetH)}px touch area (content centred).`;
     }
-    if (node.parent && "layoutMode" in node.parent && node.parent.layoutMode !== "NONE") {
-      if ("layoutSizingHorizontal" in node) {
-        const n = node;
-        if (n.layoutSizingHorizontal === "HUG" && node.width < minW) {
-          n.layoutSizingHorizontal = "FIXED";
-        }
-        if (n.layoutSizingVertical === "HUG" && node.height < minH) {
-          n.layoutSizingVertical = "FIXED";
+    if ("children" in node) {
+      const container = node;
+      container.clipsContent = true;
+      container.resize(targetW, targetH);
+      const children = container.children;
+      for (const child of children) {
+        if ("x" in child && "y" in child) {
+          child.x = child.x + extraW / 2;
+          child.y = child.y + extraH / 2;
         }
       }
-      node.resize(targetW, targetH);
-      return `Resized to ${Math.round(targetW)}\xD7${Math.round(targetH)}px.`;
+      return `Resized to ${Math.round(targetW)}\xD7${Math.round(targetH)}px with content centred.`;
     }
     node.resize(targetW, targetH);
     return `Resized to ${Math.round(targetW)}\xD7${Math.round(targetH)}px.`;
