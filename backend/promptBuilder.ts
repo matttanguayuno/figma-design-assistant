@@ -292,7 +292,14 @@ export function buildGeneratePrompt(
     }
 
     parts.push("", "### Selected Frame Node Tree");
-    parts.push(JSON.stringify(selectedNode));
+    // Safety cap: truncate the JSON to max 30K chars to stay within token budget
+    const nodeJson = JSON.stringify(selectedNode);
+    if (nodeJson.length > 30000) {
+      parts.push(nodeJson.slice(0, 30000) + '... (truncated)');
+      console.log(`[buildGeneratePrompt] Selected node JSON truncated from ${nodeJson.length} to 30000 chars`);
+    } else {
+      parts.push(nodeJson);
+    }
   }
 
   // Include extracted style tokens — these are the actual design values to match
@@ -326,7 +333,13 @@ export function buildGeneratePrompt(
     if (styleTokens.referenceSnapshots?.length > 0) {
       parts.push("", "## Reference Frame (CRITICAL — replicate these styles EXACTLY)");
       parts.push("This is an actual node tree from an existing frame. Match the same fillColor, strokeColor, strokeWeight, cornerRadius, padding, alignment, font, and text properties for equivalent elements.");
-      parts.push(JSON.stringify(styleTokens.referenceSnapshots[0]));
+      const refJson = JSON.stringify(styleTokens.referenceSnapshots[0]);
+      if (refJson.length > 20000) {
+        parts.push(refJson.slice(0, 20000) + '... (truncated)');
+        console.log(`[buildGeneratePrompt] Reference snapshot truncated from ${refJson.length} to 20000 chars`);
+      } else {
+        parts.push(refJson);
+      }
     }
   }
 
@@ -339,5 +352,9 @@ export function buildGeneratePrompt(
   }
 
   parts.push("", "Generate the complete NodeSnapshot JSON now. Use the exact style token values above.");
-  return parts.join("\n");
+
+  // Final safety: log total prompt size
+  const fullPrompt = parts.join("\n");
+  console.log(`[buildGeneratePrompt] Total prompt size: ${fullPrompt.length} chars`);
+  return fullPrompt;
 }

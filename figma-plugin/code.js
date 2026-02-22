@@ -609,13 +609,17 @@
     };
   }
   var GENERATE_SNAPSHOT_MAX_CHARS = 3e4;
-  function _trimSnapshotToDepth(snap, currentDepth, maxDepth) {
+  function _trimSnapshotToDepth(snap, currentDepth, maxDepth, maxChildren) {
     if (!snap) return snap;
     const copy = {};
     for (const key of Object.keys(snap)) {
       if (key === "children") {
         if (currentDepth < maxDepth && Array.isArray(snap.children)) {
-          copy.children = snap.children.map((c) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth));
+          const limited = snap.children.length > maxChildren ? snap.children.slice(0, maxChildren) : snap.children;
+          copy.children = limited.map((c) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth, maxChildren));
+          if (snap.children.length > maxChildren) {
+            copy._truncatedChildren = snap.children.length;
+          }
         }
       } else {
         copy[key] = snap[key];
@@ -624,16 +628,25 @@
     return copy;
   }
   function truncateSnapshotForGenerate(snap, maxChars = GENERATE_SNAPSHOT_MAX_CHARS) {
-    for (let depth = 8; depth >= 3; depth--) {
-      const trimmed = _trimSnapshotToDepth(snap, 0, depth);
+    const configs = [
+      { depth: 6, maxChildren: 30 },
+      { depth: 5, maxChildren: 20 },
+      { depth: 4, maxChildren: 15 },
+      { depth: 3, maxChildren: 12 },
+      { depth: 3, maxChildren: 8 },
+      { depth: 2, maxChildren: 10 },
+      { depth: 2, maxChildren: 6 }
+    ];
+    for (const cfg of configs) {
+      const trimmed = _trimSnapshotToDepth(snap, 0, cfg.depth, cfg.maxChildren);
       const size = JSON.stringify(trimmed).length;
       if (size <= maxChars) {
-        console.log(`[truncate] Snapshot fit at depth ${depth} (${size} chars)`);
+        console.log(`[truncate] Snapshot fit at depth ${cfg.depth}, maxChildren ${cfg.maxChildren} (${size} chars)`);
         return trimmed;
       }
     }
-    const minimal = _trimSnapshotToDepth(snap, 0, 2);
-    console.log(`[truncate] Snapshot forced to depth 2 (${JSON.stringify(minimal).length} chars)`);
+    const minimal = _trimSnapshotToDepth(snap, 0, 1, 5);
+    console.log(`[truncate] Snapshot forced to depth 1 (${JSON.stringify(minimal).length} chars)`);
     return minimal;
   }
   function snapshotNode(node, depth, siblingIndex) {
@@ -4800,13 +4813,19 @@ RULES:
           (s) => truncateSnapshotForGenerate(s, 2e4)
         );
       }
+      const trimmedDesignSystem = {
+        textStyles: (designSystem.textStyles || []).slice(0, 12),
+        fillStyles: (designSystem.fillStyles || []).slice(0, 12),
+        components: [],
+        variables: []
+      };
       console.log(`[job ${job.id}] Calling backend /generate...`);
       let result;
       try {
         result = await fetchViaUIForJob("/generate", {
           prompt,
           styleTokens,
-          designSystem,
+          designSystem: trimmedDesignSystem,
           selection: truncatedSelection,
           apiKey: _userApiKey,
           provider: _selectedProvider,

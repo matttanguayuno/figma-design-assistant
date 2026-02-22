@@ -777,17 +777,24 @@ function _buildFinalTokens(
 }
 
 // ── Snapshot truncation for generate prompts ───────────────────────
-// Progressively strip children at deeper levels until the JSON fits
-// within a character budget (~30K chars ≈ ~10K tokens per frame).
+// Progressively strip children at deeper levels and limit width
+// until the JSON fits within a character budget.
 const GENERATE_SNAPSHOT_MAX_CHARS = 30000;
+const MAX_CHILDREN_PER_NODE = 20;
 
-function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number): any {
+function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number, maxChildren: number): any {
   if (!snap) return snap;
   const copy: any = {};
   for (const key of Object.keys(snap)) {
     if (key === "children") {
       if (currentDepth < maxDepth && Array.isArray(snap.children)) {
-        copy.children = snap.children.map((c: any) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth));
+        const limited = snap.children.length > maxChildren
+          ? snap.children.slice(0, maxChildren)
+          : snap.children;
+        copy.children = limited.map((c: any) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth, maxChildren));
+        if (snap.children.length > maxChildren) {
+          copy._truncatedChildren = snap.children.length;
+        }
       }
       // else: omit children (too deep)
     } else {
@@ -798,18 +805,27 @@ function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number)
 }
 
 function truncateSnapshotForGenerate(snap: any, maxChars: number = GENERATE_SNAPSHOT_MAX_CHARS): any {
-  // Try depths from 8 down to 3 until it fits
-  for (let depth = 8; depth >= 3; depth--) {
-    const trimmed = _trimSnapshotToDepth(snap, 0, depth);
+  // Try progressively more aggressive truncation
+  const configs = [
+    { depth: 6, maxChildren: 30 },
+    { depth: 5, maxChildren: 20 },
+    { depth: 4, maxChildren: 15 },
+    { depth: 3, maxChildren: 12 },
+    { depth: 3, maxChildren: 8 },
+    { depth: 2, maxChildren: 10 },
+    { depth: 2, maxChildren: 6 },
+  ];
+  for (const cfg of configs) {
+    const trimmed = _trimSnapshotToDepth(snap, 0, cfg.depth, cfg.maxChildren);
     const size = JSON.stringify(trimmed).length;
     if (size <= maxChars) {
-      console.log(`[truncate] Snapshot fit at depth ${depth} (${size} chars)`);
+      console.log(`[truncate] Snapshot fit at depth ${cfg.depth}, maxChildren ${cfg.maxChildren} (${size} chars)`);
       return trimmed;
     }
   }
-  // Last resort: depth 2
-  const minimal = _trimSnapshotToDepth(snap, 0, 2);
-  console.log(`[truncate] Snapshot forced to depth 2 (${JSON.stringify(minimal).length} chars)`);
+  // Last resort: very shallow
+  const minimal = _trimSnapshotToDepth(snap, 0, 1, 5);
+  console.log(`[truncate] Snapshot forced to depth 1 (${JSON.stringify(minimal).length} chars)`);
   return minimal;
 }
 
@@ -6368,6 +6384,14 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
       );
     }
 
+    // Trim designSystem for generate — only textStyles are used by the prompt
+    const trimmedDesignSystem = {
+      textStyles: (designSystem.textStyles || []).slice(0, 12),
+      fillStyles: (designSystem.fillStyles || []).slice(0, 12),
+      components: [],
+      variables: [],
+    };
+
     // Call backend via UI iframe (parallel-safe)
     console.log(`[job ${job.id}] Calling backend /generate...`);
     let result: { snapshot: any };
@@ -6375,7 +6399,7 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
       result = await fetchViaUIForJob("/generate", {
         prompt,
         styleTokens,
-        designSystem,
+        designSystem: trimmedDesignSystem,
         selection: truncatedSelection,
         apiKey: _userApiKey,
         provider: _selectedProvider,
