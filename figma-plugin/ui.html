@@ -51,7 +51,7 @@
 
     textarea {
       width: 100%;
-      min-height: 72px;
+      min-height: 48px;
       flex: 1 1 auto;
       padding: 10px;
       font-family: var(--font);
@@ -137,6 +137,19 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
+      max-height: 160px;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+    .job-list::-webkit-scrollbar {
+      width: 4px;
+    }
+    .job-list::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .job-list::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 2px;
     }
     .job-list:empty {
       display: none;
@@ -144,12 +157,13 @@
     .job-item {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      padding: 8px 10px;
+      gap: 3px;
+      padding: 6px 10px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
       animation: menuFadeIn 0.15s ease;
+      flex-shrink: 0;
     }
     .job-header {
       display: flex;
