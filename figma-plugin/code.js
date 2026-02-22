@@ -4819,18 +4819,22 @@ RULES:
         components: [],
         variables: []
       };
+      const payloadToSend = {
+        prompt,
+        styleTokens,
+        designSystem: trimmedDesignSystem,
+        selection: truncatedSelection,
+        apiKey: _userApiKey,
+        provider: _selectedProvider,
+        model: _selectedModel
+      };
+      const payloadJson = JSON.stringify(payloadToSend);
+      console.log(`[job ${job.id}] PAYLOAD SIZE: ${payloadJson.length} chars (~${Math.round(payloadJson.length / 4)} tokens)`);
+      console.log(`[job ${job.id}] selection: ${JSON.stringify(truncatedSelection).length} chars, styleTokens: ${JSON.stringify(styleTokens).length} chars, designSystem: ${JSON.stringify(trimmedDesignSystem).length} chars`);
       console.log(`[job ${job.id}] Calling backend /generate...`);
       let result;
       try {
-        result = await fetchViaUIForJob("/generate", {
-          prompt,
-          styleTokens,
-          designSystem: trimmedDesignSystem,
-          selection: truncatedSelection,
-          apiKey: _userApiKey,
-          provider: _selectedProvider,
-          model: _selectedModel
-        }, job.id);
+        result = await fetchViaUIForJob("/generate", payloadToSend, job.id);
       } catch (err) {
         if (job.cancelled) {
           console.log(`[job ${job.id}] Fetch cancelled by user.`);

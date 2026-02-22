@@ -259,15 +259,52 @@ app.post("/generate", async (req: Request, res: Response) => {
     console.log(`[generate] styleTokens:`, JSON.stringify(styleTokens).slice(0, 1000));
     console.log(`[generate] designSystem textStyles:`, JSON.stringify(designSystem?.textStyles || []).slice(0, 500));
 
+    // Log incoming payload sizes to debug token budget issues
+    const selectionJson = JSON.stringify(selection || null);
+    const styleTokensJson = JSON.stringify(styleTokens || {});
+    const designSystemJson = JSON.stringify(designSystem || {});
+    console.log(`[generate] PAYLOAD SIZES — selection: ${selectionJson.length} chars, styleTokens: ${styleTokensJson.length} chars, designSystem: ${designSystemJson.length} chars, TOTAL: ${selectionJson.length + styleTokensJson.length + designSystemJson.length} chars`);
+
+    // Hard-truncate selection nodes if they're still too large
+    let safeSelection = selection || null;
+    if (selectionJson.length > 40000) {
+      console.warn(`[generate] Selection too large (${selectionJson.length} chars), truncating nodes...`);
+      safeSelection = { nodes: (selection?.nodes || []).map((n: any) => {
+        const nodeJson = JSON.stringify(n);
+        if (nodeJson.length > 30000) {
+          return JSON.parse(nodeJson.slice(0, 30000).replace(/,[^,]*$/, '') + '}');
+        }
+        return n;
+      }) };
+    }
+    // Hard-truncate designSystem components/variables
+    const safeDesignSystem = {
+      textStyles: (designSystem?.textStyles || []).slice(0, 12),
+      fillStyles: (designSystem?.fillStyles || []).slice(0, 12),
+      components: (designSystem?.components || []).slice(0, 20),
+      variables: (designSystem?.variables || []).slice(0, 20),
+    };
+    // Hard-truncate referenceSnapshots in styleTokens
+    const safeStyleTokens = { ...(styleTokens || {}) };
+    if (safeStyleTokens.referenceSnapshots?.length > 0) {
+      safeStyleTokens.referenceSnapshots = safeStyleTokens.referenceSnapshots.slice(0, 1).map((s: any) => {
+        const sJson = JSON.stringify(s);
+        if (sJson.length > 20000) {
+          return JSON.parse(sJson.slice(0, 20000).replace(/,[^,]*$/, '') + '}');
+        }
+        return s;
+      });
+    }
+
     // 1. Call LLM to generate a NodeSnapshot
     const snapshot = await callLLMGenerate(
       prompt,
-      styleTokens || {},
-      designSystem || { textStyles: [], fillStyles: [], components: [], variables: [] },
+      safeStyleTokens,
+      safeDesignSystem,
       apiKey,
       resolvedProvider,
       model,
-      selection || null
+      safeSelection
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));

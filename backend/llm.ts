@@ -276,6 +276,16 @@ export async function callLLMGenerate(
   selection?: any
 ): Promise<unknown> {
   const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection);
+  console.log(`[callLLMGenerate] System prompt: ${GENERATE_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
+
+  // Hard safety: if the user prompt exceeds ~500K chars (~125K tokens), truncate it
+  const MAX_USER_PROMPT_CHARS = 500000;
+  let safeUserPrompt = userPrompt;
+  if (userPrompt.length > MAX_USER_PROMPT_CHARS) {
+    console.warn(`[callLLMGenerate] User prompt too long (${userPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
+    safeUserPrompt = userPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
+  }
+
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
@@ -283,7 +293,7 @@ export async function callLLMGenerate(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, GENERATE_SYSTEM_PROMPT, userPrompt, resolvedModel, 16384, apiKey, abort);
+    raw = await callProvider(provider, GENERATE_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort);
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }
