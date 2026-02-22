@@ -185,7 +185,31 @@ app.post("/plan", async (req: Request, res: Response) => {
       return;
     }
 
-    console.log(`[plan] provider=${resolvedProvider}, model=${model || "default"}, intent="${intent}", nodes=${selection.nodes.length}`);
+    // --- Safety: truncate selection nodes to prevent token overflow ---
+    const selJson = JSON.stringify(selection.nodes);
+    console.log(`[plan] provider=${resolvedProvider}, model=${model || "default"}, intent="${intent}", nodes=${selection.nodes.length}, selectionSize=${selJson.length}`);
+    if (selJson.length > 80000) {
+      console.warn(`[plan] Selection too large (${selJson.length} chars), truncating nodes`);
+      // Keep first 80K chars worth of nodes
+      let accumulated = 0;
+      const trimmedNodes: any[] = [];
+      for (const node of selection.nodes) {
+        const nodeJson = JSON.stringify(node);
+        if (accumulated + nodeJson.length > 80000 && trimmedNodes.length > 0) break;
+        trimmedNodes.push(node);
+        accumulated += nodeJson.length;
+      }
+      selection.nodes = trimmedNodes;
+      console.log(`[plan] Trimmed to ${trimmedNodes.length} nodes, ~${accumulated} chars`);
+    }
+    if (designSystem) {
+      if (Array.isArray(designSystem.components) && designSystem.components.length > 12) {
+        designSystem.components = designSystem.components.slice(0, 12);
+      }
+      if (Array.isArray(designSystem.variables) && designSystem.variables.length > 12) {
+        designSystem.variables = designSystem.variables.slice(0, 12);
+      }
+    }
 
     // 1. Call LLM
     const rawBatch = await callLLM(intent, selection, designSystem, apiKey, resolvedProvider, model);

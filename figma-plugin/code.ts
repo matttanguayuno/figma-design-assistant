@@ -6190,7 +6190,9 @@ async function runEditJob(job: GenerateJobState, intent: string, selectionSnapsh
 
     const payload: BackendPayload = {
       intent,
-      selection: selectionSnapshot,
+      selection: {
+        nodes: selectionSnapshot.nodes.map(n => truncateSnapshotForGenerate(n, 40000))
+      },
       designSystem,
     };
 
@@ -6932,9 +6934,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       case "run": {
         const intentText = ((msg as any).intent || "");
         const isGenerateIntent = figma.currentPage.selection.length === 0 ||
-          /\b(add|create|generate|make|build|design)\b.+\b(frame|screen|page|view|layout|mobile|desktop)\b/i.test(intentText) ||
-          /\b(new|mobile|desktop)\b.+\b(frame|screen|page|view|layout)\b/i.test(intentText) ||
-          /\b(frame|screen|page)\b.+\bfor\b/i.test(intentText);
+          /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) ||
+          /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) ||
+          /\b(frames?|screens?|pages?)\b.+\bfor\b/i.test(intentText) ||
+          /\b(dark|light)\s+mode\s+(variant|version|copy|of)\b/i.test(intentText) ||
+          /\bvariant\b.+\b(of|for)\b/i.test(intentText);
 
         // Create a job for either flow
         const jobId = ++_nextJobId;

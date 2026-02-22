@@ -192,25 +192,44 @@ export function buildUserPrompt(
   selection: SelectionSnapshot,
   designSystem: DesignSystemSnapshot
 ): string {
-  return `## User Intent
+  // Use compact JSON and cap sizes to avoid token overflow
+  let nodesJson = JSON.stringify(selection.nodes);
+  if (nodesJson.length > 80000) {
+    console.warn(`[buildUserPrompt] nodes JSON too large (${nodesJson.length}), truncating to 80K chars`);
+    nodesJson = nodesJson.slice(0, 80000) + '… (truncated)';
+  }
+
+  let textStylesJson = JSON.stringify(designSystem.textStyles);
+  let fillStylesJson = JSON.stringify(designSystem.fillStyles);
+  let componentsJson = JSON.stringify(designSystem.components);
+  let variablesJson = JSON.stringify(designSystem.variables);
+
+  // Cap design system sections
+  if (componentsJson.length > 10000) componentsJson = componentsJson.slice(0, 10000) + '… (truncated)';
+  if (variablesJson.length > 10000) variablesJson = variablesJson.slice(0, 10000) + '… (truncated)';
+
+  const prompt = `## User Intent
 ${intent}
 
 ## Selected Nodes
-${JSON.stringify(selection.nodes, null, 2)}
+${nodesJson}
 
 ## Design System – Text Styles
-${JSON.stringify(designSystem.textStyles, null, 2)}
+${textStylesJson}
 
 ## Design System – Fill Styles
-${JSON.stringify(designSystem.fillStyles, null, 2)}
+${fillStylesJson}
 
 ## Design System – Components
-${JSON.stringify(designSystem.components, null, 2)}
+${componentsJson}
 
 ## Design System – Variables
-${JSON.stringify(designSystem.variables, null, 2)}
+${variablesJson}
 
 Return the operation batch JSON now.`;
+
+  console.log(`[buildUserPrompt] total prompt size: ${prompt.length} chars (~${Math.round(prompt.length / 4)} tokens)`);
+  return prompt;
 }
 
 // ── Generation System Prompt ────────────────────────────────────────

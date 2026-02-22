@@ -4649,7 +4649,9 @@ RULES:
       sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
       const payload = {
         intent,
-        selection: selectionSnapshot,
+        selection: {
+          nodes: selectionSnapshot.nodes.map((n) => truncateSnapshotForGenerate(n, 4e4))
+        },
         designSystem
       };
       console.log(`[edit-job ${job.id}] Calling backend /plan...`);
@@ -5273,7 +5275,7 @@ RULES:
         // ── Run (plan + apply in one step) ─────────────────────
         case "run": {
           const intentText = msg.intent || "";
-          const isGenerateIntent = figma.currentPage.selection.length === 0 || /\b(add|create|generate|make|build|design)\b.+\b(frame|screen|page|view|layout|mobile|desktop)\b/i.test(intentText) || /\b(new|mobile|desktop)\b.+\b(frame|screen|page|view|layout)\b/i.test(intentText) || /\b(frame|screen|page)\b.+\bfor\b/i.test(intentText);
+          const isGenerateIntent = figma.currentPage.selection.length === 0 || /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) || /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) || /\b(frames?|screens?|pages?)\b.+\bfor\b/i.test(intentText) || /\b(dark|light)\s+mode\s+(variant|version|copy|of)\b/i.test(intentText) || /\bvariant\b.+\b(of|for)\b/i.test(intentText);
           const jobId = ++_nextJobId;
           const job = { id: jobId, cancelled: false };
           _activeJobs.set(jobId, job);
