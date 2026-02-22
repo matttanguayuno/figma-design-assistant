@@ -1,5 +1,37 @@
 "use strict";
 (() => {
+  var __defProp = Object.defineProperty;
+  var __defProps = Object.defineProperties;
+  var __getOwnPropDescs = Object.getOwnPropertyDescriptors;
+  var __getOwnPropSymbols = Object.getOwnPropertySymbols;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __propIsEnum = Object.prototype.propertyIsEnumerable;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __spreadValues = (a, b) => {
+    for (var prop in b || (b = {}))
+      if (__hasOwnProp.call(b, prop))
+        __defNormalProp(a, prop, b[prop]);
+    if (__getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(b)) {
+        if (__propIsEnum.call(b, prop))
+          __defNormalProp(a, prop, b[prop]);
+      }
+    return a;
+  };
+  var __spreadProps = (a, b) => __defProps(a, __getOwnPropDescs(b));
+  var __objRest = (source, exclude) => {
+    var target = {};
+    for (var prop in source)
+      if (__hasOwnProp.call(source, prop) && exclude.indexOf(prop) < 0)
+        target[prop] = source[prop];
+    if (source != null && __getOwnPropSymbols)
+      for (var prop of __getOwnPropSymbols(source)) {
+        if (exclude.indexOf(prop) < 0 && __propIsEnum.call(source, prop))
+          target[prop] = source[prop];
+      }
+    return target;
+  };
+
   // figma-plugin/code.ts
   var CHANGE_LOG_FRAME_NAME = "AI Change Log";
   var lastRevertState = null;
@@ -374,9 +406,9 @@
       fontFamilies: [...fontFamilies],
       spacings: [...spacings].sort((a, b) => a - b),
       paddings: [...paddings].sort((a, b) => a - b),
-      buttonStyles: buttonStyles.map((b) => ({ ...b })),
+      buttonStyles: buttonStyles.map((b) => __spreadValues({}, b)),
       // preserve _sourceFrame
-      inputStyles: inputStyles.map((i) => ({ ...i })),
+      inputStyles: inputStyles.map((i) => __spreadValues({}, i)),
       // preserve _sourceFrame
       rootFrameLayouts,
       designFramesMeta
@@ -553,8 +585,14 @@
     };
     const sortedButtons = [...rawButtonStyles].sort(sortBySource);
     const sortedInputs = [...rawInputStyles].sort(sortBySource);
-    const finalButtonStyles = sortedButtons.slice(0, 3).map(({ _sourceFrame, ...rest }) => rest);
-    const finalInputStyles = sortedInputs.slice(0, 3).map(({ _sourceFrame, ...rest }) => rest);
+    const finalButtonStyles = sortedButtons.slice(0, 3).map((_a) => {
+      var _b = _a, { _sourceFrame } = _b, rest = __objRest(_b, ["_sourceFrame"]);
+      return rest;
+    });
+    const finalInputStyles = sortedInputs.slice(0, 3).map((_c) => {
+      var _d = _c, { _sourceFrame } = _d, rest = __objRest(_d, ["_sourceFrame"]);
+      return rest;
+    });
     console.log("[extractStyleTokens] Final buttons (ref=" + refFrameName + "):", JSON.stringify(finalButtonStyles));
     console.log("[extractStyleTokens] Final inputs (ref=" + refFrameName + "):", JSON.stringify(finalInputStyles));
     return {
@@ -1227,6 +1265,7 @@
   }
   var _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
   async function createNodeFromSnapshot(snap, parent) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     let node;
     const parentIsAutoLayout = "layoutMode" in parent && (parent.layoutMode === "HORIZONTAL" || parent.layoutMode === "VERTICAL");
     if (snap.type === "TEXT") {
@@ -1321,14 +1360,14 @@
       _importStats.texts++;
     } else if (snap.type === "ELLIPSE") {
       const ellipse = figma.createEllipse();
-      ellipse.resize(snap.width ?? 100, snap.height ?? 100);
+      ellipse.resize((_a = snap.width) != null ? _a : 100, (_b = snap.height) != null ? _b : 100);
       if (snap.imageData) {
         try {
           const bytes = base64ToUint8(snap.imageData);
           const img = figma.createImage(bytes);
           ellipse.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: img.hash }];
           _importStats.images++;
-        } catch (_e) {
+        } catch (_e2) {
           if (snap.fillColor) ellipse.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
           else ellipse.fills = [];
         }
@@ -1341,7 +1380,7 @@
       _importStats.frames++;
     } else if (snap.type === "RECTANGLE") {
       const rect = figma.createRectangle();
-      rect.resize(snap.width ?? 100, snap.height ?? 100);
+      rect.resize((_c = snap.width) != null ? _c : 100, (_d = snap.height) != null ? _d : 100);
       if (snap.cornerRadius != null && snap.cornerRadius > 0) rect.cornerRadius = snap.cornerRadius;
       if (snap.imageData) {
         try {
@@ -1349,7 +1388,7 @@
           const img = figma.createImage(bytes);
           rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: img.hash }];
           _importStats.images++;
-        } catch (_e) {
+        } catch (_e2) {
           if (snap.fillColor) rect.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
           else rect.fills = [];
         }
@@ -1362,14 +1401,14 @@
       _importStats.frames++;
     } else if (snap.imageData && (!snap.children || snap.children.length === 0)) {
       const frame = figma.createFrame();
-      frame.resize(snap.width ?? 100, snap.height ?? 100);
+      frame.resize((_e = snap.width) != null ? _e : 100, (_f = snap.height) != null ? _f : 100);
       frame.fills = [];
       try {
         const bytes = base64ToUint8(snap.imageData);
         const img = figma.createImage(bytes);
         frame.fills = [{ type: "IMAGE", scaleMode: "FIT", imageHash: img.hash }];
         _importStats.images++;
-      } catch (_e) {
+      } catch (_e2) {
         if (snap.fillColor) frame.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
       }
       if (snap.cornerRadius != null && snap.cornerRadius > 0) frame.cornerRadius = snap.cornerRadius;
@@ -1379,8 +1418,8 @@
     } else {
       const frame = figma.createFrame();
       frame.resize(
-        snap.width ?? 100,
-        snap.height ?? 100
+        (_g = snap.width) != null ? _g : 100,
+        (_h = snap.height) != null ? _h : 100
       );
       if (snap.layoutMode === "HORIZONTAL" || snap.layoutMode === "VERTICAL") {
         frame.layoutMode = snap.layoutMode;
@@ -1413,13 +1452,13 @@
       if (snap.strokeColor) {
         try {
           frame.strokes = [{ type: "SOLID", color: hexToRgb(snap.strokeColor) }];
-          frame.strokeWeight = snap.strokeWeight ?? 1;
+          frame.strokeWeight = (_i = snap.strokeWeight) != null ? _i : 1;
           frame.strokeAlign = "INSIDE";
           if (snap.strokeBottomWeight != null) {
-            frame.strokeTopWeight = snap.strokeTopWeight ?? 0;
-            frame.strokeRightWeight = snap.strokeRightWeight ?? 0;
+            frame.strokeTopWeight = (_j = snap.strokeTopWeight) != null ? _j : 0;
+            frame.strokeRightWeight = (_k = snap.strokeRightWeight) != null ? _k : 0;
             frame.strokeBottomWeight = snap.strokeBottomWeight;
-            frame.strokeLeftWeight = snap.strokeLeftWeight ?? 0;
+            frame.strokeLeftWeight = (_l = snap.strokeLeftWeight) != null ? _l : 0;
           }
         } catch (_) {
         }
@@ -1430,7 +1469,7 @@
           const img = figma.createImage(bytes);
           frame.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: img.hash }];
           _importStats.images++;
-        } catch (_e) {
+        } catch (_e2) {
           if (snap.fillColor) {
             frame.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
           } else {
@@ -1472,7 +1511,7 @@
           eff.blendMode = e.blendMode || "NORMAL";
           return eff;
         });
-      } catch (_e) {
+      } catch (_e2) {
       }
     }
     parent.appendChild(node);
@@ -1486,13 +1525,13 @@
       if (sizing) {
         try {
           node.layoutSizingHorizontal = sizing;
-        } catch (_e) {
+        } catch (_e2) {
         }
       }
       if (sizingV) {
         try {
           node.layoutSizingVertical = sizingV;
-        } catch (_e) {
+        } catch (_e2) {
         }
       }
     }
@@ -2202,6 +2241,7 @@
     }
   }
   function applyResizeNode(op) {
+    var _a, _b;
     const node = figma.getNodeById(op.nodeId);
     if (!node) {
       throw new Error(`Node ${op.nodeId} not found`);
@@ -2213,8 +2253,8 @@
     const r = resizable;
     const oldW = resizable.width;
     const oldH = resizable.height;
-    const newW = op.width ?? oldW;
-    const newH = op.height ?? oldH;
+    const newW = (_a = op.width) != null ? _a : oldW;
+    const newH = (_b = op.height) != null ? _b : oldH;
     if (_skipResizePropagation) {
       console.log(`[resize] Refinement: "${node.name}" ${oldW}x${oldH} \u2192 ${newW}x${newH}`);
       if ("layoutSizingHorizontal" in resizable) {
@@ -2227,11 +2267,11 @@
     console.log(`[resize] Node ${op.nodeId} type=${node.type} name="${node.name}" old=${oldW}x${oldH} new=${newW}x${newH}`);
     if ("absoluteBoundingBox" in resizable) {
       const bb = r.absoluteBoundingBox;
-      console.log(`[resize] BEFORE absoluteBoundingBox: x=${bb?.x} y=${bb?.y} w=${bb?.width} h=${bb?.height}`);
+      console.log(`[resize] BEFORE absoluteBoundingBox: x=${bb == null ? void 0 : bb.x} y=${bb == null ? void 0 : bb.y} w=${bb == null ? void 0 : bb.width} h=${bb == null ? void 0 : bb.height}`);
     }
     if ("absoluteRenderBounds" in resizable) {
       const rb = r.absoluteRenderBounds;
-      console.log(`[resize] BEFORE absoluteRenderBounds: x=${rb?.x} y=${rb?.y} w=${rb?.width} h=${rb?.height}`);
+      console.log(`[resize] BEFORE absoluteRenderBounds: x=${rb == null ? void 0 : rb.x} y=${rb == null ? void 0 : rb.y} w=${rb == null ? void 0 : rb.width} h=${rb == null ? void 0 : rb.height}`);
     }
     console.log(`[resize] visible=${r.visible} opacity=${r.opacity} clipsContent=${r.clipsContent}`);
     if ("fills" in resizable) {
@@ -2809,6 +2849,7 @@
     console.log(`[setLayoutMode] Set "${frame.name}" layoutMode to ${op.layoutMode}${op.wrap ? " (wrap)" : ""}`);
   }
   function applySetLayoutProps(op) {
+    var _a, _b, _c, _d;
     const node = figma.getNodeById(op.nodeId);
     if (!node) {
       throw new Error(`Node ${op.nodeId} not found`);
@@ -2827,13 +2868,14 @@
     }
     const changes = [];
     if (op.paddingTop !== void 0 || op.paddingRight !== void 0 || op.paddingBottom !== void 0 || op.paddingLeft !== void 0) {
-      changes.push(`padding: ${op.paddingTop ?? frame.paddingTop}/${op.paddingRight ?? frame.paddingRight}/${op.paddingBottom ?? frame.paddingBottom}/${op.paddingLeft ?? frame.paddingLeft}`);
+      changes.push(`padding: ${(_a = op.paddingTop) != null ? _a : frame.paddingTop}/${(_b = op.paddingRight) != null ? _b : frame.paddingRight}/${(_c = op.paddingBottom) != null ? _c : frame.paddingBottom}/${(_d = op.paddingLeft) != null ? _d : frame.paddingLeft}`);
     }
     if (op.itemSpacing !== void 0) changes.push(`itemSpacing: ${op.itemSpacing}`);
     if (op.counterAxisSpacing !== void 0) changes.push(`counterAxisSpacing: ${op.counterAxisSpacing}`);
     console.log(`[setLayoutProps] Set "${frame.name}" ${changes.join(", ")}`);
   }
   function applySetSizeMode(op) {
+    var _a, _b;
     const node = figma.getNodeById(op.nodeId);
     if (!node) {
       throw new Error(`Node ${op.nodeId} not found`);
@@ -2859,7 +2901,7 @@
         frame.layoutSizingVertical = op.vertical;
       }
     }
-    console.log(`[setSizeMode] Set "${frame.name}" sizing: H=${op.horizontal ?? "unchanged"}, V=${op.vertical ?? "unchanged"}`);
+    console.log(`[setSizeMode] Set "${frame.name}" sizing: H=${(_a = op.horizontal) != null ? _a : "unchanged"}, V=${(_b = op.vertical) != null ? _b : "unchanged"}`);
   }
   function hexToRgb01(hex) {
     const h = hex.replace("#", "");
@@ -3348,7 +3390,7 @@
       console.log(`[headerMerge] No header elements found to merge`);
       return;
     }
-    const searchPref = prefs?.searchPlacement || "auto";
+    const searchPref = (prefs == null ? void 0 : prefs.searchPlacement) || "auto";
     console.log(`[headerMerge] Search placement preference: "${searchPref}"`);
     let searchAdded = false;
     for (const searchSection of searchSections) {
@@ -4451,8 +4493,9 @@ IMPORTANT: To change text color, use SET_FILL_COLOR on the TEXT node with the de
     }
   }
   function buildRefinementIntent(sectionName, snapshot, oldW, oldH, siblingContext) {
-    const newW = snapshot.width ?? oldW;
-    const newH = snapshot.height ?? oldH;
+    var _a, _b;
+    const newW = (_a = snapshot.width) != null ? _a : oldW;
+    const newH = (_b = snapshot.height) != null ? _b : oldH;
     const extraW = newW - oldW;
     const extraH = newH - oldH;
     return `The section "${sectionName}" (id: ${snapshot.id}) was just resized from ${oldW}x${oldH} \u2192 ${newW}x${newH} (+${extraW}px wide, +${extraH}px tall).
@@ -4552,6 +4595,7 @@ RULES:
     }
   }, 120);
   async function runEditJob(job, intent, selectionSnapshot) {
+    var _a;
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
       console.log(`[edit-job ${job.id}] Extracting design system...`);
@@ -4570,7 +4614,7 @@ RULES:
       console.log(`[edit-job ${job.id}] Calling backend /plan...`);
       let batch;
       try {
-        batch = await fetchViaUIForJob("/plan", { ...payload, apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }, job.id);
+        batch = await fetchViaUIForJob("/plan", __spreadProps(__spreadValues({}, payload), { apiKey: _userApiKey, provider: _selectedProvider, model: _selectedModel }), job.id);
       } catch (err) {
         if (job.cancelled) {
           console.log(`[edit-job ${job.id}] Cancelled during fetch.`);
@@ -4619,7 +4663,7 @@ RULES:
           if (!targetNode || !("children" in targetNode)) continue;
           const kids = targetNode.children;
           if (kids.length === 0) continue;
-          const pre = preResizeDims[rop.nodeId] ?? {
+          const pre = (_a = preResizeDims[rop.nodeId]) != null ? _a : {
             w: targetNode.width,
             h: targetNode.height
           };
@@ -5066,6 +5110,7 @@ RULES:
         case "audit-states": {
           try {
             let walkForStateAudit2 = function(node) {
+              var _a;
               if (items.length >= MAX_ITEMS) return;
               if (node.type === "COMPONENT_SET") {
                 const variantNames = node.children.map((c) => c.name);
@@ -5078,7 +5123,7 @@ RULES:
                 return;
               }
               if (node.type === "COMPONENT") {
-                if (node.parent?.type !== "COMPONENT_SET") {
+                if (((_a = node.parent) == null ? void 0 : _a.type) !== "COMPONENT_SET") {
                   items.push({
                     nodeId: node.id,
                     name: node.name,
@@ -5140,7 +5185,10 @@ RULES:
             const result = await fetchViaUI("/audit-states", stateBody);
             if (result && result.items) {
               sendToUI({ type: "state-audit-results", items: result.items });
-              const missingCount = result.items.reduce((sum, it) => sum + (it.missingStates?.length || 0), 0);
+              const missingCount = result.items.reduce((sum, it) => {
+                var _a;
+                return sum + (((_a = it.missingStates) == null ? void 0 : _a.length) || 0);
+              }, 0);
               figma.notify(`State audit: ${missingCount} missing state(s) found across ${result.items.length} item(s).`, { timeout: 4e3 });
             } else {
               sendToUI({ type: "state-audit-error", error: "No results returned from analysis." });
