@@ -935,6 +935,23 @@
       cursor: default;
       filter: none;
     }
+    .btn-cancel-audit {
+      flex: none;
+      padding: 4px 10px;
+      font-size: 10px;
+      font-weight: 600;
+      border-radius: 4px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: none;
+    }
+    .btn-cancel-audit:hover {
+      color: var(--danger);
+      border-color: var(--danger);
+      background: rgba(214, 48, 49, 0.1);
+    }
     .audit-navigate {
       flex-shrink: 0;
       color: var(--text-muted);
@@ -1237,6 +1254,9 @@
     <div class="audit-header">
       <span class="audit-title">Accessibility Audit</span>
       <div class="audit-header-actions">
+        <!-- Shown only during progress -->
+        <button id="btn-cancel-a11y-audit" class="btn-cancel-audit" title="Cancel audit">Cancel</button>
+        <!-- Shown only after results -->
         <button id="btn-fix-all" class="btn-fix-all" title="Auto-fix all deterministic issues" style="display:none;">
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M2 9l4 4 8-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Fix All
@@ -1257,8 +1277,8 @@
             </button>
           </div>
         </div>
-        <button id="btn-clear-audit" class="btn-clear-audit" title="Clear badges &amp; close">Clear</button>
-        <button id="btn-close-audit" class="btn-close-audit" title="Close panel">
+        <button id="btn-clear-audit" class="btn-clear-audit" title="Clear badges &amp; close" style="display:none;">Clear</button>
+        <button id="btn-close-audit" class="btn-close-audit" title="Close panel" style="display:none;">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
       </div>
@@ -1284,6 +1304,9 @@
     <div class="audit-header">
       <span class="audit-title">UI State Audit</span>
       <div class="audit-header-actions">
+        <!-- Shown only during progress -->
+        <button id="btn-cancel-state-audit" class="btn-cancel-audit" title="Cancel audit">Cancel</button>
+        <!-- Shown only after results -->
         <div class="export-wrapper">
           <button id="btn-export-state" class="btn-export" title="Export results">
             Export
@@ -1300,7 +1323,7 @@
             </button>
           </div>
         </div>
-        <button id="btn-close-state-audit" class="btn-close-audit" title="Close panel">
+        <button id="btn-close-state-audit" class="btn-close-audit" title="Close panel" style="display:none;">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
       </div>
@@ -1414,10 +1437,37 @@
     const btnExportState = document.getElementById("btn-export-state");
     const exportMenuState = document.getElementById("export-menu-state");
     const btnFixAll = document.getElementById("btn-fix-all");
+    const btnCancelA11yAudit = document.getElementById("btn-cancel-a11y-audit");
+    const btnCancelStateAudit = document.getElementById("btn-cancel-state-audit");
 
     // Cached audit results for export
     var _lastA11yFindings = null;
     var _lastStateItems = null;
+
+    // ── Audit panel mode helpers (progress vs results) ──────────
+    function showA11yProgressMode() {
+      btnCancelA11yAudit.style.display = "inline-flex";
+      btnFixAll.style.display = "none";
+      btnExportA11y.style.display = "none";
+      btnClearAudit.style.display = "none";
+      btnCloseAudit.style.display = "none";
+    }
+    function showA11yResultsMode() {
+      btnCancelA11yAudit.style.display = "none";
+      btnClearAudit.style.display = "inline-flex";
+      btnCloseAudit.style.display = "inline-flex";
+      // Fix All and Export are conditionally shown by the results handler
+    }
+    function showStateProgressMode() {
+      btnCancelStateAudit.style.display = "inline-flex";
+      btnExportState.style.display = "none";
+      btnCloseStateAudit.style.display = "none";
+    }
+    function showStateResultsMode() {
+      btnCancelStateAudit.style.display = "none";
+      btnCloseStateAudit.style.display = "inline-flex";
+      // Export is conditionally shown by the results handler
+    }
 
     // ── Provider / Model configuration ───────────────────────────
     const PROVIDER_MODELS = {
@@ -1812,6 +1862,7 @@
       auditPanel.style.display = "flex";
       auditSummary.textContent = "";
       auditFindings.innerHTML = "";
+      showA11yProgressMode();
       startAuditProgress("all"); // scope will be corrected by plugin response
       setStatus("Running accessibility audit…");
       postToPlugin({ type: "audit-a11y" });
@@ -1831,6 +1882,7 @@
       stateAuditPanel.style.display = "flex";
       stateAuditSummary.textContent = "";
       stateAuditFindings.innerHTML = "";
+      showStateProgressMode();
       startStateAuditProgress("all");
       setStatus("Running UI state audit…");
       postToPlugin({ type: "audit-states" });
@@ -1859,6 +1911,21 @@
       btnFixAll.disabled = true;
       btnFixAll.textContent = "Fixing…";
       postToPlugin({ type: "fix-all-auto", findings: _lastA11yFindings });
+    });
+
+    // ── Audit panel: Cancel (during progress) ───────────────────
+    btnCancelA11yAudit.addEventListener("click", () => {
+      stopAuditProgress();
+      auditPanel.style.display = "none";
+      postToPlugin({ type: "clear-audit" });
+      setStatus("Audit cancelled.");
+    });
+
+    // ── State Audit panel: Cancel (during progress) ─────────────
+    btnCancelStateAudit.addEventListener("click", () => {
+      stopStateAuditProgress();
+      stateAuditPanel.style.display = "none";
+      setStatus("State audit cancelled.");
     });
 
     // ── Audit Progress Bar Logic ─────────────────────────────────────
@@ -2827,6 +2894,7 @@
         }
         case "audit-results": {
           advanceAuditPhase("done");
+          showA11yResultsMode();
           auditPanel.style.display = "flex";
           _lastA11yFindings = msg.findings || [];
           btnExportA11y.style.display = _lastA11yFindings.length > 0 ? "flex" : "none";
@@ -2837,6 +2905,7 @@
         }
         case "audit-error": {
           stopAuditProgress();
+          showA11yResultsMode();
           setStatus(msg.error, "error");
           break;
         }
@@ -2915,6 +2984,7 @@
         }
         case "state-audit-results": {
           advanceStatePhase("done");
+          showStateResultsMode();
           stateAuditPanel.style.display = "flex";
           _lastStateItems = msg.items || [];
           btnExportState.style.display = _lastStateItems.length > 0 ? "flex" : "none";
@@ -2926,6 +2996,7 @@
         }
         case "state-audit-error": {
           stopStateAuditProgress();
+          showStateResultsMode();
           setStatus(msg.error, "error");
           break;
         }
