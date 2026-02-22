@@ -833,23 +833,29 @@
       cursor: pointer;
       transition: background 0.12s;
       display: flex;
-      align-items: flex-start;
-      gap: 8px;
+      flex-direction: column;
+      gap: 2px;
     }
     .audit-finding:hover {
       background: rgba(255,255,255,0.04);
     }
+    .audit-finding-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
     .audit-finding-body {
-      flex: 1;
       min-width: 0;
     }
     .audit-node-name {
+      flex: 1;
       font-size: 10px;
       font-weight: 600;
       color: var(--primary);
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      min-width: 0;
     }
     .audit-message {
       font-size: 11px;
@@ -2301,18 +2307,18 @@
           el.setAttribute("data-node-id", f.nodeId);
           el.setAttribute("data-check-type", f.checkType);
 
-          // Click on body area → select node; click on fix button → fix
-          var bodyEl = document.createElement("div");
-          bodyEl.className = "audit-finding-body";
-          bodyEl.style.cursor = "pointer";
-          bodyEl.innerHTML =
-            '<div class="audit-node-name">' + escapeHtml(f.nodeName) + '</div>' +
-            '<div class="audit-message">' + escapeHtml(f.message) + '</div>' +
-            (f.suggestion ? '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>' : '');
-          bodyEl.addEventListener("click", function() {
+          // Header row: node name + fix button + chevron
+          var headerRow = document.createElement("div");
+          headerRow.className = "audit-finding-header";
+          headerRow.style.cursor = "pointer";
+          headerRow.addEventListener("click", function() {
             postToPlugin({ type: "select-node", nodeId: f.nodeId });
           });
-          el.appendChild(bodyEl);
+
+          var nameEl = document.createElement("div");
+          nameEl.className = "audit-node-name";
+          nameEl.textContent = f.nodeName;
+          headerRow.appendChild(nameEl);
 
           // Fix button (only for auto and llm)
           if (f.fixType === "auto" || f.fixType === "llm") {
@@ -2329,23 +2335,38 @@
               fixBtn.textContent = "Fixing…";
               postToPlugin({ type: "fix-finding", finding: f });
             });
-            el.appendChild(fixBtn);
+            headerRow.appendChild(fixBtn);
           } else if (f.fixType === "manual") {
             var manualTag = document.createElement("span");
             manualTag.style.cssText = "flex-shrink:0;font-size:9px;color:var(--text-muted);padding:3px 6px;";
             manualTag.textContent = "Manual";
             manualTag.title = "Requires manual design decision";
-            el.appendChild(manualTag);
+            headerRow.appendChild(manualTag);
           }
 
           // Navigate chevron
           var navSvg = document.createElement("span");
           navSvg.innerHTML = '<svg class="audit-navigate" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
           navSvg.style.cursor = "pointer";
-          navSvg.addEventListener("click", function() {
+          navSvg.addEventListener("click", function(e) {
+            e.stopPropagation();
             postToPlugin({ type: "select-node", nodeId: f.nodeId });
           });
-          el.appendChild(navSvg);
+          headerRow.appendChild(navSvg);
+
+          el.appendChild(headerRow);
+
+          // Detail body: message + suggestion (full width)
+          var bodyEl = document.createElement("div");
+          bodyEl.className = "audit-finding-body";
+          bodyEl.style.cursor = "pointer";
+          bodyEl.innerHTML =
+            '<div class="audit-message">' + escapeHtml(f.message) + '</div>' +
+            (f.suggestion ? '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>' : '');
+          bodyEl.addEventListener("click", function() {
+            postToPlugin({ type: "select-node", nodeId: f.nodeId });
+          });
+          el.appendChild(bodyEl);
 
           itemsEl.appendChild(el);
         });
