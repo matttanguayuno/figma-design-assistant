@@ -4885,10 +4885,62 @@ RULES:
       _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
       let placeX;
       let placeY;
+      const frameW = snapshot.width || 390;
+      const frameH = snapshot.height || 800;
+      const GAP = 100;
       if (sourcePosition) {
-        placeX = sourcePosition.x + sourcePosition.width + 100;
-        placeY = sourcePosition.y;
-        console.log(`[job ${job.id}] Placing next to source "${sourcePosition.name}" at x:${placeX}, y:${placeY}`);
+        let hasCollision2 = function(cx, cy, cw, ch) {
+          for (const ob of obstacles) {
+            if (cx < ob.x + ob.w && cx + cw > ob.x && cy < ob.y + ob.h && cy + ch > ob.y) {
+              return true;
+            }
+          }
+          return false;
+        };
+        var hasCollision = hasCollision2;
+        const candidates = [
+          // 1. Right of source
+          { x: sourcePosition.x + sourcePosition.width + GAP, y: sourcePosition.y },
+          // 2. Below source
+          { x: sourcePosition.x, y: sourcePosition.y + sourcePosition.height + GAP },
+          // 3. Further right (past 2x source width gap)
+          { x: sourcePosition.x + sourcePosition.width + GAP + frameW + GAP, y: sourcePosition.y },
+          // 4. Below-right
+          { x: sourcePosition.x + sourcePosition.width + GAP, y: sourcePosition.y + sourcePosition.height + GAP },
+          // 5. Far right (3x gap)
+          { x: sourcePosition.x + sourcePosition.width + GAP + (frameW + GAP) * 2, y: sourcePosition.y }
+        ];
+        const obstacles = [];
+        for (const child of figma.currentPage.children) {
+          obstacles.push({
+            x: child.x,
+            y: child.y,
+            w: child.width,
+            h: child.height
+          });
+        }
+        let placed = false;
+        for (const c of candidates) {
+          if (!hasCollision2(c.x, c.y, frameW, frameH)) {
+            placeX = c.x;
+            placeY = c.y;
+            placed = true;
+            console.log(`[job ${job.id}] Found empty spot near "${sourcePosition.name}" at x:${placeX}, y:${placeY}`);
+            break;
+          }
+        }
+        if (!placed) {
+          let maxBottom = sourcePosition.y + sourcePosition.height;
+          for (const ob of obstacles) {
+            if (ob.x < sourcePosition.x + sourcePosition.width + GAP + frameW && ob.x + ob.w > sourcePosition.x) {
+              const bottom = ob.y + ob.h;
+              if (bottom > maxBottom) maxBottom = bottom;
+            }
+          }
+          placeX = sourcePosition.x;
+          placeY = maxBottom + GAP;
+          console.log(`[job ${job.id}] Fallback placement below everything at x:${placeX}, y:${placeY}`);
+        }
       } else if (_nextPlaceX !== null) {
         placeX = _nextPlaceX;
         placeY = 0;

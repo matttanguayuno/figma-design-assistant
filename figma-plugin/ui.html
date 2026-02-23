@@ -137,9 +137,8 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
-      max-height: 160px;
-      overflow-y: auto;
       flex-shrink: 0;
+      margin-top: 8px;
     }
     .job-list::-webkit-scrollbar {
       width: 4px;
@@ -1152,7 +1151,7 @@
     <div class="loading-text">Initializing…</div>
   </div>
 
-  <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+  <div style="flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;">
     <div class="label-row">
       <label for="intent">Describe changes</label>
       <div class="menu-wrapper">
@@ -1216,6 +1215,8 @@
       id="intent"
       placeholder="e.g. Add a login screen, make the header larger, change background to blue…"
     ></textarea>
+    <!-- Parallel generate job list (inside scrollable area) -->
+    <div id="job-list" class="job-list"></div>
   </div>
 
   <div class="btn-row">
@@ -1266,8 +1267,7 @@
     </div>
   </div>
 
-  <!-- Parallel generate job list -->
-  <div id="job-list" class="job-list"></div>
+  <!-- job-list moved inside scrollable area above -->
 
   <!-- Accessibility audit results panel -->
   <div id="audit-panel" class="audit-panel" style="display:none;">
