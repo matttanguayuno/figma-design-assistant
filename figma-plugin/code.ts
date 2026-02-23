@@ -777,11 +777,60 @@ function _buildFinalTokens(
 }
 
 // ── Snapshot truncation for generate prompts ───────────────────────
-// Progressively strip children at deeper levels and limit width
-// until the JSON fits within a character budget.
-const GENERATE_SNAPSHOT_MAX_CHARS = 30000;
+// Two-tier approach: full detail for top levels, skeleton for deeper levels.
+// This preserves the complete tree structure so the LLM can produce faithful
+// variants, while keeping payload size manageable.
+const GENERATE_SNAPSHOT_MAX_CHARS = 50000;
 const MAX_CHILDREN_PER_NODE = 20;
 
+// Skeleton keys: minimal set of properties to preserve at deep levels
+const SKELETON_KEYS = new Set([
+  "name", "type", "width", "height", "fillColor", "characters",
+  "fontSize", "fontFamily", "layoutMode", "children", "cornerRadius",
+  "strokeColor", "textAlignHorizontal", "primaryAxisAlignItems",
+  "counterAxisAlignItems", "layoutSizingHorizontal", "layoutSizingVertical",
+]);
+
+/**
+ * Trim a snapshot tree with two tiers:
+ * - depth < fullDetailDepth: keep ALL properties, limit children count
+ * - depth >= fullDetailDepth: keep only skeleton keys, preserve full children tree
+ * - depth >= maxDepth: stop recursion entirely
+ */
+function _trimSnapshotTwoTier(
+  snap: any,
+  currentDepth: number,
+  fullDetailDepth: number,
+  maxDepth: number,
+  maxChildren: number
+): any {
+  if (!snap) return snap;
+
+  const isSkeleton = currentDepth >= fullDetailDepth;
+  const copy: any = {};
+
+  for (const key of Object.keys(snap)) {
+    if (key === "children") {
+      if (currentDepth < maxDepth && Array.isArray(snap.children)) {
+        const limited = snap.children.length > maxChildren
+          ? snap.children.slice(0, maxChildren)
+          : snap.children;
+        copy.children = limited.map((c: any) =>
+          _trimSnapshotTwoTier(c, currentDepth + 1, fullDetailDepth, maxDepth, maxChildren)
+        );
+        if (snap.children.length > maxChildren) {
+          copy._truncatedChildren = snap.children.length;
+        }
+      }
+      // else: too deep, omit children
+    } else if (!isSkeleton || SKELETON_KEYS.has(key)) {
+      copy[key] = snap[key];
+    }
+  }
+  return copy;
+}
+
+// Legacy depth-only trimming (used by edit flow)
 function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number, maxChildren: number): any {
   if (!snap) return snap;
   const copy: any = {};
@@ -796,7 +845,6 @@ function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number,
           copy._truncatedChildren = snap.children.length;
         }
       }
-      // else: omit children (too deep)
     } else {
       copy[key] = snap[key];
     }
@@ -805,27 +853,29 @@ function _trimSnapshotToDepth(snap: any, currentDepth: number, maxDepth: number,
 }
 
 function truncateSnapshotForGenerate(snap: any, maxChars: number = GENERATE_SNAPSHOT_MAX_CHARS): any {
-  // Try progressively more aggressive truncation
+  // Try two-tier truncation with progressively tighter limits
+  // fullDetailDepth = how many levels get ALL properties
+  // maxDepth = how deep the skeleton goes
   const configs = [
-    { depth: 6, maxChildren: 30 },
-    { depth: 5, maxChildren: 20 },
-    { depth: 4, maxChildren: 15 },
-    { depth: 3, maxChildren: 12 },
-    { depth: 3, maxChildren: 8 },
-    { depth: 2, maxChildren: 10 },
-    { depth: 2, maxChildren: 6 },
+    { fullDetail: 4, maxDepth: 12, maxChildren: 30 },
+    { fullDetail: 3, maxDepth: 10, maxChildren: 25 },
+    { fullDetail: 3, maxDepth: 8, maxChildren: 20 },
+    { fullDetail: 2, maxDepth: 8, maxChildren: 15 },
+    { fullDetail: 2, maxDepth: 6, maxChildren: 12 },
+    { fullDetail: 2, maxDepth: 5, maxChildren: 10 },
+    { fullDetail: 1, maxDepth: 4, maxChildren: 8 },
   ];
   for (const cfg of configs) {
-    const trimmed = _trimSnapshotToDepth(snap, 0, cfg.depth, cfg.maxChildren);
+    const trimmed = _trimSnapshotTwoTier(snap, 0, cfg.fullDetail, cfg.maxDepth, cfg.maxChildren);
     const size = JSON.stringify(trimmed).length;
     if (size <= maxChars) {
-      console.log(`[truncate] Snapshot fit at depth ${cfg.depth}, maxChildren ${cfg.maxChildren} (${size} chars)`);
+      console.log(`[truncate] Snapshot fit: fullDetail=${cfg.fullDetail}, maxDepth=${cfg.maxDepth}, maxChildren=${cfg.maxChildren} (${size} chars)`);
       return trimmed;
     }
   }
-  // Last resort: very shallow
-  const minimal = _trimSnapshotToDepth(snap, 0, 1, 5);
-  console.log(`[truncate] Snapshot forced to depth 1 (${JSON.stringify(minimal).length} chars)`);
+  // Last resort: skeleton-only with limited depth
+  const minimal = _trimSnapshotTwoTier(snap, 0, 0, 3, 6);
+  console.log(`[truncate] Snapshot forced to skeleton-only depth 3 (${JSON.stringify(minimal).length} chars)`);
   return minimal;
 }
 

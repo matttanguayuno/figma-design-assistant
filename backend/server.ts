@@ -291,12 +291,12 @@ app.post("/generate", async (req: Request, res: Response) => {
 
     // Hard-truncate selection nodes if they're still too large
     let safeSelection = selection || null;
-    if (selectionJson.length > 40000) {
+    if (selectionJson.length > 60000) {
       console.warn(`[generate] Selection too large (${selectionJson.length} chars), truncating nodes...`);
       safeSelection = { nodes: (selection?.nodes || []).map((n: any) => {
         const nodeJson = JSON.stringify(n);
-        if (nodeJson.length > 30000) {
-          return JSON.parse(nodeJson.slice(0, 30000).replace(/,[^,]*$/, '') + '}');
+        if (nodeJson.length > 50000) {
+          return JSON.parse(nodeJson.slice(0, 50000).replace(/,[^,]*$/, '') + '}');
         }
         return n;
       }) };

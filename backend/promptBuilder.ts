@@ -311,11 +311,11 @@ export function buildGeneratePrompt(
     }
 
     parts.push("", "### Selected Frame Node Tree");
-    // Safety cap: truncate the JSON to max 30K chars to stay within token budget
+    // Safety cap: truncate the JSON to max 50K chars to stay within token budget
     const nodeJson = JSON.stringify(selectedNode);
-    if (nodeJson.length > 30000) {
-      parts.push(nodeJson.slice(0, 30000) + '... (truncated)');
-      console.log(`[buildGeneratePrompt] Selected node JSON truncated from ${nodeJson.length} to 30000 chars`);
+    if (nodeJson.length > 50000) {
+      parts.push(nodeJson.slice(0, 50000) + '... (truncated)');
+      console.log(`[buildGeneratePrompt] Selected node JSON truncated from ${nodeJson.length} to 50000 chars`);
     } else {
       parts.push(nodeJson);
     }

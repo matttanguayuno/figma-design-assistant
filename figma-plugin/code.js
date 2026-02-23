@@ -608,20 +608,42 @@
       referenceSnapshots
     };
   }
-  var GENERATE_SNAPSHOT_MAX_CHARS = 3e4;
-  function _trimSnapshotToDepth(snap, currentDepth, maxDepth, maxChildren) {
+  var GENERATE_SNAPSHOT_MAX_CHARS = 5e4;
+  var SKELETON_KEYS = /* @__PURE__ */ new Set([
+    "name",
+    "type",
+    "width",
+    "height",
+    "fillColor",
+    "characters",
+    "fontSize",
+    "fontFamily",
+    "layoutMode",
+    "children",
+    "cornerRadius",
+    "strokeColor",
+    "textAlignHorizontal",
+    "primaryAxisAlignItems",
+    "counterAxisAlignItems",
+    "layoutSizingHorizontal",
+    "layoutSizingVertical"
+  ]);
+  function _trimSnapshotTwoTier(snap, currentDepth, fullDetailDepth, maxDepth, maxChildren) {
     if (!snap) return snap;
+    const isSkeleton = currentDepth >= fullDetailDepth;
     const copy = {};
     for (const key of Object.keys(snap)) {
       if (key === "children") {
         if (currentDepth < maxDepth && Array.isArray(snap.children)) {
           const limited = snap.children.length > maxChildren ? snap.children.slice(0, maxChildren) : snap.children;
-          copy.children = limited.map((c) => _trimSnapshotToDepth(c, currentDepth + 1, maxDepth, maxChildren));
+          copy.children = limited.map(
+            (c) => _trimSnapshotTwoTier(c, currentDepth + 1, fullDetailDepth, maxDepth, maxChildren)
+          );
           if (snap.children.length > maxChildren) {
             copy._truncatedChildren = snap.children.length;
           }
         }
-      } else {
+      } else if (!isSkeleton || SKELETON_KEYS.has(key)) {
         copy[key] = snap[key];
       }
     }
@@ -629,24 +651,24 @@
   }
   function truncateSnapshotForGenerate(snap, maxChars = GENERATE_SNAPSHOT_MAX_CHARS) {
     const configs = [
-      { depth: 6, maxChildren: 30 },
-      { depth: 5, maxChildren: 20 },
-      { depth: 4, maxChildren: 15 },
-      { depth: 3, maxChildren: 12 },
-      { depth: 3, maxChildren: 8 },
-      { depth: 2, maxChildren: 10 },
-      { depth: 2, maxChildren: 6 }
+      { fullDetail: 4, maxDepth: 12, maxChildren: 30 },
+      { fullDetail: 3, maxDepth: 10, maxChildren: 25 },
+      { fullDetail: 3, maxDepth: 8, maxChildren: 20 },
+      { fullDetail: 2, maxDepth: 8, maxChildren: 15 },
+      { fullDetail: 2, maxDepth: 6, maxChildren: 12 },
+      { fullDetail: 2, maxDepth: 5, maxChildren: 10 },
+      { fullDetail: 1, maxDepth: 4, maxChildren: 8 }
     ];
     for (const cfg of configs) {
-      const trimmed = _trimSnapshotToDepth(snap, 0, cfg.depth, cfg.maxChildren);
+      const trimmed = _trimSnapshotTwoTier(snap, 0, cfg.fullDetail, cfg.maxDepth, cfg.maxChildren);
       const size = JSON.stringify(trimmed).length;
       if (size <= maxChars) {
-        console.log(`[truncate] Snapshot fit at depth ${cfg.depth}, maxChildren ${cfg.maxChildren} (${size} chars)`);
+        console.log(`[truncate] Snapshot fit: fullDetail=${cfg.fullDetail}, maxDepth=${cfg.maxDepth}, maxChildren=${cfg.maxChildren} (${size} chars)`);
         return trimmed;
       }
     }
-    const minimal = _trimSnapshotToDepth(snap, 0, 1, 5);
-    console.log(`[truncate] Snapshot forced to depth 1 (${JSON.stringify(minimal).length} chars)`);
+    const minimal = _trimSnapshotTwoTier(snap, 0, 0, 3, 6);
+    console.log(`[truncate] Snapshot forced to skeleton-only depth 3 (${JSON.stringify(minimal).length} chars)`);
     return minimal;
   }
   function snapshotNode(node, depth, siblingIndex) {
