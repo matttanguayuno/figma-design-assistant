@@ -51,8 +51,8 @@
 
     textarea {
       width: 100%;
-      min-height: 48px;
-      flex: 1 1 auto;
+      height: 80px;
+      flex: 0 0 auto;
       padding: 10px;
       font-family: var(--font);
       font-size: 12px;
@@ -137,8 +137,9 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
-      flex-shrink: 0;
-      margin-top: 8px;
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
     }
     .job-list::-webkit-scrollbar {
       width: 4px;
@@ -1151,7 +1152,6 @@
     <div class="loading-text">Initializing…</div>
   </div>
 
-  <div style="flex:1;display:flex;flex-direction:column;min-height:0;overflow-y:auto;">
     <div class="label-row">
       <label for="intent">Describe changes</label>
       <div class="menu-wrapper">
@@ -1215,14 +1215,14 @@
       id="intent"
       placeholder="e.g. Add a login screen, make the header larger, change background to blue…"
     ></textarea>
-    <!-- Parallel generate job list (inside scrollable area) -->
-    <div id="job-list" class="job-list"></div>
-  </div>
 
   <div class="btn-row">
     <button id="btn-apply" class="btn-primary" disabled>Apply</button>
     <button id="btn-cancel" class="btn-cancel">Cancel</button>
   </div>
+
+  <!-- Parallel generate job list (fills remaining space, scrolls) -->
+  <div id="job-list" class="job-list"></div>
 
   <div id="settings-panel" class="settings-panel">
     <div class="settings-header">
@@ -1381,6 +1381,24 @@
   <script>
     // ── Minimum-size enforcement ──────────────────────────────────
     const MIN_W = 340, MIN_H = 280;
+    const JOB_CARD_H = 46;   // approximate height of one job card + gap
+    const MAX_PLUGIN_H = 600;
+    var _userWidth = MIN_W;
+    var _userHeight = MIN_H;
+
+    /** Resize plugin to fit current job count, or shrink back when done */
+    function requestPluginResize() {
+      var jobCount = document.getElementById('job-list').children.length;
+      var baseH = _userHeight || MIN_H;
+      var targetH;
+      if (jobCount > 0) {
+        targetH = Math.min(baseH + jobCount * JOB_CARD_H, MAX_PLUGIN_H);
+      } else {
+        targetH = baseH;
+      }
+      var w = _userWidth || MIN_W;
+      parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(targetH) } }, '*');
+    }
 
     // ── Custom drag-to-resize handle ───────────────────────────
     (function() {
@@ -1407,6 +1425,9 @@
       handle.addEventListener('pointerup', function(e) {
         dragging = false;
         handle.releasePointerCapture(e.pointerId);
+        // Remember user's manual base size (before any job-based expansion)
+        _userWidth = document.documentElement.clientWidth;
+        _userHeight = document.documentElement.clientHeight;
       });
     })();
 
@@ -2706,6 +2727,7 @@
       });
       renderJobItem(jobId);
       startJobTick();
+      requestPluginResize();
     }
 
     function renderJobItem(jobId) {
@@ -2757,6 +2779,7 @@
         _jobs.delete(jobId);
         if (el) el.remove();
         maybeStopJobTick();
+        requestPluginResize();
       }, 3000);
     }
 
@@ -2771,6 +2794,7 @@
         _jobs.delete(jobId);
         if (el) el.remove();
         maybeStopJobTick();
+        requestPluginResize();
       }, 4000);
     }
 
@@ -2785,6 +2809,7 @@
         _jobs.delete(jobId);
         if (el) el.remove();
         maybeStopJobTick();
+        requestPluginResize();
       }, 2000);
     }
 
