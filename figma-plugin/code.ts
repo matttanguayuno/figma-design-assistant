@@ -6596,6 +6596,15 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
     if (node) {
       node.x = placeX;
       node.y = placeY;
+      // Force the generated frame to match source frame dimensions (for variants)
+      if (sourcePosition && "resize" in node) {
+        const targetW = sourcePosition.width;
+        const targetH = sourcePosition.height;
+        if (targetW > 0 && targetH > 0) {
+          (node as FrameNode).resize(targetW, targetH);
+          console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH}`);
+        }
+      }
       if ("setPluginData" in node) {
         (node as SceneNode).setPluginData("generated", "true");
       }

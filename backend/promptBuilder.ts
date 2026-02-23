@@ -295,8 +295,9 @@ export function buildGeneratePrompt(
     const wantsDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
 
     parts.push("", "## Currently Selected Frame (THIS is what the user is referring to)");
-    parts.push(`The user has selected the following frame (name: "${selectedNode.name || 'unknown'}", width: ${selectedWidth}px). When they say 'this frame', 'this screen', or 'this', they mean this frame.`);
+    parts.push(`The user has selected the following frame (name: "${selectedNode.name || 'unknown'}", width: ${selectedWidth}px, height: ${selectedNode.height || 0}px). When they say 'this frame', 'this screen', or 'this', they mean this frame.`);
     parts.push("", "Keep ALL the same UI elements (text, inputs, buttons, links, dividers, etc.) from this frame. Replicate the same text content, colors, fonts, and styling.");
+    parts.push("", `CRITICAL DIMENSION RULE: The generated frame MUST have EXACTLY the same dimensions as the source frame: width:${selectedWidth}, height:${selectedNode.height || 0}. Use layoutSizingVertical:"FIXED" (not HUG) and set the height explicitly. This ensures the variant matches the original screen size perfectly.`);
 
     if (isMobile && wantsDesktop) {
       parts.push("", "IMPORTANT — DESKTOP ADAPTATION REQUIRED:");
