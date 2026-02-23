@@ -4990,8 +4990,11 @@ RULES:
           const targetW = sourcePosition.width;
           const targetH = sourcePosition.height;
           if (targetW > 0 && targetH > 0) {
-            node.resize(targetW, targetH);
-            console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH}`);
+            const frame = node;
+            frame.layoutSizingHorizontal = "FIXED";
+            frame.layoutSizingVertical = "FIXED";
+            frame.resize(targetW, targetH);
+            console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH} (FIXED sizing)`);
           }
         }
         if ("setPluginData" in node) {

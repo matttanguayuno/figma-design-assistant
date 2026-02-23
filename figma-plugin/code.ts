@@ -6601,8 +6601,12 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
         const targetW = sourcePosition.width;
         const targetH = sourcePosition.height;
         if (targetW > 0 && targetH > 0) {
-          (node as FrameNode).resize(targetW, targetH);
-          console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH}`);
+          const frame = node as FrameNode;
+          // Must set sizing to FIXED before resize, otherwise HUG overrides it
+          frame.layoutSizingHorizontal = "FIXED";
+          frame.layoutSizingVertical = "FIXED";
+          frame.resize(targetW, targetH);
+          console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH} (FIXED sizing)`);
         }
       }
       if ("setPluginData" in node) {
