@@ -4786,7 +4786,7 @@ RULES:
       _activeJobs.delete(job.id);
     }
   }
-  async function runGenerateJob(job, prompt, sourceSnapshot) {
+  async function runGenerateJob(job, prompt, sourceSnapshot, sourcePosition) {
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
       console.log(`[job ${job.id}] Extracting design system...`);
@@ -4862,10 +4862,17 @@ RULES:
       assignTempIds(snapshot);
       _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
       let placeX;
-      if (_nextPlaceX !== null) {
+      let placeY;
+      if (sourcePosition) {
+        placeX = sourcePosition.x + sourcePosition.width + 100;
+        placeY = sourcePosition.y;
+        console.log(`[job ${job.id}] Placing next to source "${sourcePosition.name}" at x:${placeX}, y:${placeY}`);
+      } else if (_nextPlaceX !== null) {
         placeX = _nextPlaceX;
+        placeY = 0;
       } else {
         placeX = 0;
+        placeY = 0;
         const existingChildren = figma.currentPage.children;
         if (existingChildren.length > 0) {
           let maxRight = -Infinity;
@@ -4876,12 +4883,14 @@ RULES:
           placeX = maxRight + 200;
         }
       }
-      _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
-      console.log(`[job ${job.id}] Creating frame on canvas at x:${placeX}...`);
+      if (!sourcePosition) {
+        _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
+      }
+      console.log(`[job ${job.id}] Creating frame on canvas at x:${placeX}, y:${placeY}...`);
       const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
       if (node) {
         node.x = placeX;
-        node.y = 0;
+        node.y = placeY;
         if ("setPluginData" in node) {
           node.setPluginData("generated", "true");
         }
@@ -5284,16 +5293,19 @@ RULES:
             const currentSelection = figma.currentPage.selection;
             if (currentSelection.length > 1) {
               _activeJobs.delete(jobId);
-              const allSnapshots = currentSelection.map((node) => snapshotNode(node, 0));
-              console.log(`[run] Multi-frame generate: ${allSnapshots.length} frames for "${prompt.slice(0, 60)}"`);
-              for (const nodeSnap of allSnapshots) {
+              const allFrameData = currentSelection.map((node) => ({
+                snapshot: snapshotNode(node, 0),
+                position: { x: Math.round(node.x), y: Math.round(node.y), width: Math.round(node.width), height: Math.round(node.height), name: node.name }
+              }));
+              console.log(`[run] Multi-frame generate: ${allFrameData.length} frames for "${prompt.slice(0, 60)}"`);
+              for (const frameData of allFrameData) {
                 const mjobId = ++_nextJobId;
                 const mjob = { id: mjobId, cancelled: false };
                 _activeJobs.set(mjobId, mjob);
-                const singleSelection = { nodes: [nodeSnap] };
-                console.log(`[run] Starting generate job ${mjobId} for frame "${nodeSnap.name}"`);
-                sendToUI({ type: "job-started", jobId: mjobId, prompt: `${prompt} (${nodeSnap.name})` });
-                runGenerateJob(mjob, prompt, singleSelection).catch((err) => {
+                const singleSelection = { nodes: [frameData.snapshot] };
+                console.log(`[run] Starting generate job ${mjobId} for frame "${frameData.snapshot.name}" (${frameData.position.width}x${frameData.position.height} at ${frameData.position.x},${frameData.position.y})`);
+                sendToUI({ type: "job-started", jobId: mjobId, prompt: `${prompt} (${frameData.snapshot.name})` });
+                runGenerateJob(mjob, prompt, singleSelection, frameData.position).catch((err) => {
                   console.error(`[run] Unhandled error in generate job ${mjobId}:`, err);
                   if (!mjob.cancelled) {
                     sendToUI({ type: "job-error", jobId: mjobId, error: `Generation failed: ${err.message}` });
@@ -5483,16 +5495,19 @@ RULES:
           const prompt = msg.prompt || "";
           const currentSelection = figma.currentPage.selection;
           if (currentSelection.length > 1) {
-            const allSnapshots = currentSelection.map((node) => snapshotNode(node, 0));
-            console.log(`[generate] Multi-frame: ${allSnapshots.length} frames for "${prompt.slice(0, 60)}"`);
-            for (const nodeSnap of allSnapshots) {
+            const allFrameData = currentSelection.map((node) => ({
+              snapshot: snapshotNode(node, 0),
+              position: { x: Math.round(node.x), y: Math.round(node.y), width: Math.round(node.width), height: Math.round(node.height), name: node.name }
+            }));
+            console.log(`[generate] Multi-frame: ${allFrameData.length} frames for "${prompt.slice(0, 60)}"`);
+            for (const frameData of allFrameData) {
               const jobId = ++_nextJobId;
               const job = { id: jobId, cancelled: false };
               _activeJobs.set(jobId, job);
-              const singleSelection = { nodes: [nodeSnap] };
-              console.log(`[generate] Starting job ${jobId} for frame "${nodeSnap.name}"`);
-              sendToUI({ type: "job-started", jobId, prompt: `${prompt} (${nodeSnap.name})` });
-              runGenerateJob(job, prompt, singleSelection).catch((err) => {
+              const singleSelection = { nodes: [frameData.snapshot] };
+              console.log(`[generate] Starting job ${jobId} for frame "${frameData.snapshot.name}" (${frameData.position.width}x${frameData.position.height})`);
+              sendToUI({ type: "job-started", jobId, prompt: `${prompt} (${frameData.snapshot.name})` });
+              runGenerateJob(job, prompt, singleSelection, frameData.position).catch((err) => {
                 console.error(`[generate] Unhandled error in job ${jobId}:`, err);
                 if (!job.cancelled) {
                   sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });
