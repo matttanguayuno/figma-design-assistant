@@ -780,15 +780,20 @@ function _buildFinalTokens(
 // Two-tier approach: full detail for top levels, skeleton for deeper levels.
 // This preserves the complete tree structure so the LLM can produce faithful
 // variants, while keeping payload size manageable.
-const GENERATE_SNAPSHOT_MAX_CHARS = 50000;
+const GENERATE_SNAPSHOT_MAX_CHARS = 200000;
 const MAX_CHILDREN_PER_NODE = 20;
 
 // Skeleton keys: minimal set of properties to preserve at deep levels
 const SKELETON_KEYS = new Set([
   "name", "type", "width", "height", "fillColor", "characters",
-  "fontSize", "fontFamily", "layoutMode", "children", "cornerRadius",
-  "strokeColor", "textAlignHorizontal", "primaryAxisAlignItems",
+  "fontSize", "fontFamily", "fontStyle", "layoutMode", "children", "cornerRadius",
+  "strokeColor", "strokeWeight", "strokeTopWeight", "strokeRightWeight",
+  "strokeBottomWeight", "strokeLeftWeight",
+  "textAlignHorizontal", "textDecoration", "primaryAxisAlignItems",
   "counterAxisAlignItems", "layoutSizingHorizontal", "layoutSizingVertical",
+  "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "itemSpacing", "counterAxisSpacing", "opacity", "effects",
+  "clipsContent", "id", "x", "y",
 ]);
 
 /**
@@ -857,6 +862,8 @@ function truncateSnapshotForGenerate(snap: any, maxChars: number = GENERATE_SNAP
   // fullDetailDepth = how many levels get ALL properties
   // maxDepth = how deep the skeleton goes
   const configs = [
+    { fullDetail: 6, maxDepth: 15, maxChildren: 40 },
+    { fullDetail: 5, maxDepth: 12, maxChildren: 35 },
     { fullDetail: 4, maxDepth: 12, maxChildren: 30 },
     { fullDetail: 3, maxDepth: 10, maxChildren: 25 },
     { fullDetail: 3, maxDepth: 8, maxChildren: 20 },
@@ -6432,7 +6439,7 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
     // Also truncate referenceSnapshots in style tokens if present
     if (styleTokens && styleTokens.referenceSnapshots && styleTokens.referenceSnapshots.length > 0) {
       styleTokens.referenceSnapshots = styleTokens.referenceSnapshots.map(
-        (s: any) => truncateSnapshotForGenerate(s, 20000)
+        (s: any) => truncateSnapshotForGenerate(s, 80000)
       );
     }
 

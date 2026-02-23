@@ -311,11 +311,11 @@ export function buildGeneratePrompt(
     }
 
     parts.push("", "### Selected Frame Node Tree");
-    // Safety cap: truncate the JSON to max 50K chars to stay within token budget
+    // Safety cap: truncate the JSON to max 200K chars to stay within token budget
     const nodeJson = JSON.stringify(selectedNode);
-    if (nodeJson.length > 50000) {
-      parts.push(nodeJson.slice(0, 50000) + '... (truncated)');
-      console.log(`[buildGeneratePrompt] Selected node JSON truncated from ${nodeJson.length} to 50000 chars`);
+    if (nodeJson.length > 200000) {
+      parts.push(nodeJson.slice(0, 200000) + '... (truncated)');
+      console.log(`[buildGeneratePrompt] Selected node JSON truncated from ${nodeJson.length} to 200000 chars`);
     } else {
       parts.push(nodeJson);
     }
@@ -353,9 +353,9 @@ export function buildGeneratePrompt(
       parts.push("", "## Reference Frame (CRITICAL — replicate these styles EXACTLY)");
       parts.push("This is an actual node tree from an existing frame. Match the same fillColor, strokeColor, strokeWeight, cornerRadius, padding, alignment, font, and text properties for equivalent elements.");
       const refJson = JSON.stringify(styleTokens.referenceSnapshots[0]);
-      if (refJson.length > 20000) {
-        parts.push(refJson.slice(0, 20000) + '... (truncated)');
-        console.log(`[buildGeneratePrompt] Reference snapshot truncated from ${refJson.length} to 20000 chars`);
+      if (refJson.length > 80000) {
+        parts.push(refJson.slice(0, 80000) + '... (truncated)');
+        console.log(`[buildGeneratePrompt] Reference snapshot truncated from ${refJson.length} to 80000 chars`);
       } else {
         parts.push(refJson);
       }

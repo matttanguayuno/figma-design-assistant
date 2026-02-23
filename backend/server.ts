@@ -291,12 +291,12 @@ app.post("/generate", async (req: Request, res: Response) => {
 
     // Hard-truncate selection nodes if they're still too large
     let safeSelection = selection || null;
-    if (selectionJson.length > 60000) {
+    if (selectionJson.length > 250000) {
       console.warn(`[generate] Selection too large (${selectionJson.length} chars), truncating nodes...`);
       safeSelection = { nodes: (selection?.nodes || []).map((n: any) => {
         const nodeJson = JSON.stringify(n);
-        if (nodeJson.length > 50000) {
-          return JSON.parse(nodeJson.slice(0, 50000).replace(/,[^,]*$/, '') + '}');
+        if (nodeJson.length > 200000) {
+          return JSON.parse(nodeJson.slice(0, 200000).replace(/,[^,]*$/, '') + '}');
         }
         return n;
       }) };
@@ -311,10 +311,10 @@ app.post("/generate", async (req: Request, res: Response) => {
     // Hard-truncate referenceSnapshots in styleTokens
     const safeStyleTokens = { ...(styleTokens || {}) };
     if (safeStyleTokens.referenceSnapshots?.length > 0) {
-      safeStyleTokens.referenceSnapshots = safeStyleTokens.referenceSnapshots.slice(0, 1).map((s: any) => {
+      safeStyleTokens.referenceSnapshots = safeStyleTokens.referenceSnapshots.slice(0, 2).map((s: any) => {
         const sJson = JSON.stringify(s);
-        if (sJson.length > 20000) {
-          return JSON.parse(sJson.slice(0, 20000).replace(/,[^,]*$/, '') + '}');
+        if (sJson.length > 80000) {
+          return JSON.parse(sJson.slice(0, 80000).replace(/,[^,]*$/, '') + '}');
         }
         return s;
       });

@@ -608,7 +608,7 @@
       referenceSnapshots
     };
   }
-  var GENERATE_SNAPSHOT_MAX_CHARS = 5e4;
+  var GENERATE_SNAPSHOT_MAX_CHARS = 2e5;
   var SKELETON_KEYS = /* @__PURE__ */ new Set([
     "name",
     "type",
@@ -618,15 +618,34 @@
     "characters",
     "fontSize",
     "fontFamily",
+    "fontStyle",
     "layoutMode",
     "children",
     "cornerRadius",
     "strokeColor",
+    "strokeWeight",
+    "strokeTopWeight",
+    "strokeRightWeight",
+    "strokeBottomWeight",
+    "strokeLeftWeight",
     "textAlignHorizontal",
+    "textDecoration",
     "primaryAxisAlignItems",
     "counterAxisAlignItems",
     "layoutSizingHorizontal",
-    "layoutSizingVertical"
+    "layoutSizingVertical",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "itemSpacing",
+    "counterAxisSpacing",
+    "opacity",
+    "effects",
+    "clipsContent",
+    "id",
+    "x",
+    "y"
   ]);
   function _trimSnapshotTwoTier(snap, currentDepth, fullDetailDepth, maxDepth, maxChildren) {
     if (!snap) return snap;
@@ -651,6 +670,8 @@
   }
   function truncateSnapshotForGenerate(snap, maxChars = GENERATE_SNAPSHOT_MAX_CHARS) {
     const configs = [
+      { fullDetail: 6, maxDepth: 15, maxChildren: 40 },
+      { fullDetail: 5, maxDepth: 12, maxChildren: 35 },
       { fullDetail: 4, maxDepth: 12, maxChildren: 30 },
       { fullDetail: 3, maxDepth: 10, maxChildren: 25 },
       { fullDetail: 3, maxDepth: 8, maxChildren: 20 },
@@ -4834,7 +4855,7 @@ RULES:
       };
       if (styleTokens && styleTokens.referenceSnapshots && styleTokens.referenceSnapshots.length > 0) {
         styleTokens.referenceSnapshots = styleTokens.referenceSnapshots.map(
-          (s) => truncateSnapshotForGenerate(s, 2e4)
+          (s) => truncateSnapshotForGenerate(s, 8e4)
         );
       }
       const trimmedDesignSystem = {
