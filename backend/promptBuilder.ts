@@ -547,11 +547,19 @@ export function buildGeneratePrompt(
       return label;
     });
     parts.push("", "## Paint Styles (use fillStyleName to bind by name — ALWAYS prefer fillStyleName over raw fillColor when a matching style exists)");
+    parts.push("The style NAMES are semantic and encode design decisions. Use the names to determine which color is appropriate for each purpose:");
+    parts.push("- Names containing 'Primary' → primary/accent elements");
+    parts.push("- Names containing 'Secondary' → secondary/subtle elements");
+    parts.push("- Names containing 'System/Critical' or 'Error' → error/critical states");
+    parts.push("- Names containing 'Surface' or 'Background' → container backgrounds");
+    parts.push("- Names containing 'Label' or 'Text' → text/icon colors");
+    parts.push("- Names containing 'Disabled' or 'Control/Secondary' → disabled/inactive states");
+    parts.push("");
     parts.push("Available styles:");
     for (const name of styleNames) {
       parts.push(`- ${name}`);
     }
-    parts.push("", "CRITICAL: When generating nodes, if a color matches one of these paint styles, set BOTH fillColor (hex) AND fillStyleName (style name). This ensures proper design system binding.");
+    parts.push("", "CRITICAL: When generating nodes, ALWAYS set fillStyleName (and textStyleName for text nodes) to bind to the design system. Also set fillColor as a hex fallback. The style names above define the correct color for each semantic purpose — use them, do NOT pick arbitrary hex values.");
   }
 
   // Include full design system if available (cross-page colors, variables, etc.)
