@@ -399,6 +399,7 @@ Rules:
   * Each variant is a child with type: "COMPONENT"
   * Component names MUST use Figma variant syntax: "Property=Value" (e.g. "State=Default", "State=Hover", "State=Disabled", "Size=Small, State=Active"). If unsure what property to use, default to "State=..."
   * CRITICAL: Each COMPONENT variant MUST contain FULL children[] with the actual UI content (text nodes, shapes, icons, frames, etc.). Do NOT create empty/blank component variants — they must have the same visual richness as a regular FRAME. Each variant should be a complete, fully-designed UI element.
+  * STYLE BINDING: When paint styles are available, use fillStyleName on COMPONENT children and their descendants to bind colors to the design system. For example: {"fillColor": "#003E92", "fillStyleName": "Light/Fill Color/Accent Text/Primary"}. This ensures the generated components use the file's named styles rather than raw hex values.
   * All variants should have the same dimensions and layout structure
   * Use fillStyleName and textStyleName when the user specifies named styles
 - Buttons: replicate the exact cornerRadius, alignment (primaryAxisAlignItems, counterAxisAlignItems), text color, font, fillColor, and layoutSizingHorizontal from the provided button style tokens. CRITICAL SIZING: buttons must look visually substantial and tappable. Set the button FRAME height to FIXED at the height from the style tokens (e.g. height:36 means the frame is 36px tall). Add vertical padding so the text is centered: paddingTop and paddingBottom should each be at least 8. If the button tokens show layoutSizingVertical:"HUG" with 0 padding, IGNORE the 0 padding — set paddingTop:10, paddingBottom:10 instead, and use layoutSizingVertical:"HUG" so the button grows to fit. The button text must be vertically and horizontally centered (primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER"). For full-width mobile buttons (width close to the root frame width), use layoutSizingHorizontal:"FILL" so they stretch to fill the parent container.
@@ -488,7 +489,18 @@ export function buildGeneratePrompt(
       parts.push("Font sizes: " + styleTokens.fontSizes.slice(0, 8).join(", "));
     }
     if (styleTokens.colors?.length > 0) {
-      parts.push("Colors: " + styleTokens.colors.slice(0, 10).join(", "));
+      // Annotate raw hex colors with their paint style names when available
+      const hexToStyleName: Record<string, string> = {};
+      if (designSystem.fillStyles?.length > 0) {
+        for (const s of designSystem.fillStyles as any[]) {
+          if (s.hex) hexToStyleName[s.hex.toUpperCase()] = s.name;
+        }
+      }
+      const annotatedColors = styleTokens.colors.slice(0, 12).map((hex: string) => {
+        const styleName = hexToStyleName[hex.toUpperCase()];
+        return styleName ? `${hex} (fillStyleName: "${styleName}")` : hex;
+      });
+      parts.push("Colors (use fillStyleName when shown): " + annotatedColors.join(", "));
     }
     if (styleTokens.cornerRadii?.length > 0) {
       parts.push("Corner radii: " + styleTokens.cornerRadii.join(", "));
@@ -528,12 +540,18 @@ export function buildGeneratePrompt(
 
   // Include paint style names for style-by-name binding
   if (designSystem.fillStyles?.length > 0) {
-    const styleNames = designSystem.fillStyles.slice(0, 30).map((s: any) => {
+    // Build a hex->name lookup so the LLM can correlate raw colors with style names
+    const styleNames = designSystem.fillStyles.slice(0, 60).map((s: any) => {
       let label = s.name;
-      if (s.hex) label += ` (${s.hex})`;
+      if (s.hex) label += ` → ${s.hex}`;
       return label;
     });
-    parts.push("", "## Paint Styles (use fillStyleName to bind by name)", styleNames.join(", "));
+    parts.push("", "## Paint Styles (use fillStyleName to bind by name — ALWAYS prefer fillStyleName over raw fillColor when a matching style exists)");
+    parts.push("Available styles:");
+    for (const name of styleNames) {
+      parts.push(`- ${name}`);
+    }
+    parts.push("", "CRITICAL: When generating nodes, if a color matches one of these paint styles, set BOTH fillColor (hex) AND fillStyleName (style name). This ensures proper design system binding.");
   }
 
   // Include full design system if available (cross-page colors, variables, etc.)
