@@ -384,18 +384,21 @@ NodeSnapshot fields:
 - COMPONENT: name, type:"COMPONENT" — same properties as FRAME. Used as a variant child inside COMPONENT_SET. The name MUST follow Figma variant naming: "Property1=Value1, Property2=Value2" (e.g. "State=Active", "State=Loading, Size=Large").
 - COMPONENT_SET: name, type:"COMPONENT_SET", children[] — container for COMPONENT variants. Children MUST all be type:"COMPONENT". The component set name is the component family name (e.g. "FileChip", "Button"). Do NOT set fillColor, strokeColor, or cornerRadius on the COMPONENT_SET itself — Figma renders component sets with a transparent background and dashed purple border automatically. Only set fills/strokes on the COMPONENT children inside.
 
-Style-by-Name fields (PREFERRED when the user specifies style names):
-- fillStyleName: Exact name of a local paint style (e.g. "Light/Primary", "Dark/Surface"). When provided, the plugin binds the style by name instead of hex matching. You can also provide fillColor as a fallback hex.
-- textStyleName: Exact name of a local text style (e.g. "Body/Medium", "Heading/Large"). When provided, the plugin binds the text style by name. Font properties still apply as fallback.
+Style-by-Name fields (MANDATORY — not optional):
+- fillStyleName: Exact name of a local paint style (e.g. "Light/Primary", "Dark/Surface"). MUST be set on EVERY node that has a fillColor. The plugin uses this to bind the node to the design system.
+- textStyleName: Exact name of a local text style (e.g. "Body/Medium", "Heading/Large"). MUST be set on EVERY TEXT node. The plugin uses this to bind font/size/weight to the design system. Without textStyleName, text nodes will not match the design system typography.
 
 Effects: [{"type":"DROP_SHADOW","radius":8,"spread":0,"offset":{"x":0,"y":2},"color":{"r":0,"g":0,"b":0,"a":0.08}}]
 
 Rules:
 - MANDATORY STYLE BINDING (HIGHEST PRIORITY RULE): Every node that has a color MUST include fillStyleName. Every TEXT node MUST include textStyleName. These fields bind the node to the design system. Raw hex values alone are NOT acceptable — you MUST ALWAYS set the named style field. Example of a correct TEXT node:
   {"type":"TEXT","characters":"Active","fontSize":14,"fontFamily":"Segoe UI Variable","fontStyle":"Regular","fillColor":"#000000","fillStyleName":"Light/Fill Color/Text/Secondary","textStyleName":"Live/Body/SmallTrimm"}
-  Example of a correct FRAME node:
+  Example of a correct FRAME with fill:
   {"type":"FRAME","fillColor":"#F9F9F9","fillStyleName":"Light/Fill Color/Control/Secondary"}
+  Example of a correct RECTANGLE (icon placeholder):
+  {"type":"RECTANGLE","width":14,"height":14,"fillColor":"#000000","fillStyleName":"Light/Fill Color/Text/Secondary"}
   NEVER output a fillColor without a corresponding fillStyleName. NEVER output a TEXT node without textStyleName. Match the style name to the semantic purpose of the element.
+- USER-SPECIFIED STYLE NAMES: When the user’s prompt contains style names in square brackets like [Light/Fill Color/Text/Secondary] or [Live/Body/SmallTrimm], you MUST use those EXACT style names verbatim in your output. The user has already looked up the correct style — do NOT substitute a different style name. Copy the name character-for-character into fillStyleName or textStyleName.
 - Root: layoutMode:"VERTICAL", layoutSizingVertical:"HUG", width 390 (mobile) or 1440 (desktop)
 - Use layoutMode on ALL frames. Use FILL for full-width children, HUG for content-fit
 - COMPONENT SET CREATION: When asked to create a component set, component, or variants:
@@ -538,7 +541,12 @@ export function buildGeneratePrompt(
     const trimmed = designSystem.textStyles.slice(0, 8).map((s: any) => ({
       name: s.name, fontFamily: s.fontFamily, fontStyle: s.fontStyle, fontSize: s.fontSize
     }));
-    parts.push("", "## Text Styles (use textStyleName to bind by name)", JSON.stringify(trimmed));
+    parts.push("", "## Text Styles (MANDATORY: set textStyleName on EVERY TEXT node to one of these)");
+    parts.push("Available text styles:");
+    for (const s of trimmed) {
+      parts.push(`- ${s.name} (${s.fontFamily}, ${s.fontStyle}, ${s.fontSize}px)`);
+    }
+    parts.push("CRITICAL: Every TEXT node in your output MUST have a textStyleName field set to one of the names above. A TEXT node without textStyleName is BROKEN output.");
   }
 
   // Include paint style names for style-by-name binding
@@ -562,7 +570,11 @@ export function buildGeneratePrompt(
     for (const name of styleNames) {
       parts.push(`- ${name}`);
     }
-    parts.push("", "CRITICAL: When generating nodes, ALWAYS set fillStyleName (and textStyleName for text nodes) to bind to the design system. Also set fillColor as a hex fallback. The style names above define the correct color for each semantic purpose — use them, do NOT pick arbitrary hex values.");
+    parts.push("", "CRITICAL REMINDERS:");
+    parts.push("1. Every fillColor MUST have a corresponding fillStyleName from the list above.");
+    parts.push("2. Every TEXT node MUST have a textStyleName from the Text Styles section.");
+    parts.push("3. When the user specifies [StyleName] in their prompt, use that EXACT name.");
+    parts.push("4. Do NOT invent hex colors — look up the hex from the style list above.");
   }
 
   // Include full design system if available (cross-page colors, variables, etc.)
