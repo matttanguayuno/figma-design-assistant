@@ -1908,7 +1908,10 @@ function tryBindTextStyleByName(node: TextNode, styleName: string): boolean {
     const styleId = map.get(styleName.toLowerCase().trim());
     if (styleId) {
       (node as any).textStyleId = styleId;
+      console.log(`[styleBinding] Text style bound: "${styleName}"`);
       return true;
+    } else {
+      console.warn(`[styleBinding] Text style NOT FOUND: "${styleName}" (${map.size} styles available)`);
     }
   } catch (_) {}
   return false;
@@ -2029,6 +2032,7 @@ async function createNodeFromSnapshot(
       if (snap.textStyleName) {
         tryBindTextStyleByName(textNode, snap.textStyleName);
       } else {
+        console.warn(`[styleBinding] TEXT node "${snap.characters || snap.name}" has NO textStyleName in snapshot`);
         const fn = textNode.fontName as FontName;
         if (fn && fn.family && fn.style) {
           tryBindTextStyle(textNode, fn.family, fn.style, textNode.fontSize as number);
