@@ -1487,13 +1487,26 @@
   function tryBindTextStyleByName(node, styleName) {
     try {
       const map = ensureTextStyleNameMap();
-      const styleId = map.get(styleName.toLowerCase().trim());
+      const key = styleName.toLowerCase().trim();
+      var styleId = map.get(key);
+      if (!styleId) {
+        // Fuzzy match: strip hyphens, spaces, underscores and compare
+        var normalize = function(s) { return s.replace(/[-_ ]/g, ""); };
+        var normalizedKey = normalize(key);
+        for (var entry of map.entries()) {
+          if (normalize(entry[0]) === normalizedKey) {
+            styleId = entry[1];
+            console.log('[styleBinding] Text style fuzzy-matched: "' + styleName + '" -> "' + entry[0] + '"');
+            break;
+          }
+        }
+      }
       if (styleId) {
         node.textStyleId = styleId;
-        console.log(`[styleBinding] Text style bound: "${styleName}"`);
+        console.log('[styleBinding] Text style bound: "' + styleName + '"');
         return true;
       } else {
-        console.warn(`[styleBinding] Text style NOT FOUND: "${styleName}" (${map.size} styles available)`);
+        console.warn('[styleBinding] Text style NOT FOUND: "' + styleName + '" (' + map.size + ' styles available)');
       }
     } catch (_) {}
     return false;

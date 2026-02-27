@@ -1905,7 +1905,20 @@ function tryBindFillStyleByName(node: SceneNode, styleName: string): boolean {
 function tryBindTextStyleByName(node: TextNode, styleName: string): boolean {
   try {
     const map = ensureTextStyleNameMap();
-    const styleId = map.get(styleName.toLowerCase().trim());
+    const key = styleName.toLowerCase().trim();
+    let styleId = map.get(key);
+    if (!styleId) {
+      // Fuzzy match: strip hyphens, spaces, underscores and compare
+      const normalize = (s: string) => s.replace(/[-_ ]/g, "");
+      const normalizedKey = normalize(key);
+      for (const [mapKey, mapVal] of map.entries()) {
+        if (normalize(mapKey) === normalizedKey) {
+          styleId = mapVal;
+          console.log(`[styleBinding] Text style fuzzy-matched: "${styleName}" -> "${mapKey}"`);
+          break;
+        }
+      }
+    }
     if (styleId) {
       (node as any).textStyleId = styleId;
       console.log(`[styleBinding] Text style bound: "${styleName}"`);
