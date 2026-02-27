@@ -246,9 +246,10 @@ export async function callLLM(
   designSystem: DesignSystemSnapshot,
   apiKey: string,
   provider: Provider = "anthropic",
-  model?: string
+  model?: string,
+  fullDesignSystem?: any
 ): Promise<unknown> {
-  const userPrompt = buildUserPrompt(intent, selection, designSystem);
+  const userPrompt = buildUserPrompt(intent, selection, designSystem, fullDesignSystem);
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
@@ -273,9 +274,10 @@ export async function callLLMGenerate(
   apiKey: string,
   provider: Provider = "anthropic",
   model?: string,
-  selection?: any
+  selection?: any,
+  fullDesignSystem?: any
 ): Promise<unknown> {
-  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection);
+  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem);
   console.log(`[callLLMGenerate] System prompt: ${GENERATE_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
 
   // Hard safety: if the user prompt exceeds ~500K chars (~125K tokens), truncate it

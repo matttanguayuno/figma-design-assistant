@@ -115,7 +115,9 @@ export type UIToPluginMessage =
   | { type: "clear-audit" }
   | { type: "select-node"; nodeId: string }
   | { type: "fix-finding"; finding: AuditFinding }
-  | { type: "fix-all-auto"; findings: AuditFinding[] };
+  | { type: "fix-all-auto"; findings: AuditFinding[] }
+  | { type: "extract-design-system" }
+  | { type: "cancel-extract-ds" };
 
 export type PluginToUIMessage =
   | { type: "apply-success"; summary: string }
@@ -142,7 +144,11 @@ export type PluginToUIMessage =
   | { type: "state-audit-results"; items: StateAuditItem[] }
   | { type: "state-audit-error"; error: string }
   | { type: "fix-result"; nodeId: string; checkType: string; success: boolean; message: string }
-  | { type: "fix-all-complete"; results: Array<{ nodeId: string; checkType: string; success: boolean; message: string }> };
+  | { type: "fix-all-complete"; results: Array<{ nodeId: string; checkType: string; success: boolean; message: string }> }
+  | { type: "extract-ds-progress"; page: string; pageIndex: number; totalPages: number }
+  | { type: "extract-ds-complete"; summary: { colors: number; typography: number; components: number; variables: number; pages: number } }
+  | { type: "extract-ds-error"; error: string }
+  | { type: "extract-ds-cached"; summary: { colors: number; typography: number; components: number; variables: number; pages: number }; extractedAt: number };
 
 // ── Accessibility Audit Types ────────────────────────────────────────
 
@@ -173,6 +179,61 @@ export type AuditLogEntry = {
   timestamp: string;
   intent: string;
   operationSummary: string;
+};
+
+// ── Full Design System (cross-page extraction) ─────────────────────
+
+export type FullDesignSystemColor = {
+  role?: string;        // semantic role: "primary", "surface", "on-primary", etc.
+  name?: string;        // original style/variable name
+  hex: string;
+  mode?: string;        // "light" | "dark" | undefined
+  source?: string;      // page name or style source
+  opacity?: number;
+};
+
+export type FullDesignSystemComponent = {
+  key: string;
+  name: string;
+  page: string;
+  description?: string;
+  variants?: Record<string, string[]>;  // variantProp → possible values
+};
+
+export type FullDesignSystemVariable = {
+  id: string;
+  name: string;
+  collection: string;
+  type: string;                           // "COLOR" | "FLOAT" | "STRING" | "BOOLEAN"
+  valuesByMode: Record<string, any>;      // modeName → resolved value
+};
+
+export type FullDesignSystemTypography = {
+  name: string;
+  fontFamily: string;
+  fontStyle?: string;
+  fontSize: number;
+  lineHeight?: number | string;
+  letterSpacing?: number;
+  role?: string;        // "heading1", "body", "caption", etc.
+};
+
+export type FullDesignSystem = {
+  extractedAt: number;
+  documentHash: string;
+  pages: { name: string; id: string }[];
+  /** "complete" = variables with ≥2 modes cover colors (use existing tokens, don't hardcode)
+   *  "partial"  = some color variables exist but single-mode only
+   *  "none"     = no color variables at all, raw hex fills are the only source */
+  themingStatus: "complete" | "partial" | "none";
+  colorPalette: FullDesignSystemColor[];
+  typographyScale: FullDesignSystemTypography[];
+  spacingScale: number[];
+  cornerRadiusScale: number[];
+  components: FullDesignSystemComponent[];
+  variables: FullDesignSystemVariable[];
+  buttonStyles: any[];
+  inputStyles: any[];
 };
 
 // ── Revert State ────────────────────────────────────────────────────

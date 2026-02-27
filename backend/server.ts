@@ -156,7 +156,7 @@ app.post("/cancel", (_req: Request, res: Response) => {
 
 app.post("/plan", async (req: Request, res: Response) => {
   try {
-    const { intent, selection, designSystem, apiKey, provider, model } = req.body;
+    const { intent, selection, designSystem, fullDesignSystem, apiKey, provider, model } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -211,8 +211,27 @@ app.post("/plan", async (req: Request, res: Response) => {
       }
     }
 
+    // Truncate fullDesignSystem if present (cap at ~30K chars to stay within token budget)
+    let safeFullDS = fullDesignSystem || null;
+    if (safeFullDS) {
+      const fdJson = JSON.stringify(safeFullDS);
+      if (fdJson.length > 30000) {
+        console.warn(`[plan] fullDesignSystem too large (${fdJson.length} chars), trimming...`);
+        safeFullDS = {
+          ...safeFullDS,
+          colorPalette: (safeFullDS.colorPalette || []).slice(0, 30),
+          components: (safeFullDS.components || []).slice(0, 20),
+          variables: (safeFullDS.variables || []).slice(0, 20),
+          typographyScale: (safeFullDS.typographyScale || []).slice(0, 15),
+          buttonStyles: (safeFullDS.buttonStyles || []).slice(0, 5),
+          inputStyles: (safeFullDS.inputStyles || []).slice(0, 5),
+        };
+      }
+      console.log(`[plan] fullDesignSystem: ${safeFullDS.colorPalette?.length || 0} colors, ${safeFullDS.components?.length || 0} components, ${safeFullDS.variables?.length || 0} variables`);
+    }
+
     // 1. Call LLM
-    const rawBatch = await callLLM(intent, selection, designSystem, apiKey, resolvedProvider, model);
+    const rawBatch = await callLLM(intent, selection, designSystem, apiKey, resolvedProvider, model, safeFullDS);
     console.log(`[plan] LLM returned:`, JSON.stringify(rawBatch).slice(0, 300));
 
     // 2. Validate
@@ -259,7 +278,7 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, apiKey, provider, model } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -320,6 +339,23 @@ app.post("/generate", async (req: Request, res: Response) => {
       });
     }
 
+    // Truncate fullDesignSystem if present
+    let safeFullDS = fullDesignSystem || null;
+    if (safeFullDS) {
+      const fdJson = JSON.stringify(safeFullDS);
+      if (fdJson.length > 30000) {
+        safeFullDS = {
+          ...safeFullDS,
+          colorPalette: (safeFullDS.colorPalette || []).slice(0, 30),
+          components: (safeFullDS.components || []).slice(0, 20),
+          variables: (safeFullDS.variables || []).slice(0, 20),
+          typographyScale: (safeFullDS.typographyScale || []).slice(0, 15),
+          buttonStyles: (safeFullDS.buttonStyles || []).slice(0, 5),
+          inputStyles: (safeFullDS.inputStyles || []).slice(0, 5),
+        };
+      }
+    }
+
     // 1. Call LLM to generate a NodeSnapshot
     const snapshot = await callLLMGenerate(
       prompt,
@@ -328,7 +364,8 @@ app.post("/generate", async (req: Request, res: Response) => {
       apiKey,
       resolvedProvider,
       model,
-      safeSelection
+      safeSelection,
+      safeFullDS
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));

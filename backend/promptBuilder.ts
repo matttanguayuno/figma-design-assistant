@@ -185,12 +185,151 @@ IMPORTANT CONTEXT:
 - For responsive conversions, use DUPLICATE_FRAME with variantIntent describing the conversion (e.g., "desktop layout", "mobile layout"). The plugin handles root frame resizing automatically.
 `;
 
+// ── Full Design System Formatter ────────────────────────────────────
+
+function formatFullDesignSystemSection(fullDS: any): string {
+  const sections: string[] = [];
+  const theming: string = fullDS.themingStatus || "none";
+
+  sections.push("## Full Design System (extracted from entire document)");
+
+  // Theming-aware preamble
+  if (theming === "complete") {
+    sections.push("This file has a COMPLETE theme system with color variables and multiple modes (e.g. light/dark).");
+    sections.push("IMPORTANT: Reference existing variable names rather than hardcoding hex values whenever possible.");
+    sections.push("The variables below already contain the canonical color values per mode — do NOT re-derive or duplicate them.");
+  } else if (theming === "partial") {
+    sections.push("This file has color variables but they are single-mode only (no light/dark switching).");
+    sections.push("Use the variable-sourced colors as the canonical palette. Raw hex fills are included as supplementary data.");
+  } else {
+    sections.push("This file has NO color variables but DOES have named paint styles (e.g. Light/, Dark/ folders).");
+    sections.push("IMPORTANT: Use ONLY these named paint style colors in your designs. The plugin will automatically bind matching hex values to their paint styles.");
+    sections.push("For dark mode screens, prefer colors from the Dark/ folder. For light mode screens, prefer colors from the Light/ folder.");
+    sections.push("Do NOT invent new hex colors — always pick the closest match from the palette below.");
+  }
+
+  // Color Palette — group by role/mode for clarity
+  if (fullDS.colorPalette?.length > 0) {
+    sections.push("");
+    // When theming is complete, only show named/variable-sourced colors (skip raw page fills)
+    const palette = theming === "complete"
+      ? fullDS.colorPalette.filter((c: any) => c.name && c.source !== undefined && !c.source?.startsWith("page:"))
+      : fullDS.colorPalette;
+    sections.push(`### Color Palette (${palette.length} colors${theming === "complete" ? ", variable-sourced" : ""})`);
+    const grouped: Record<string, any[]> = {};
+    for (const c of palette.slice(0, 80)) {
+      const key = c.role || "other";
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(c);
+    }
+    for (const [role, colors] of Object.entries(grouped)) {
+      const items = colors.map((c: any) => {
+        let label = `${c.hex}`;
+        if (c.name) label = `${c.name}: ${c.hex}`;
+        if (c.mode) label += ` (${c.mode})`;
+        return label;
+      }).join(", ");
+      sections.push(`- ${role}: ${items}`);
+    }
+  }
+
+  // Typography Scale
+  if (fullDS.typographyScale?.length > 0) {
+    sections.push("");
+    sections.push("### Typography Scale");
+    for (const t of fullDS.typographyScale.slice(0, 15)) {
+      let line = `- ${t.name}: ${t.fontFamily} ${t.fontStyle || ""} ${t.fontSize}px`;
+      if (t.role) line += ` [${t.role}]`;
+      if (t.lineHeight) line += `, lineHeight: ${t.lineHeight}`;
+      sections.push(line);
+    }
+  }
+
+  // Spacing & Corner Radius
+  if (fullDS.spacingScale?.length > 0) {
+    sections.push("");
+    sections.push(`### Spacing Scale: ${fullDS.spacingScale.slice(0, 12).join(", ")}`);
+  }
+  if (fullDS.cornerRadiusScale?.length > 0) {
+    sections.push(`### Corner Radii: ${fullDS.cornerRadiusScale.slice(0, 8).join(", ")}`);
+  }
+
+  // Components
+  if (fullDS.components?.length > 0) {
+    sections.push("");
+    sections.push("### Components");
+    // Deduplicate by name, prefer component sets
+    const seen = new Set<string>();
+    for (const comp of fullDS.components.slice(0, 25)) {
+      const label = comp.name;
+      if (seen.has(label)) continue;
+      seen.add(label);
+      let line = `- ${label}`;
+      if (comp.page) line += ` (page: ${comp.page})`;
+      if (comp.variants) line += ` variants: ${JSON.stringify(comp.variants)}`;
+      if (comp.description) line += ` — ${comp.description}`;
+      sections.push(line);
+    }
+  }
+
+  // Variables with mode values — when theming is complete, prioritize color vars
+  if (fullDS.variables?.length > 0) {
+    sections.push("");
+    if (theming === "complete") {
+      sections.push("### Design Variables (CANONICAL — use these names/IDs for color binding)");
+      // Show color variables first (most important for theming), then others
+      const colorVars = fullDS.variables.filter((v: any) => v.type === "COLOR");
+      const otherVars = fullDS.variables.filter((v: any) => v.type !== "COLOR");
+      const sorted = [...colorVars.slice(0, 25), ...otherVars.slice(0, 10)];
+      for (const v of sorted) {
+        const modeVals = Object.entries(v.valuesByMode || {})
+          .map(([mode, val]) => `${mode}: ${typeof val === "object" ? JSON.stringify(val) : val}`)
+          .join(", ");
+        sections.push(`- ${v.collection}/${v.name} (${v.type}): ${modeVals}`);
+      }
+    } else {
+      sections.push("### Design Variables");
+      for (const v of fullDS.variables.slice(0, 20)) {
+        const modeVals = Object.entries(v.valuesByMode || {})
+          .map(([mode, val]) => `${mode}: ${typeof val === "object" ? JSON.stringify(val) : val}`)
+          .join(", ");
+        sections.push(`- ${v.collection}/${v.name} (${v.type}): ${modeVals}`);
+      }
+    }
+  }
+
+  // Button styles
+  if (fullDS.buttonStyles?.length > 0) {
+    sections.push("");
+    sections.push("### Button Styles");
+    for (const b of fullDS.buttonStyles.slice(0, 5)) {
+      sections.push(`- ${b.name}: fill=${b.fillColor}, radius=${b.cornerRadius}, h=${b.height}px`);
+    }
+  }
+
+  // Input styles
+  if (fullDS.inputStyles?.length > 0) {
+    sections.push("");
+    sections.push("### Input Styles");
+    for (const inp of fullDS.inputStyles.slice(0, 5)) {
+      let line = `- ${inp.name}: h=${inp.height}px`;
+      if (inp.fillColor) line += `, fill=${inp.fillColor}`;
+      if (inp.strokeColor) line += `, stroke=${inp.strokeColor}`;
+      if (inp.cornerRadius) line += `, radius=${inp.cornerRadius}`;
+      sections.push(line);
+    }
+  }
+
+  return sections.join("\n");
+}
+
 // ── User Prompt ─────────────────────────────────────────────────────
 
 export function buildUserPrompt(
   intent: string,
   selection: SelectionSnapshot,
-  designSystem: DesignSystemSnapshot
+  designSystem: DesignSystemSnapshot,
+  fullDesignSystem?: any
 ): string {
   // Use compact JSON and cap sizes to avoid token overflow
   let nodesJson = JSON.stringify(selection.nodes);
@@ -225,7 +364,7 @@ ${componentsJson}
 
 ## Design System – Variables
 ${variablesJson}
-
+${fullDesignSystem ? formatFullDesignSystemSection(fullDesignSystem) : ""}
 Return the operation batch JSON now.`;
 
   console.log(`[buildUserPrompt] total prompt size: ${prompt.length} chars (~${Math.round(prompt.length / 4)} tokens)`);
@@ -236,18 +375,32 @@ Return the operation batch JSON now.`;
 
 export const GENERATE_SYSTEM_PROMPT = `You are a Figma frame generator. Return ONLY valid JSON (no markdown, no prose).
 
-Return a single NodeSnapshot object: a root FRAME with nested children.
+Return a single NodeSnapshot object: a root FRAME with nested children. For component sets, return a root COMPONENT_SET containing COMPONENT children.
 
 NodeSnapshot fields:
-- FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX" (NEVER use "STRETCH" — it is not valid), paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", strokeColor:"#HEX", strokeWeight:number, strokeTopWeight:number, strokeRightWeight:number, strokeBottomWeight:number, strokeLeftWeight:number, cornerRadius, clipsContent, opacity, effects[], children[]
-- TEXT: name, type:"TEXT", characters, fontSize, fontFamily (use the font from style tokens), fontStyle:"Regular"|"Medium"|"Semi Bold"|"Bold", fillColor, textAlignHorizontal:"LEFT"|"CENTER"|"RIGHT", textDecoration:"UNDERLINE"|"STRIKETHROUGH", layoutSizingHorizontal, layoutSizingVertical:"HUG"
-- RECTANGLE: name, type:"RECTANGLE", width, height, fillColor, cornerRadius, layoutSizingHorizontal, layoutSizingVertical
+- FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX" (NEVER use "STRETCH" — it is not valid), paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", fillStyleName:"StyleName", strokeColor:"#HEX", strokeWeight:number, strokeTopWeight:number, strokeRightWeight:number, strokeBottomWeight:number, strokeLeftWeight:number, cornerRadius, clipsContent, opacity, effects[], children[]
+- TEXT: name, type:"TEXT", characters, fontSize, fontFamily (use the font from style tokens), fontStyle:"Regular"|"Medium"|"Semi Bold"|"Bold", fillColor, fillStyleName:"StyleName", textStyleName:"StyleName", textAlignHorizontal:"LEFT"|"CENTER"|"RIGHT", textDecoration:"UNDERLINE"|"STRIKETHROUGH", layoutSizingHorizontal, layoutSizingVertical:"HUG"
+- RECTANGLE: name, type:"RECTANGLE", width, height, fillColor, fillStyleName:"StyleName", cornerRadius, layoutSizingHorizontal, layoutSizingVertical
+- COMPONENT: name, type:"COMPONENT" — same properties as FRAME. Used as a variant child inside COMPONENT_SET. The name MUST follow Figma variant naming: "Property1=Value1, Property2=Value2" (e.g. "State=Active", "State=Loading, Size=Large").
+- COMPONENT_SET: name, type:"COMPONENT_SET", children[] — container for COMPONENT variants. Children MUST all be type:"COMPONENT". The component set name is the component family name (e.g. "FileChip", "Button"). Do NOT set fillColor, strokeColor, or cornerRadius on the COMPONENT_SET itself — Figma renders component sets with a transparent background and dashed purple border automatically. Only set fills/strokes on the COMPONENT children inside.
+
+Style-by-Name fields (PREFERRED when the user specifies style names):
+- fillStyleName: Exact name of a local paint style (e.g. "Light/Primary", "Dark/Surface"). When provided, the plugin binds the style by name instead of hex matching. You can also provide fillColor as a fallback hex.
+- textStyleName: Exact name of a local text style (e.g. "Body/Medium", "Heading/Large"). When provided, the plugin binds the text style by name. Font properties still apply as fallback.
 
 Effects: [{"type":"DROP_SHADOW","radius":8,"spread":0,"offset":{"x":0,"y":2},"color":{"r":0,"g":0,"b":0,"a":0.08}}]
 
 Rules:
 - Root: layoutMode:"VERTICAL", layoutSizingVertical:"HUG", width 390 (mobile) or 1440 (desktop)
 - Use layoutMode on ALL frames. Use FILL for full-width children, HUG for content-fit
+- STYLE-BY-NAME PRIORITY: When the user explicitly mentions style names (e.g. "use Light/Primary for the background"), ALWAYS use fillStyleName or textStyleName. When style names are available in the design system context, prefer fillStyleName over raw fillColor hex values. This ensures proper design system binding.
+- COMPONENT SET CREATION: When asked to create a component set, component, or variants:
+  * Root node type: "COMPONENT_SET"
+  * Each variant is a child with type: "COMPONENT"
+  * Component names MUST use Figma variant syntax: "Property=Value" (e.g. "State=Default", "State=Hover", "State=Disabled", "Size=Small, State=Active"). If unsure what property to use, default to "State=..."
+  * CRITICAL: Each COMPONENT variant MUST contain FULL children[] with the actual UI content (text nodes, shapes, icons, frames, etc.). Do NOT create empty/blank component variants — they must have the same visual richness as a regular FRAME. Each variant should be a complete, fully-designed UI element.
+  * All variants should have the same dimensions and layout structure
+  * Use fillStyleName and textStyleName when the user specifies named styles
 - Buttons: replicate the exact cornerRadius, alignment (primaryAxisAlignItems, counterAxisAlignItems), text color, font, fillColor, and layoutSizingHorizontal from the provided button style tokens. CRITICAL SIZING: buttons must look visually substantial and tappable. Set the button FRAME height to FIXED at the height from the style tokens (e.g. height:36 means the frame is 36px tall). Add vertical padding so the text is centered: paddingTop and paddingBottom should each be at least 8. If the button tokens show layoutSizingVertical:"HUG" with 0 padding, IGNORE the 0 padding — set paddingTop:10, paddingBottom:10 instead, and use layoutSizingVertical:"HUG" so the button grows to fit. The button text must be vertically and horizontally centered (primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER"). For full-width mobile buttons (width close to the root frame width), use layoutSizingHorizontal:"FILL" so they stretch to fill the parent container.
 - Do NOT include phone status bar elements (time, battery, signal icons). Start directly with the actual screen UI content.
 - Do NOT create colored circles or shapes as icon placeholders. For social login buttons (Google, Apple), just use a FRAME with a text label. No icon shapes.
@@ -256,6 +409,7 @@ Rules:
 - Input fields: match the EXACT style from tokens — fillColor, strokeColor, strokeWeight, cornerRadius, placeholder text color/font, alignment. If input tokens show bottomBorderOnly:true, use individual stroke weights (set strokeBottomWeight to the border weight and strokeTopWeight/strokeRightWeight/strokeLeftWeight to 0) instead of uniform strokeWeight.
 - Links and underlined text: use textDecoration:"UNDERLINE" when the style tokens or context indicates underlined text (e.g. "Forgot password?" links).
 - REFERENCE SNAPSHOTS: When reference frame snapshots are provided, they show the EXACT node structure of existing screens. This is the HIGHEST PRIORITY style source. Study every property and replicate the same styling for equivalent elements in your output. This includes fillColor, strokeColor, strokeWeight, individual stroke weights, cornerRadius, padding, spacing, alignment, font family/size/style, textDecoration, and textAlignHorizontal. If the reference snapshot shows different values than the button/input style tokens, ALWAYS follow the reference snapshot.
+- DESIGN SYSTEM COLORS: When a color palette is provided, you MUST use ONLY hex values from that palette. Do NOT invent new hex colors. The plugin will automatically bind your hex values to the file's paint styles (e.g. Light/Surface, Dark/Primary). For dark mode screens, prefer colors labeled as Dark/ mode. For light mode, prefer Light/ mode colors. Using exact hex values from the palette ensures proper paint style binding.
 
 DESKTOP LAYOUT ADAPTATION (when converting a mobile screen to desktop):
 - The root FRAME width MUST be exactly 1440. No exceptions. Do not use 720, 800, or any other width.
@@ -279,7 +433,8 @@ export function buildGeneratePrompt(
   prompt: string,
   styleTokens: any,
   designSystem: DesignSystemSnapshot,
-  selection?: any
+  selection?: any,
+  fullDesignSystem?: any
 ): string {
   const parts: string[] = [
     "## User Request",
@@ -368,7 +523,22 @@ export function buildGeneratePrompt(
     const trimmed = designSystem.textStyles.slice(0, 8).map((s: any) => ({
       name: s.name, fontFamily: s.fontFamily, fontStyle: s.fontStyle, fontSize: s.fontSize
     }));
-    parts.push("", "## Text Styles", JSON.stringify(trimmed));
+    parts.push("", "## Text Styles (use textStyleName to bind by name)", JSON.stringify(trimmed));
+  }
+
+  // Include paint style names for style-by-name binding
+  if (designSystem.fillStyles?.length > 0) {
+    const styleNames = designSystem.fillStyles.slice(0, 30).map((s: any) => {
+      let label = s.name;
+      if (s.hex) label += ` (${s.hex})`;
+      return label;
+    });
+    parts.push("", "## Paint Styles (use fillStyleName to bind by name)", styleNames.join(", "));
+  }
+
+  // Include full design system if available (cross-page colors, variables, etc.)
+  if (fullDesignSystem) {
+    parts.push("", formatFullDesignSystemSection(fullDesignSystem));
   }
 
   parts.push("", "Generate the complete NodeSnapshot JSON now. Use the exact style token values above.");

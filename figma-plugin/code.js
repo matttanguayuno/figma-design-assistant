@@ -44,6 +44,8 @@
   var CACHE_TTL_MS = 6e4;
   var _designSystemCache = null;
   var _rawTokenCache = null;
+  var _fullDesignSystem = null;
+  var _extractDSCancelled = false;
   function yieldToUI() {
     return new Promise((resolve) => setTimeout(resolve, 0));
   }
@@ -73,6 +75,8 @@
   var MIN_HEIGHT = 280;
   figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
   clearAuditBadges();
+  loadCachedFullDesignSystem().catch(() => {
+  });
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
   }
@@ -85,7 +89,7 @@
       for (const child of snap.children) assignTempIds(child);
     }
   }
-  function extractStyleTokens(userPrompt) {
+  async function extractStyleTokens(userPrompt) {
     const hasFreshRawCache = _rawTokenCache && Date.now() - _rawTokenCache.ts < CACHE_TTL_MS;
     if (hasFreshRawCache) {
       console.log("[extractStyleTokens] Using cached raw data (age: " + Math.round((Date.now() - _rawTokenCache.ts) / 1e3) + "s), recomputing reference for prompt");
@@ -358,9 +362,11 @@
       return true;
     });
     console.log("[extractStyleTokens] Walking", designFrames.length, "design frames (skipping generated):", designFrames.map((f) => `${f.name} (${f.type})`).join(", "));
-    for (const frame of designFrames) {
-      currentRootFrameName = frame.name;
-      walkNode(frame, 0);
+    for (let i = 0; i < designFrames.length; i++) {
+      currentRootFrameName = designFrames[i].name;
+      walkNode(designFrames[i], 0);
+      // Yield every 3 frames to keep UI responsive during heavy tree walks
+      if (i % 3 === 2) await yieldToUI();
     }
     console.log("[extractStyleTokens] Found", buttonStyles.length, "buttons:", JSON.stringify(buttonStyles));
     console.log("[extractStyleTokens] Found", inputStyles.length, "inputs:", JSON.stringify(inputStyles));
@@ -1348,8 +1354,159 @@
     };
   }
   var _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
+  var _lightStyleMap = null;
+  var _darkStyleMap = null;
+  var _unscopedStyleMap = null;
+  var _textStyleMap = null;
+  var _currentThemeMode = "auto";
+  var _paintStyleNameMap = null;
+  var _textStyleNameMap = null;
+  function ensurePaintStyleMaps() {
+    if (_lightStyleMap) return;
+    _lightStyleMap = /* @__PURE__ */ new Map();
+    _darkStyleMap = /* @__PURE__ */ new Map();
+    _unscopedStyleMap = /* @__PURE__ */ new Map();
+    try {
+      for (const s of figma.getLocalPaintStyles()) {
+        const paints = s.paints;
+        if (!Array.isArray(paints)) continue;
+        const solid = paints.find((p) => p.type === "SOLID" && p.visible !== false);
+        if (solid) {
+          const hex = `#${[solid.color.r, solid.color.g, solid.color.b].map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+          const nameLower = s.name.toLowerCase();
+          if (nameLower.startsWith("light/") || nameLower.startsWith("light ")) {
+            if (!_lightStyleMap.has(hex)) _lightStyleMap.set(hex, s.id);
+          } else if (nameLower.startsWith("dark/") || nameLower.startsWith("dark ")) {
+            if (!_darkStyleMap.has(hex)) _darkStyleMap.set(hex, s.id);
+          } else {
+            if (!_unscopedStyleMap.has(hex)) _unscopedStyleMap.set(hex, s.id);
+          }
+        }
+      }
+      console.log(`[styleBinding] Paint style maps: light=${_lightStyleMap.size}, dark=${_darkStyleMap.size}, unscoped=${_unscopedStyleMap.size}`);
+    } catch (e) {
+      console.warn("[styleBinding] Failed to build paint style maps:", e);
+    }
+  }
+  function ensureTextStyleMap() {
+    if (_textStyleMap) return _textStyleMap;
+    _textStyleMap = /* @__PURE__ */ new Map();
+    try {
+      for (const s of figma.getLocalTextStyles()) {
+        const fn = s.fontName;
+        if (!fn) continue;
+        const size = typeof s.fontSize === "number" ? s.fontSize : 0;
+        const key = `${fn.family}|${fn.style}|${size}`.toLowerCase();
+        if (!_textStyleMap.has(key)) {
+          _textStyleMap.set(key, s.id);
+        }
+      }
+      console.log(`[styleBinding] Built text style map: ${_textStyleMap.size} entries`);
+    } catch (e) {
+      console.warn("[styleBinding] Failed to build text style map:", e);
+    }
+    return _textStyleMap;
+  }
+  function tryBindFillStyle(node, hex) {
+    try {
+      ensurePaintStyleMaps();
+      const normalized = hex.toUpperCase();
+      let styleId;
+      if (_currentThemeMode === "dark") {
+        styleId = _darkStyleMap.get(normalized) || _unscopedStyleMap.get(normalized) || _lightStyleMap.get(normalized);
+      } else if (_currentThemeMode === "light") {
+        styleId = _lightStyleMap.get(normalized) || _unscopedStyleMap.get(normalized) || _darkStyleMap.get(normalized);
+      } else {
+        styleId = _unscopedStyleMap.get(normalized) || _lightStyleMap.get(normalized) || _darkStyleMap.get(normalized);
+      }
+      if (styleId && "fillStyleId" in node) {
+        node.fillStyleId = styleId;
+      }
+    } catch (_) {
+    }
+  }
+  function tryBindTextStyle(node, fontFamily, fontStyle, fontSize) {
+    try {
+      const map = ensureTextStyleMap();
+      const key = `${fontFamily}|${fontStyle}|${fontSize}`.toLowerCase();
+      const styleId = map.get(key);
+      if (styleId) {
+        node.textStyleId = styleId;
+      }
+    } catch (_) {
+    }
+  }
+  function detectThemeMode(text) {
+    const lower = text.toLowerCase();
+    if (/\bdark\b/.test(lower)) return "dark";
+    if (/\blight\b/.test(lower)) return "light";
+    return "auto";
+  }
+  function ensurePaintStyleNameMap() {
+    if (_paintStyleNameMap) return _paintStyleNameMap;
+    _paintStyleNameMap = new Map();
+    try {
+      for (const s of figma.getLocalPaintStyles()) {
+        const key = s.name.toLowerCase().trim();
+        if (!_paintStyleNameMap.has(key)) {
+          _paintStyleNameMap.set(key, s.id);
+        }
+      }
+      console.log(`[styleBinding] Paint style name map: ${_paintStyleNameMap.size} entries`);
+    } catch (e) {
+      console.warn("[styleBinding] Failed to build paint style name map:", e);
+    }
+    return _paintStyleNameMap;
+  }
+  function ensureTextStyleNameMap() {
+    if (_textStyleNameMap) return _textStyleNameMap;
+    _textStyleNameMap = new Map();
+    try {
+      for (const s of figma.getLocalTextStyles()) {
+        const key = s.name.toLowerCase().trim();
+        if (!_textStyleNameMap.has(key)) {
+          _textStyleNameMap.set(key, s.id);
+        }
+      }
+      console.log(`[styleBinding] Text style name map: ${_textStyleNameMap.size} entries`);
+    } catch (e) {
+      console.warn("[styleBinding] Failed to build text style name map:", e);
+    }
+    return _textStyleNameMap;
+  }
+  function tryBindFillStyleByName(node, styleName) {
+    try {
+      const map = ensurePaintStyleNameMap();
+      const styleId = map.get(styleName.toLowerCase().trim());
+      if (styleId && "fillStyleId" in node) {
+        node.fillStyleId = styleId;
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+  function tryBindTextStyleByName(node, styleName) {
+    try {
+      const map = ensureTextStyleNameMap();
+      const styleId = map.get(styleName.toLowerCase().trim());
+      if (styleId) {
+        node.textStyleId = styleId;
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+  function clearStyleMaps() {
+    _lightStyleMap = null;
+    _darkStyleMap = null;
+    _unscopedStyleMap = null;
+    _textStyleMap = null;
+    _paintStyleNameMap = null;
+    _textStyleNameMap = null;
+    _currentThemeMode = "auto";
+  }
   async function createNodeFromSnapshot(snap, parent) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
     let node;
     const parentIsAutoLayout = "layoutMode" in parent && (parent.layoutMode === "HORIZONTAL" || parent.layoutMode === "VERTICAL");
     if (snap.type === "TEXT") {
@@ -1435,8 +1592,23 @@
         }
       }
       try {
-        if (snap.fillColor) {
+        if (snap.fillStyleName) {
+          if (snap.fillColor) textNode.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+          tryBindFillStyleByName(textNode, snap.fillStyleName);
+        } else if (snap.fillColor) {
           textNode.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+          tryBindFillStyle(textNode, snap.fillColor);
+        }
+      } catch (_) {
+      }
+      try {
+        if (snap.textStyleName) {
+          tryBindTextStyleByName(textNode, snap.textStyleName);
+        } else {
+          const fn = textNode.fontName;
+          if (fn && fn.family && fn.style) {
+            tryBindTextStyle(textNode, fn.family, fn.style, textNode.fontSize);
+          }
         }
       } catch (_) {
       }
@@ -1452,11 +1624,17 @@
           ellipse.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: img.hash }];
           _importStats.images++;
         } catch (_e2) {
-          if (snap.fillColor) ellipse.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
-          else ellipse.fills = [];
+          if (snap.fillColor) {
+            ellipse.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+            tryBindFillStyle(ellipse, snap.fillColor);
+          } else ellipse.fills = [];
         }
+      } else if (snap.fillStyleName) {
+        ellipse.fills = snap.fillColor ? [{ type: "SOLID", color: hexToRgb(snap.fillColor) }] : [];
+        tryBindFillStyleByName(ellipse, snap.fillStyleName);
       } else if (snap.fillColor) {
         ellipse.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+        tryBindFillStyle(ellipse, snap.fillColor);
       } else {
         ellipse.fills = [];
       }
@@ -1473,11 +1651,17 @@
           rect.fills = [{ type: "IMAGE", scaleMode: "FILL", imageHash: img.hash }];
           _importStats.images++;
         } catch (_e2) {
-          if (snap.fillColor) rect.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
-          else rect.fills = [];
+          if (snap.fillColor) {
+            rect.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+            tryBindFillStyle(rect, snap.fillColor);
+          } else rect.fills = [];
         }
+      } else if (snap.fillStyleName) {
+        rect.fills = snap.fillColor ? [{ type: "SOLID", color: hexToRgb(snap.fillColor) }] : [];
+        tryBindFillStyleByName(rect, snap.fillStyleName);
       } else if (snap.fillColor) {
         rect.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+        tryBindFillStyle(rect, snap.fillColor);
       } else {
         rect.fills = [];
       }
@@ -1493,12 +1677,145 @@
         frame.fills = [{ type: "IMAGE", scaleMode: "FIT", imageHash: img.hash }];
         _importStats.images++;
       } catch (_e2) {
-        if (snap.fillColor) frame.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+        if (snap.fillColor) {
+          frame.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+          tryBindFillStyle(frame, snap.fillColor);
+        }
       }
       if (snap.cornerRadius != null && snap.cornerRadius > 0) frame.cornerRadius = snap.cornerRadius;
       if (snap.clipsContent != null) frame.clipsContent = snap.clipsContent;
       node = frame;
       _importStats.frames++;
+    } else if (snap.type === "COMPONENT") {
+      const comp = figma.createComponent();
+      comp.resize((_g = snap.width) != null ? _g : 100, (_h = snap.height) != null ? _h : 100);
+      if (snap.layoutMode === "HORIZONTAL" || snap.layoutMode === "VERTICAL") {
+        comp.layoutMode = snap.layoutMode;
+        if (snap.paddingTop != null) comp.paddingTop = snap.paddingTop;
+        if (snap.paddingRight != null) comp.paddingRight = snap.paddingRight;
+        if (snap.paddingBottom != null) comp.paddingBottom = snap.paddingBottom;
+        if (snap.paddingLeft != null) comp.paddingLeft = snap.paddingLeft;
+        if (snap.itemSpacing != null) comp.itemSpacing = snap.itemSpacing;
+        if (snap.counterAxisSpacing != null) comp.counterAxisSpacing = snap.counterAxisSpacing;
+        const validPrimary = ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"];
+        const validCounter = ["MIN", "CENTER", "MAX", "BASELINE"];
+        if (snap.primaryAxisAlignItems && validPrimary.indexOf(snap.primaryAxisAlignItems) !== -1) {
+          comp.primaryAxisAlignItems = snap.primaryAxisAlignItems;
+        }
+        if (snap.counterAxisAlignItems && validCounter.indexOf(snap.counterAxisAlignItems) !== -1) {
+          comp.counterAxisAlignItems = snap.counterAxisAlignItems;
+        }
+        if (snap.layoutWrap === "WRAP") comp.layoutWrap = "WRAP";
+        if (snap.layoutSizingVertical === "FIXED" || snap.layoutSizingHorizontal === "FIXED") {
+          try {
+            if (snap.layoutMode === "VERTICAL") {
+              if (snap.layoutSizingVertical === "FIXED") comp.primaryAxisSizingMode = "FIXED";
+              if (snap.layoutSizingHorizontal === "FIXED") comp.counterAxisSizingMode = "FIXED";
+            } else {
+              if (snap.layoutSizingHorizontal === "FIXED") comp.primaryAxisSizingMode = "FIXED";
+              if (snap.layoutSizingVertical === "FIXED") comp.counterAxisSizingMode = "FIXED";
+            }
+            comp.resize((_i = snap.width) != null ? _i : 100, (_j = snap.height) != null ? _j : 100);
+          } catch (_) {}
+        }
+      }
+      if (snap.cornerRadius != null && snap.cornerRadius > 0) comp.cornerRadius = snap.cornerRadius;
+      if (snap.clipsContent != null) comp.clipsContent = snap.clipsContent;
+      if (snap.strokeColor) {
+        try {
+          comp.strokes = [{ type: "SOLID", color: hexToRgb(snap.strokeColor) }];
+          comp.strokeWeight = (_k = snap.strokeWeight) != null ? _k : 1;
+          comp.strokeAlign = "INSIDE";
+          if (snap.strokeBottomWeight != null) {
+            comp.strokeTopWeight = (_l = snap.strokeTopWeight) != null ? _l : 0;
+            comp.strokeRightWeight = (_m = snap.strokeRightWeight) != null ? _m : 0;
+            comp.strokeBottomWeight = snap.strokeBottomWeight;
+            comp.strokeLeftWeight = (_n = snap.strokeLeftWeight) != null ? _n : 0;
+          }
+        } catch (_) {}
+      }
+      if (snap.fillStyleName) {
+        comp.fills = snap.fillColor ? [{ type: "SOLID", color: hexToRgb(snap.fillColor) }] : [];
+        tryBindFillStyleByName(comp, snap.fillStyleName);
+      } else if (snap.fillColor) {
+        comp.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+        tryBindFillStyle(comp, snap.fillColor);
+      } else {
+        comp.fills = [];
+      }
+      if (snap.children && snap.children.length > 0) {
+        for (const childSnap of snap.children) {
+          try {
+            await createNodeFromSnapshot(childSnap, comp);
+          } catch (childErr) {
+            _importStats.failed++;
+            _importStats.errors.push(`"${childSnap.name}": ${childErr.message}`);
+          }
+        }
+      }
+      node = comp;
+      _importStats.frames++;
+    } else if (snap.type === "COMPONENT_SET") {
+      console.log(`[createNodeFromSnapshot] COMPONENT_SET "${snap.name}" — ${(snap.children == null ? void 0 : snap.children.length) || 0} children`);
+      const components = [];
+      if (snap.children && snap.children.length > 0) {
+        for (let ci = 0; ci < snap.children.length; ci++) {
+          const childSnap = snap.children[ci];
+          try {
+            childSnap.type = "COMPONENT";
+            if (childSnap.name && childSnap.name.indexOf("=") === -1) {
+              childSnap.name = `Property 1=${childSnap.name}`;
+            } else if (!childSnap.name) {
+              childSnap.name = `Property 1=Variant ${ci + 1}`;
+            }
+            const childNode = await createNodeFromSnapshot(childSnap, parent);
+            if (childNode && childNode.type === "COMPONENT") {
+              components.push(childNode);
+              console.log(`[createNodeFromSnapshot] COMPONENT_SET child ${ci}: "${childNode.name}" (${childNode.width}x${childNode.height}, ${childNode.children ? childNode.children.length : 0} inner children)`);
+            } else {
+              console.warn(`[createNodeFromSnapshot] COMPONENT_SET child ${ci} was not a COMPONENT:`, childNode == null ? void 0 : childNode.type);
+            }
+          } catch (childErr) {
+            _importStats.failed++;
+            _importStats.errors.push(`"${childSnap.name}": ${childErr.message}`);
+            console.error(`[createNodeFromSnapshot] COMPONENT_SET child ${ci} error:`, childErr.message);
+          }
+        }
+      }
+      if (components.length >= 2) {
+        try {
+          const componentSet = figma.combineAsVariants(components, parent);
+          componentSet.name = snap.name || "Component Set";
+          console.log(`[createNodeFromSnapshot] combineAsVariants succeeded: "${componentSet.name}" (${componentSet.children.length} variants)`);
+          if (snap.layoutMode === "HORIZONTAL" || snap.layoutMode === "VERTICAL") {
+            componentSet.layoutMode = snap.layoutMode;
+          }
+          if (snap.itemSpacing != null) componentSet.itemSpacing = snap.itemSpacing;
+          if (snap.paddingTop != null) componentSet.paddingTop = snap.paddingTop;
+          if (snap.paddingRight != null) componentSet.paddingRight = snap.paddingRight;
+          if (snap.paddingBottom != null) componentSet.paddingBottom = snap.paddingBottom;
+          if (snap.paddingLeft != null) componentSet.paddingLeft = snap.paddingLeft;
+          // Do NOT apply fillColor or cornerRadius to the component set wrapper.
+          // Figma component sets should have transparent bg with dashed purple border.
+          componentSet.fills = [];
+          _importStats.frames++;
+          componentSet.__isComponentSet = true;
+          return componentSet;
+        } catch (combineErr) {
+          console.error(`[createNodeFromSnapshot] combineAsVariants FAILED:`, combineErr.message);
+          for (const orphan of components) {
+            try { orphan.remove(); } catch (_) {}
+          }
+          return null;
+        }
+      } else if (components.length === 1) {
+        console.warn("[createNodeFromSnapshot] COMPONENT_SET had only 1 child, returning as standalone component");
+        _importStats.frames++;
+        return components[0];
+      } else {
+        console.warn("[createNodeFromSnapshot] COMPONENT_SET had no valid children");
+        return null;
+      }
     } else {
       const frame = figma.createFrame();
       frame.resize(
@@ -1526,6 +1843,19 @@
         if (snap.layoutWrap === "WRAP") {
           frame.layoutWrap = "WRAP";
         }
+        if (snap.layoutSizingVertical === "FIXED" || snap.layoutSizingHorizontal === "FIXED") {
+          try {
+            if (snap.layoutMode === "VERTICAL") {
+              if (snap.layoutSizingVertical === "FIXED") frame.primaryAxisSizingMode = "FIXED";
+              if (snap.layoutSizingHorizontal === "FIXED") frame.counterAxisSizingMode = "FIXED";
+            } else {
+              if (snap.layoutSizingHorizontal === "FIXED") frame.primaryAxisSizingMode = "FIXED";
+              if (snap.layoutSizingVertical === "FIXED") frame.counterAxisSizingMode = "FIXED";
+            }
+            frame.resize((_i = snap.width) != null ? _i : 100, (_j = snap.height) != null ? _j : 100);
+          } catch (_) {
+          }
+        }
       }
       if (snap.cornerRadius != null && snap.cornerRadius > 0) {
         frame.cornerRadius = snap.cornerRadius;
@@ -1536,13 +1866,13 @@
       if (snap.strokeColor) {
         try {
           frame.strokes = [{ type: "SOLID", color: hexToRgb(snap.strokeColor) }];
-          frame.strokeWeight = (_i = snap.strokeWeight) != null ? _i : 1;
+          frame.strokeWeight = (_k = snap.strokeWeight) != null ? _k : 1;
           frame.strokeAlign = "INSIDE";
           if (snap.strokeBottomWeight != null) {
-            frame.strokeTopWeight = (_j = snap.strokeTopWeight) != null ? _j : 0;
-            frame.strokeRightWeight = (_k = snap.strokeRightWeight) != null ? _k : 0;
+            frame.strokeTopWeight = (_l = snap.strokeTopWeight) != null ? _l : 0;
+            frame.strokeRightWeight = (_m = snap.strokeRightWeight) != null ? _m : 0;
             frame.strokeBottomWeight = snap.strokeBottomWeight;
-            frame.strokeLeftWeight = (_l = snap.strokeLeftWeight) != null ? _l : 0;
+            frame.strokeLeftWeight = (_n = snap.strokeLeftWeight) != null ? _n : 0;
           }
         } catch (_) {
         }
@@ -1556,12 +1886,17 @@
         } catch (_e2) {
           if (snap.fillColor) {
             frame.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+            tryBindFillStyle(frame, snap.fillColor);
           } else {
             frame.fills = [];
           }
         }
+      } else if (snap.fillStyleName) {
+        frame.fills = snap.fillColor ? [{ type: "SOLID", color: hexToRgb(snap.fillColor) }] : [];
+        tryBindFillStyleByName(frame, snap.fillStyleName);
       } else if (snap.fillColor) {
         frame.fills = [{ type: "SOLID", color: hexToRgb(snap.fillColor) }];
+        tryBindFillStyle(frame, snap.fillColor);
       } else {
         frame.fills = [];
       }
@@ -1619,6 +1954,21 @@
         }
       }
     }
+    if (!parentIsAutoLayout && "primaryAxisSizingMode" in node) {
+      const sizingV = snap.layoutSizingVertical;
+      const sizingH = snap.layoutSizingHorizontal;
+      const mode = snap.layoutMode;
+      try {
+        if (mode === "VERTICAL") {
+          if (sizingV === "FIXED") node.primaryAxisSizingMode = "FIXED";
+          if (sizingH === "FIXED") node.counterAxisSizingMode = "FIXED";
+        } else if (mode === "HORIZONTAL") {
+          if (sizingH === "FIXED") node.primaryAxisSizingMode = "FIXED";
+          if (sizingV === "FIXED") node.counterAxisSizingMode = "FIXED";
+        }
+      } catch (_) {
+      }
+    }
     if (snap.type === "TEXT" && snap.width && snap.height) {
       try {
         node.resize(snap.width, snap.height);
@@ -1672,10 +2022,16 @@
       return entry;
     });
     const components = [];
-    figma.currentPage.findAll((n) => n.type === "COMPONENT").forEach((c) => {
-      const comp = c;
-      components.push({ key: comp.key, name: comp.name });
-    });
+    try {
+      const compNodes = figma.currentPage.findAllWithCriteria({ types: ["COMPONENT"] });
+      for (const c of compNodes) {
+        components.push({ key: c.key, name: c.name });
+      }
+    } catch (_) {
+      figma.currentPage.findAll((n) => n.type === "COMPONENT").forEach((c) => {
+        components.push({ key: c.key, name: c.name });
+      });
+    }
     let variables = [];
     try {
       const collections = await figma.variables.getLocalVariableCollectionsAsync();
@@ -1692,6 +2048,481 @@
     const result = { textStyles, fillStyles, components, variables };
     _designSystemCache = { data: result, ts: Date.now() };
     return result;
+  }
+  function computeDocumentHash() {
+    return figma.root.children.map((p) => `${p.name}:${p.children.length}`).join("|");
+  }
+  function inferColorRole(name) {
+    const lower = name.toLowerCase().replace(/[\/_\-\s]+/g, " ");
+    const roleMap = [
+      [/\bprimary\b/, "primary"],
+      [/\bsecondary\b/, "secondary"],
+      [/\btertiary\b/, "tertiary"],
+      [/\bsurface\b/, "surface"],
+      [/\bbackground\b/, "background"],
+      [/\bon[ -]?primary\b/, "on-primary"],
+      [/\bon[ -]?secondary\b/, "on-secondary"],
+      [/\bon[ -]?surface\b/, "on-surface"],
+      [/\bon[ -]?background\b/, "on-background"],
+      [/\berror\b/, "error"],
+      [/\bon[ -]?error\b/, "on-error"],
+      [/\bwarning\b/, "warning"],
+      [/\bsuccess\b/, "success"],
+      [/\binfo\b/, "info"],
+      [/\boutline\b/, "outline"],
+      [/\bdivider\b/, "divider"],
+      [/\baccent\b/, "accent"],
+      [/\bneutral\b/, "neutral"],
+      [/\binverse\b/, "inverse"],
+      [/\bscrim\b/, "scrim"],
+      [/\bshadow\b/, "shadow"]
+    ];
+    for (const [re, role] of roleMap) {
+      if (re.test(lower)) return role;
+    }
+    return void 0;
+  }
+  function inferTypographyRole(name, fontSize) {
+    const lower = name.toLowerCase();
+    if (/display|hero/i.test(lower)) return "display";
+    if (/h1|heading.?1|title.?large/i.test(lower)) return "heading1";
+    if (/h2|heading.?2|title.?medium/i.test(lower)) return "heading2";
+    if (/h3|heading.?3|title.?small/i.test(lower)) return "heading3";
+    if (/h4|heading.?4/i.test(lower)) return "heading4";
+    if (/h5|heading.?5/i.test(lower)) return "heading5";
+    if (/h6|heading.?6/i.test(lower)) return "heading6";
+    if (/subtitle|subhead/i.test(lower)) return "subtitle";
+    if (/body.?large/i.test(lower)) return "body-large";
+    if (/body.?small/i.test(lower)) return "body-small";
+    if (/\bbody\b/i.test(lower)) return "body";
+    if (/caption/i.test(lower)) return "caption";
+    if (/overline/i.test(lower)) return "overline";
+    if (/label.?large/i.test(lower)) return "label-large";
+    if (/label.?small/i.test(lower)) return "label-small";
+    if (/\blabel\b/i.test(lower)) return "label";
+    if (/button/i.test(lower)) return "button";
+    if (fontSize >= 32) return "heading1";
+    if (fontSize >= 24) return "heading2";
+    if (fontSize >= 20) return "heading3";
+    if (fontSize >= 16) return "body";
+    if (fontSize >= 12) return "body-small";
+    if (fontSize < 12) return "caption";
+    return void 0;
+  }
+  function paintToHex(paint) {
+    if (paint.type === "SOLID" && paint.visible !== false) {
+      const c = paint.color;
+      const toH = (v) => Math.round(v * 255).toString(16).padStart(2, "0");
+      return `#${toH(c.r)}${toH(c.g)}${toH(c.b)}`.toUpperCase();
+    }
+    return void 0;
+  }
+  async function extractFullDocumentDesignSystem() {
+    _extractDSCancelled = false;
+    const pages = figma.root.children;
+    const totalPages = pages.length;
+    const documentHash = computeDocumentHash();
+    console.log(`[extractFullDS] Starting full document scan: ${totalPages} pages`);
+    const colorPalette = [];
+    const typographyScale = [];
+    const spacingSet = /* @__PURE__ */ new Set();
+    const cornerRadiusSet = /* @__PURE__ */ new Set();
+    const allComponents = [];
+    const allVariables = [];
+    const allButtonStyles = [];
+    const allInputStyles = [];
+    const pageList = [];
+    const seenColorHexes = /* @__PURE__ */ new Set();
+    const textStyles = figma.getLocalTextStyles();
+    for (const s of textStyles) {
+      const entry = {
+        name: s.name,
+        fontFamily: typeof s.fontName !== "symbol" ? s.fontName.family : "Unknown",
+        fontStyle: typeof s.fontName !== "symbol" ? s.fontName.style : void 0,
+        fontSize: typeof s.fontSize === "number" ? s.fontSize : 16
+      };
+      if (s.lineHeight && typeof s.lineHeight !== "symbol") {
+        const lh = s.lineHeight;
+        entry.lineHeight = lh.unit === "AUTO" ? "AUTO" : lh.value;
+      }
+      if (typeof s.letterSpacing !== "symbol" && s.letterSpacing) {
+        const ls = s.letterSpacing;
+        if (ls.value) entry.letterSpacing = ls.value;
+      }
+      entry.role = inferTypographyRole(s.name, entry.fontSize);
+      typographyScale.push(entry);
+    }
+    const paintStyles = figma.getLocalPaintStyles();
+    for (const s of paintStyles) {
+      try {
+        const paints = s.paints;
+        if (Array.isArray(paints)) {
+          const solid = paints.find((p) => p.type === "SOLID" && p.visible !== false);
+          if (solid) {
+            const hex = paintToHex(solid);
+            const role = inferColorRole(s.name);
+            const mode = /dark/i.test(s.name) ? "dark" : /light/i.test(s.name) ? "light" : void 0;
+            colorPalette.push({
+              name: s.name,
+              hex,
+              role,
+              mode,
+              source: "paintStyle",
+              opacity: typeof solid.opacity === "number" && solid.opacity < 1 ? Math.round(solid.opacity * 100) : void 0
+            });
+            seenColorHexes.add(hex);
+          }
+        }
+      } catch (_) {
+      }
+    }
+    try {
+      const collections = await figma.variables.getLocalVariableCollectionsAsync();
+      for (const col of collections) {
+        const modeNameMap = {};
+        for (const mode of col.modes) {
+          modeNameMap[mode.modeId] = mode.name;
+        }
+        for (const varId of col.variableIds) {
+          const v = await figma.variables.getVariableByIdAsync(varId);
+          if (!v) continue;
+          const valuesByMode = {};
+          for (const [modeId, value] of Object.entries(v.valuesByMode)) {
+            const modeName = modeNameMap[modeId] || modeId;
+            if (v.resolvedType === "COLOR" && typeof value === "object" && value !== null && "r" in value) {
+              const c = value;
+              const toH = (val) => Math.round(val * 255).toString(16).padStart(2, "0");
+              const hex = `#${toH(c.r)}${toH(c.g)}${toH(c.b)}`.toUpperCase();
+              valuesByMode[modeName] = hex;
+              const role = inferColorRole(v.name);
+              if (!seenColorHexes.has(hex + ":" + modeName)) {
+                colorPalette.push({
+                  name: v.name,
+                  hex,
+                  role,
+                  mode: modeName.toLowerCase().includes("dark") ? "dark" : modeName.toLowerCase().includes("light") ? "light" : modeName,
+                  source: `variable:${col.name}`
+                });
+                seenColorHexes.add(hex + ":" + modeName);
+              }
+            } else {
+              valuesByMode[modeName] = value;
+            }
+          }
+          allVariables.push({
+            id: v.id,
+            name: v.name,
+            collection: col.name,
+            type: v.resolvedType,
+            valuesByMode
+          });
+        }
+      }
+    } catch (_e) {
+      console.warn("[extractFullDS] Variables API not available:", _e);
+    }
+    let themingStatus = "none";
+    const colorVars = allVariables.filter((v) => v.type === "COLOR");
+    if (colorVars.length > 0) {
+      const hasMultiMode = colorVars.some((v) => Object.keys(v.valuesByMode).length >= 2);
+      themingStatus = hasMultiMode ? "complete" : "partial";
+    }
+    console.log(`[extractFullDS] Theming status: ${themingStatus} (${colorVars.length} color variables)`);
+    await yieldToUI();
+    if (_extractDSCancelled) throw new Error("Extraction cancelled");
+    const BATCH_NODE_COUNT = 150;
+    for (let pageIdx = 0; pageIdx < totalPages; pageIdx++) {
+      if (_extractDSCancelled) throw new Error("Extraction cancelled");
+      const page = pages[pageIdx];
+      pageList.push({ name: page.name, id: page.id });
+      sendToUI({ type: "extract-ds-progress", page: page.name, pageIndex: pageIdx, totalPages });
+      console.log(`[extractFullDS] Scanning page ${pageIdx + 1}/${totalPages}: "${page.name}"`);
+      try {
+        await page.loadAsync();
+      } catch (e) {
+        console.warn(`[extractFullDS] Could not load page "${page.name}":`, e);
+        continue;
+      }
+      let nodeCount = 0;
+      const pageChildren = page.children;
+      for (const topNode of pageChildren) {
+        if (_extractDSCancelled) throw new Error("Extraction cancelled");
+        const walkStack = [{ node: topNode, depth: 0 }];
+        while (walkStack.length > 0) {
+          const { node, depth } = walkStack.pop();
+          if (depth > 6) continue;
+          nodeCount++;
+          if (nodeCount % BATCH_NODE_COUNT === 0) {
+            await yieldToUI();
+            if (_extractDSCancelled) throw new Error("Extraction cancelled");
+          }
+          if (node.type === "COMPONENT") {
+            const comp = node;
+            allComponents.push({
+              key: comp.key,
+              name: comp.name,
+              page: page.name,
+              description: comp.description || void 0
+            });
+          } else if (node.type === "COMPONENT_SET") {
+            const compSet = node;
+            const variantProps = {};
+            for (const child of compSet.children) {
+              if (child.type === "COMPONENT") {
+                const comp = child;
+                const parts = comp.name.split(",").map((s) => s.trim());
+                for (const part of parts) {
+                  const eq = part.indexOf("=");
+                  if (eq > 0) {
+                    const propName = part.slice(0, eq).trim();
+                    const propVal = part.slice(eq + 1).trim();
+                    if (!variantProps[propName]) variantProps[propName] = /* @__PURE__ */ new Set();
+                    variantProps[propName].add(propVal);
+                  }
+                }
+              }
+            }
+            allComponents.push({
+              key: compSet.key,
+              name: compSet.name,
+              page: page.name,
+              description: compSet.description || void 0,
+              variants: Object.fromEntries(
+                Object.entries(variantProps).map(([k, v]) => [k, [...v]])
+              )
+            });
+            continue;
+          }
+          if (themingStatus !== "complete" && "fills" in node && Array.isArray(node.fills)) {
+            try {
+              const fills = node.fills;
+              for (const f of fills) {
+                const hex = paintToHex(f);
+                if (hex && !seenColorHexes.has(hex)) {
+                  colorPalette.push({ hex, source: `page:${page.name}` });
+                  seenColorHexes.add(hex);
+                }
+              }
+            } catch (_) {
+            }
+          }
+          if ("cornerRadius" in node && typeof node.cornerRadius === "number" && node.cornerRadius > 0) {
+            cornerRadiusSet.add(node.cornerRadius);
+          }
+          if (node.type === "TEXT") {
+            const tn = node;
+            if (typeof tn.fontSize === "number") {
+              const exists = typographyScale.some((t) => t.fontSize === tn.fontSize && t.fontFamily === (typeof tn.fontName !== "symbol" ? tn.fontName.family : ""));
+              if (!exists && typeof tn.fontName !== "symbol") {
+              }
+            }
+          }
+          if (node.type === "FRAME" || node.type === "COMPONENT" || node.type === "INSTANCE") {
+            const frame = node;
+            if (frame.layoutMode && frame.layoutMode !== "NONE") {
+              if (frame.itemSpacing > 0 && frame.itemSpacing <= 200) spacingSet.add(frame.itemSpacing);
+              if (frame.paddingTop > 0 && frame.paddingTop <= 200) spacingSet.add(frame.paddingTop);
+              if (frame.paddingRight > 0 && frame.paddingRight <= 200) spacingSet.add(frame.paddingRight);
+              if (frame.paddingBottom > 0 && frame.paddingBottom <= 200) spacingSet.add(frame.paddingBottom);
+              if (frame.paddingLeft > 0 && frame.paddingLeft <= 200) spacingSet.add(frame.paddingLeft);
+            }
+            const nameLower = frame.name.toLowerCase();
+            const isButtonByName = /\bbutton\b/i.test(frame.name);
+            const isInputByName = /textbox|passwordbox|\binput\b|searchbox|text.?field/i.test(nameLower);
+            if (isButtonByName && frame.height >= 30 && frame.height <= 75) {
+              const fillHex = (() => {
+                try {
+                  const fills = frame.fills;
+                  for (const f of fills) {
+                    const h = paintToHex(f);
+                    if (h) return h;
+                  }
+                } catch (_) {
+                }
+                return void 0;
+              })();
+              if (fillHex) {
+                const btnStyle = {
+                  name: frame.name,
+                  page: page.name,
+                  cornerRadius: typeof frame.cornerRadius === "number" ? frame.cornerRadius : void 0,
+                  fillColor: fillHex,
+                  height: Math.round(frame.height),
+                  width: Math.round(frame.width)
+                };
+                if (frame.layoutMode && frame.layoutMode !== "NONE") {
+                  btnStyle.layoutMode = frame.layoutMode;
+                  btnStyle.paddingTop = frame.paddingTop;
+                  btnStyle.paddingBottom = frame.paddingBottom;
+                  btnStyle.paddingLeft = frame.paddingLeft;
+                  btnStyle.paddingRight = frame.paddingRight;
+                }
+                allButtonStyles.push(btnStyle);
+              }
+            }
+            if (isInputByName && frame.height >= 35 && frame.height <= 70) {
+              const fillHex = (() => {
+                try {
+                  const fills = frame.fills;
+                  for (const f of fills) {
+                    const h = paintToHex(f);
+                    if (h) return h;
+                  }
+                } catch (_) {
+                }
+                return void 0;
+              })();
+              const strokeHex = (() => {
+                try {
+                  const strokes = frame.strokes;
+                  for (const s of strokes) {
+                    const h = paintToHex(s);
+                    if (h) return h;
+                  }
+                } catch (_) {
+                }
+                return void 0;
+              })();
+              const inputStyle = {
+                name: frame.name,
+                page: page.name,
+                cornerRadius: typeof frame.cornerRadius === "number" ? frame.cornerRadius : void 0,
+                height: Math.round(frame.height),
+                width: Math.round(frame.width)
+              };
+              if (fillHex) inputStyle.fillColor = fillHex;
+              if (strokeHex) inputStyle.strokeColor = strokeHex;
+              allInputStyles.push(inputStyle);
+            }
+          }
+          if ("children" in node) {
+            const children = node.children;
+            for (let i = children.length - 1; i >= 0; i--) {
+              walkStack.push({ node: children[i], depth: depth + 1 });
+            }
+          }
+        }
+      }
+      console.log(`[extractFullDS] Page "${page.name}": scanned ${nodeCount} nodes, ${allComponents.length} components total`);
+      await yieldToUI();
+    }
+    const seenBtnNames = /* @__PURE__ */ new Set();
+    const dedupedButtons = allButtonStyles.filter((b) => {
+      if (seenBtnNames.has(b.name)) return false;
+      seenBtnNames.add(b.name);
+      return true;
+    });
+    const seenInputNames = /* @__PURE__ */ new Set();
+    const dedupedInputs = allInputStyles.filter((i) => {
+      if (seenInputNames.has(i.name)) return false;
+      seenInputNames.add(i.name);
+      return true;
+    });
+    const fullDS = {
+      extractedAt: Date.now(),
+      documentHash,
+      themingStatus,
+      pages: pageList,
+      colorPalette,
+      typographyScale,
+      spacingScale: [...spacingSet].sort((a, b) => a - b),
+      cornerRadiusScale: [...cornerRadiusSet].sort((a, b) => a - b),
+      components: allComponents,
+      variables: allVariables,
+      buttonStyles: dedupedButtons.slice(0, 20),
+      inputStyles: dedupedInputs.slice(0, 20)
+    };
+    console.log(`[extractFullDS] Complete! ${colorPalette.length} colors, ${typographyScale.length} typography, ${allComponents.length} components, ${allVariables.length} variables`);
+    await saveDSToCache(fullDS);
+    _fullDesignSystem = fullDS;
+    return fullDS;
+  }
+  function buildDSSummary(ds) {
+    var _a, _b, _c, _d;
+    const paintStyleColors = ds.colorPalette.filter((c) => c.source === "paintStyle").length;
+    const variableColors = ds.colorPalette.filter((c) => {
+      var _a2;
+      return (_a2 = c.source) == null ? void 0 : _a2.startsWith("variable:");
+    }).length;
+    const scrapedColors = ds.colorPalette.filter((c) => {
+      var _a2;
+      return (_a2 = c.source) == null ? void 0 : _a2.startsWith("page:");
+    }).length;
+    const componentSets = ds.components.filter((c) => c.variants).length;
+    const individualComponents = ds.components.length - componentSets;
+    return {
+      colors: ds.colorPalette.length,
+      typography: ds.typographyScale.length,
+      components: ds.components.length,
+      variables: ds.variables.length,
+      pages: ds.pages.length,
+      pageNames: ds.pages.map((p) => p.name),
+      colorBreakdown: { paintStyles: paintStyleColors, variables: variableColors, scraped: scrapedColors },
+      componentBreakdown: { sets: componentSets, individual: individualComponents },
+      spacingCount: ((_a = ds.spacingScale) == null ? void 0 : _a.length) || 0,
+      cornerRadiusCount: ((_b = ds.cornerRadiusScale) == null ? void 0 : _b.length) || 0,
+      buttonStyles: ((_c = ds.buttonStyles) == null ? void 0 : _c.length) || 0,
+      inputStyles: ((_d = ds.inputStyles) == null ? void 0 : _d.length) || 0,
+      themingStatus: ds.themingStatus || "none"
+    };
+  }
+  // ── Per-file DS cache helpers ──────────────────────────────────────
+  const DS_CACHE_MAX_FILES = 5;
+  function getDSCacheKey() {
+    const fileId = figma.fileKey || computeDocumentHash();
+    return "fullDS_" + fileId.replace(/[^a-zA-Z0-9_|-]/g, "_");
+  }
+  async function saveDSToCache(ds) {
+    const cacheKey = getDSCacheKey();
+    try {
+      await figma.clientStorage.setAsync(cacheKey, JSON.stringify(ds));
+      let index = [];
+      try {
+        const raw = await figma.clientStorage.getAsync("fullDS_index");
+        if (raw) index = JSON.parse(raw);
+      } catch (_) {}
+      index = index.filter((k) => k !== cacheKey);
+      index.unshift(cacheKey);
+      while (index.length > DS_CACHE_MAX_FILES) {
+        const evicted = index.pop();
+        await figma.clientStorage.deleteAsync(evicted).catch(() => {});
+        console.log(`[extractFullDS] Evicted old cache: ${evicted}`);
+      }
+      await figma.clientStorage.setAsync("fullDS_index", JSON.stringify(index));
+      console.log(`[extractFullDS] Saved to per-file cache: ${cacheKey}`);
+    } catch (e) {
+      console.warn("[extractFullDS] Failed to persist:", e);
+    }
+  }
+  async function loadCachedFullDesignSystem() {
+    try {
+      const cacheKey = getDSCacheKey();
+      const cached = await figma.clientStorage.getAsync(cacheKey);
+      const data = cached || await figma.clientStorage.getAsync("fullDesignSystem");
+      if (data) {
+        const parsed = JSON.parse(data);
+        const currentHash = computeDocumentHash();
+        const isStale = parsed.documentHash !== currentHash;
+        console.log(`[extractFullDS] Loaded cached DS from ${cached ? cacheKey : "legacy key"} (${parsed.colorPalette.length} colors, stale=${isStale})`);
+        if (isStale) {
+          console.log(`[extractFullDS] Skipping stale cache (hash mismatch)`);
+          return;
+        }
+        _fullDesignSystem = parsed;
+        if (!cached && data) {
+          await saveDSToCache(parsed);
+          await figma.clientStorage.deleteAsync("fullDesignSystem").catch(() => {});
+          console.log("[extractFullDS] Migrated legacy cache to per-file key");
+        }
+        sendToUI({
+          type: "extract-ds-cached",
+          summary: buildDSSummary(parsed),
+          extractedAt: parsed.extractedAt
+        });
+      }
+    } catch (_) {
+      console.warn("[extractFullDS] No cached design system found");
+    }
   }
   async function generateDesignDocs() {
     const tokens = await extractStyleTokens();
@@ -4682,6 +5513,8 @@ RULES:
     var _a;
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
+      // Yield so the UI can render the progress bar before heavy work begins
+      await yieldToUI();
       console.log(`[edit-job ${job.id}] Extracting design system...`);
       const designSystem = await extractDesignSystemSnapshot();
       await yieldToUI();
@@ -4690,13 +5523,13 @@ RULES:
         return;
       }
       sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
-      const payload = {
+      const payload = __spreadValues({
         intent,
         selection: {
           nodes: selectionSnapshot.nodes.map((n) => truncateSnapshotForGenerate(n, 4e4))
         },
         designSystem
-      };
+      }, _fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {});
       console.log(`[edit-job ${job.id}] Calling backend /plan...`);
       let batch;
       try {
@@ -4829,9 +5662,86 @@ RULES:
       _activeJobs.delete(job.id);
     }
   }
-  async function runGenerateJob(job, prompt, sourceSnapshot, sourcePosition) {
+  async function buildImageMap(nodes) {
+    const map = /* @__PURE__ */ new Map();
+    async function walk(node, pathPrefix) {
+      const isShapeNode = [
+        "VECTOR",
+        "BOOLEAN_OPERATION",
+        "STAR",
+        "POLYGON",
+        "LINE",
+        "ELLIPSE",
+        "RECTANGLE"
+      ].includes(node.type);
+      const isIconGroup = node.type === "GROUP" && "children" in node && node.children.every(
+        (c) => ["VECTOR", "BOOLEAN_OPERATION", "STAR", "POLYGON", "LINE", "ELLIPSE", "RECTANGLE", "GROUP"].includes(c.type)
+      );
+      let hasImageFill = false;
+      if ("fills" in node) {
+        try {
+          const fills = node.fills;
+          if (Array.isArray(fills) && fills.some((f) => f.type === "IMAGE")) hasImageFill = true;
+        } catch (_) {
+        }
+      }
+      if (isShapeNode || isIconGroup || hasImageFill) {
+        try {
+          const bytes = await node.exportAsync({
+            format: "PNG",
+            constraint: { type: "SCALE", value: 2 }
+          });
+          const b64 = uint8ToBase64(bytes);
+          const key = node.name.trim().toLowerCase();
+          if (!map.has(key)) {
+            map.set(key, { imageData: b64, width: Math.round(node.width), height: Math.round(node.height), type: node.type });
+          }
+          const pathKey = (pathPrefix + "/" + node.name).trim().toLowerCase();
+          if (!map.has(pathKey)) {
+            map.set(pathKey, { imageData: b64, width: Math.round(node.width), height: Math.round(node.height), type: node.type });
+          }
+        } catch (_) {
+        }
+        if (isShapeNode || isIconGroup) return;
+      }
+      if ("children" in node) {
+        for (const child of node.children) {
+          await walk(child, pathPrefix + "/" + node.name);
+        }
+      }
+    }
+    for (const node of nodes) {
+      await walk(node, "");
+    }
+    return map;
+  }
+  function transplantImages(snap, imageMap, parentPath) {
+    if (!snap) return 0;
+    let count = 0;
+    const key = (snap.name || "").trim().toLowerCase();
+    const pathKey = (parentPath + "/" + (snap.name || "")).trim().toLowerCase();
+    if (!snap.imageData && key) {
+      const match = imageMap.get(pathKey) || imageMap.get(key);
+      if (match) {
+        snap.imageData = match.imageData;
+        if (!snap.width || !snap.height) {
+          snap.width = match.width;
+          snap.height = match.height;
+        }
+        count++;
+      }
+    }
+    if (Array.isArray(snap.children)) {
+      for (const child of snap.children) {
+        count += transplantImages(child, imageMap, parentPath + "/" + (snap.name || ""));
+      }
+    }
+    return count;
+  }
+  async function runGenerateJob(job, prompt, sourceSnapshot, sourcePosition, sourceNodeIds) {
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
+      await yieldToUI();
       console.log(`[job ${job.id}] Extracting design system...`);
       const designSystem = await extractDesignSystemSnapshot();
       console.log(`[job ${job.id}] Design system extracted.`);
@@ -4840,7 +5750,7 @@ RULES:
         sendToUI({ type: "job-cancelled", jobId: job.id });
         return;
       }
-      const styleTokens = extractStyleTokens(prompt);
+      const styleTokens = await extractStyleTokens(prompt);
       console.log(`[job ${job.id}] Style tokens extracted.`);
       await yieldToUI();
       if (job.cancelled) {
@@ -4864,7 +5774,7 @@ RULES:
         components: [],
         variables: []
       };
-      const payloadToSend = {
+      const payloadToSend = __spreadValues({
         prompt,
         styleTokens,
         designSystem: trimmedDesignSystem,
@@ -4872,7 +5782,7 @@ RULES:
         apiKey: _userApiKey,
         provider: _selectedProvider,
         model: _selectedModel
-      };
+      }, _fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {});
       const payloadJson = JSON.stringify(payloadToSend);
       console.log(`[job ${job.id}] PAYLOAD SIZE: ${payloadJson.length} chars (~${Math.round(payloadJson.length / 4)} tokens)`);
       console.log(`[job ${job.id}] selection: ${JSON.stringify(truncatedSelection).length} chars, styleTokens: ${JSON.stringify(styleTokens).length} chars, designSystem: ${JSON.stringify(trimmedDesignSystem).length} chars`);
@@ -4901,9 +5811,33 @@ RULES:
         sendToUI({ type: "job-cancelled", jobId: job.id });
         return;
       }
+      const resolvedSourceNodes = [];
+      if (sourceNodeIds && sourceNodeIds.length > 0) {
+        for (const nid of sourceNodeIds) {
+          const found = figma.getNodeById(nid);
+          if (found && "type" in found && found.type !== "DOCUMENT" && found.type !== "PAGE") {
+            resolvedSourceNodes.push(found);
+          }
+        }
+      } else {
+        resolvedSourceNodes.push(...figma.currentPage.selection);
+      }
+      if (resolvedSourceNodes.length > 0) {
+        console.log(`[job ${job.id}] Building image map from ${resolvedSourceNodes.length} source node(s)...`);
+        const imageMap = await buildImageMap(resolvedSourceNodes);
+        console.log(`[job ${job.id}] Image map: ${imageMap.size} entries`);
+        if (imageMap.size > 0) {
+          const transplanted = transplantImages(snapshot, imageMap, "");
+          console.log(`[job ${job.id}] Transplanted ${transplanted} image(s) into generated snapshot`);
+        }
+      }
       sendToUI({ type: "job-progress", jobId: job.id, phase: "create" });
       assignTempIds(snapshot);
       _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
+      clearStyleMaps();
+      const modeHint = `${prompt} ${snapshot.name || ""} ${(sourcePosition == null ? void 0 : sourcePosition.name) || ""}`;
+      _currentThemeMode = detectThemeMode(modeHint);
+      console.log(`[job ${job.id}] Theme mode detected: ${_currentThemeMode} (from: "${modeHint.trim()}")`);
       let placeX;
       let placeY;
       const frameW = snapshot.width || 390;
@@ -4981,20 +5915,73 @@ RULES:
       if (!sourcePosition) {
         _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
       }
-      console.log(`[job ${job.id}] Creating frame on canvas at x:${placeX}, y:${placeY}...`);
+      const isComponentSetSnapshot = snapshot.type === "COMPONENT_SET";
+      if (sourcePosition && sourcePosition.width > 0 && sourcePosition.height > 0 && !isComponentSetSnapshot) {
+        snapshot.width = sourcePosition.width;
+        snapshot.height = sourcePosition.height;
+        snapshot.layoutSizingVertical = "FIXED";
+        snapshot.layoutSizingHorizontal = "FIXED";
+        console.log(`[job ${job.id}] Forced snapshot to ${sourcePosition.width}x${sourcePosition.height} FIXED`);
+      }
+      console.log(`[job ${job.id}] Creating ${isComponentSetSnapshot ? "COMPONENT_SET" : "frame"} on canvas at x:${placeX}, y:${placeY}...`);
       const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
       if (node) {
         node.x = placeX;
         node.y = placeY;
-        if (sourcePosition && "resize" in node) {
+        if (sourcePosition && "resize" in node && !node.__isComponentSet) {
           const targetW = sourcePosition.width;
           const targetH = sourcePosition.height;
           if (targetW > 0 && targetH > 0) {
             const frame = node;
-            frame.layoutSizingHorizontal = "FIXED";
-            frame.layoutSizingVertical = "FIXED";
+            try {
+              frame.layoutSizingHorizontal = "FIXED";
+            } catch (_) {
+            }
+            try {
+              frame.layoutSizingVertical = "FIXED";
+            } catch (_) {
+            }
+            if ("primaryAxisSizingMode" in frame) {
+              try {
+                frame.primaryAxisSizingMode = "FIXED";
+              } catch (_) {
+              }
+              try {
+                frame.counterAxisSizingMode = "FIXED";
+              } catch (_) {
+              }
+            }
             frame.resize(targetW, targetH);
-            console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH} (FIXED sizing)`);
+            console.log(`[job ${job.id}] Resized to match source: ${targetW}x${targetH} (FIXED sizing, primaryAxis=${frame.primaryAxisSizingMode}, counterAxis=${frame.counterAxisSizingMode})`);
+            if (Math.abs(frame.width - targetW) > 1 || Math.abs(frame.height - targetH) > 1) {
+              console.warn(`[job ${job.id}] Resize did NOT stick! Actual: ${frame.width}x${frame.height}. Trying layoutMode toggle...`);
+              const savedMode = frame.layoutMode;
+              const savedPadT = frame.paddingTop, savedPadR = frame.paddingRight;
+              const savedPadB = frame.paddingBottom, savedPadL = frame.paddingLeft;
+              const savedSpacing = frame.itemSpacing;
+              const savedPrimary = frame.primaryAxisAlignItems;
+              const savedCounter = frame.counterAxisAlignItems;
+              frame.layoutMode = "NONE";
+              frame.resize(targetW, targetH);
+              frame.layoutMode = savedMode;
+              frame.paddingTop = savedPadT;
+              frame.paddingRight = savedPadR;
+              frame.paddingBottom = savedPadB;
+              frame.paddingLeft = savedPadL;
+              frame.itemSpacing = savedSpacing;
+              frame.primaryAxisAlignItems = savedPrimary;
+              frame.counterAxisAlignItems = savedCounter;
+              try {
+                frame.primaryAxisSizingMode = "FIXED";
+              } catch (_) {
+              }
+              try {
+                frame.counterAxisSizingMode = "FIXED";
+              } catch (_) {
+              }
+              frame.resize(targetW, targetH);
+              console.log(`[job ${job.id}] After toggle: ${frame.width}x${frame.height} primaryAxis=${frame.primaryAxisSizingMode}`);
+            }
           }
         }
         if ("setPluginData" in node) {
@@ -5401,7 +6388,8 @@ RULES:
               _activeJobs.delete(jobId);
               const allFrameData = currentSelection.map((node) => ({
                 snapshot: snapshotNode(node, 0),
-                position: { x: Math.round(node.x), y: Math.round(node.y), width: Math.round(node.width), height: Math.round(node.height), name: node.name }
+                position: { x: Math.round(node.x), y: Math.round(node.y), width: Math.round(node.width), height: Math.round(node.height), name: node.name },
+                nodeId: node.id
               }));
               console.log(`[run] Multi-frame generate: ${allFrameData.length} frames for "${prompt.slice(0, 60)}"`);
               for (const frameData of allFrameData) {
@@ -5411,7 +6399,7 @@ RULES:
                 const singleSelection = { nodes: [frameData.snapshot] };
                 console.log(`[run] Starting generate job ${mjobId} for frame "${frameData.snapshot.name}" (${frameData.position.width}x${frameData.position.height} at ${frameData.position.x},${frameData.position.y})`);
                 sendToUI({ type: "job-started", jobId: mjobId, prompt: `${prompt} (${frameData.snapshot.name})` });
-                runGenerateJob(mjob, prompt, singleSelection, frameData.position).catch((err) => {
+                runGenerateJob(mjob, prompt, singleSelection, frameData.position, [frameData.nodeId]).catch((err) => {
                   console.error(`[run] Unhandled error in generate job ${mjobId}:`, err);
                   if (!mjob.cancelled) {
                     sendToUI({ type: "job-error", jobId: mjobId, error: `Generation failed: ${err.message}` });
@@ -5420,9 +6408,10 @@ RULES:
                 });
               }
             } else {
+              const singleNodeIds = currentSelection.map((n) => n.id);
               console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"`);
               sendToUI({ type: "job-started", jobId, prompt });
-              runGenerateJob(job, prompt).catch((err) => {
+              runGenerateJob(job, prompt, void 0, void 0, singleNodeIds.length > 0 ? singleNodeIds : void 0).catch((err) => {
                 console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
                 if (!job.cancelled) {
                   sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });
@@ -5498,6 +6487,10 @@ RULES:
             );
             sendToUI({ type: "status", message: `Creating ${nodes.length} node(s)\u2026` });
             _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
+            clearStyleMaps();
+            const importNames = nodes.map((n) => n.name || "").join(" ");
+            _currentThemeMode = detectThemeMode(importNames);
+            console.log(`[import] Theme mode detected: ${_currentThemeMode}`);
             const exportedNames = new Set(nodes.map((n) => n.name));
             const pageChildren = figma.currentPage.children;
             const matchingOriginals = pageChildren.filter(
@@ -5650,6 +6643,33 @@ RULES:
           await revertLast();
           await figma.clientStorage.deleteAsync("lastRevertState");
           sendToUI({ type: "revert-success" });
+          break;
+        }
+        // ── Extract Full Design System ────────────────────────────
+        case "extract-design-system": {
+          try {
+            sendToUI({ type: "extract-ds-progress", page: "Starting\u2026", pageIndex: 0, totalPages: figma.root.children.length });
+            const ds = await extractFullDocumentDesignSystem();
+            sendToUI({
+              type: "extract-ds-complete",
+              summary: buildDSSummary(ds)
+            });
+            figma.notify(`Design system extracted: ${ds.colorPalette.length} colors, ${ds.components.length} components, ${ds.variables.length} variables`, { timeout: 4e3 });
+          } catch (err) {
+            if (err.message === "Extraction cancelled") {
+              figma.notify("Design system extraction cancelled.", { timeout: 3e3 });
+              sendToUI({ type: "extract-ds-error", error: "Cancelled" });
+            } else {
+              console.error("[extractFullDS] Error:", err);
+              sendToUI({ type: "extract-ds-error", error: err.message || "Unknown error" });
+              figma.notify(`Design system extraction failed: ${err.message}`, { timeout: 5e3, error: true });
+            }
+          }
+          break;
+        }
+        // ── Cancel Design System Extraction ───────────────────────
+        case "cancel-extract-ds": {
+          _extractDSCancelled = true;
           break;
         }
       }

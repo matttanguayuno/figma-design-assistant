@@ -51,8 +51,8 @@
 
     textarea {
       width: 100%;
-      height: 80px;
-      flex: 0 0 auto;
+      min-height: 60px;
+      flex: 1 1 auto;
       padding: 10px;
       font-family: var(--font);
       font-size: 12px;
@@ -342,6 +342,62 @@
     }
     .status-bar.error::before {
       background: var(--danger);
+    }
+    .status-bar.warning {
+      color: #ff9800;
+    }
+    .status-bar.warning::before {
+      background: #ff9800;
+    }
+
+    .key-warning-banner {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 6px 5px 8px;
+      font-size: 11px;
+      background: rgba(255, 152, 0, 0.08);
+      border-top: 1px solid rgba(255, 152, 0, 0.3);
+      color: var(--fg);
+    }
+    .key-warning-banner .warn-icon {
+      flex-shrink: 0;
+      font-size: 12px;
+    }
+    .key-warning-banner .warn-text {
+      flex: 1;
+      min-width: 0;
+      line-height: 1.3;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .key-warning-banner .warn-link {
+      flex-shrink: 0;
+      color: #64b5f6;
+      cursor: pointer;
+      text-decoration: underline;
+      white-space: nowrap;
+      font-size: 10px;
+    }
+    .key-warning-banner .warn-link:hover {
+      opacity: 0.8;
+    }
+    .key-warning-banner .warn-dismiss {
+      flex: 0 0 auto;
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 11px;
+      padding: 0 2px;
+      opacity: 0.5;
+      min-width: auto;
+      line-height: 1;
+    }
+    .key-warning-banner .warn-dismiss:hover {
+      opacity: 1;
     }
 
     /* ── Label row with menu ─────────────────────────── */
@@ -640,8 +696,10 @@
       color: var(--text);
     }
     /* When settings view is open, hide prompt area and show only settings */
-    body.settings-open > div:first-of-type,
+    body.settings-open > .label-row,
+    body.settings-open > textarea,
     body.settings-open > .btn-row,
+    body.settings-open > #job-list,
     body.settings-open > #progress-container,
     body.settings-open > #status-bar {
       display: none !important;
@@ -1144,6 +1202,133 @@
       width: 10px;
       height: 10px;
     }
+
+    /* ── Design System Status Banner ── */
+    .ds-status-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 10px;
+      margin: 0 0 2px;
+      border-radius: 6px;
+      font-size: 11px;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      gap: 6px;
+    }
+    .ds-status-banner.extracting {
+      border-color: var(--accent);
+      background: rgba(0, 122, 255, 0.06);
+    }
+    .ds-status-banner.ready {
+      border-color: #4caf50;
+      background: rgba(76, 175, 80, 0.06);
+    }
+    .ds-status-banner.error {
+      border-color: #f44336;
+      background: rgba(244, 67, 54, 0.06);
+    }
+    .ds-status-content {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow: hidden;
+    }
+    .ds-status-icon {
+      flex-shrink: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    .ds-status-banner.extracting .ds-status-icon {
+      background: var(--accent);
+      animation: dsPulse 1s ease-in-out infinite;
+    }
+    .ds-status-banner.ready .ds-status-icon {
+      background: #4caf50;
+    }
+    .ds-status-banner.error .ds-status-icon {
+      background: #f44336;
+    }
+    @keyframes dsPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .ds-status-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ds-cancel-btn {
+      flex: 0 0 auto;
+      background: none;
+      border: none;
+      color: var(--fg);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 2px 4px;
+      opacity: 0.6;
+      min-width: auto;
+    }
+    .ds-cancel-btn:hover { opacity: 1; }
+    .ds-status-banner.ready .ds-status-content { cursor: pointer; }
+    .ds-status-banner.ready .ds-status-content:hover { opacity: 0.8; }
+    .ds-details {
+      display: none;
+      padding: 8px 10px 6px;
+      font-size: 11px;
+      line-height: 1.6;
+      color: var(--fg);
+      border-top: 1px solid rgba(76, 175, 80, 0.18);
+      margin-top: 4px;
+      width: 100%;
+      box-sizing: border-box;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .ds-status-banner.expanded .ds-details { display: block; }
+    .ds-status-banner.expanded { flex-wrap: wrap; }
+    .ds-details-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 1px 0;
+    }
+    .ds-details-row span:first-child { opacity: 0.7; }
+    .ds-details-row span:last-child { font-weight: 500; font-variant-numeric: tabular-nums; }
+    .ds-details-label { opacity: 0.5 !important; font-weight: 400 !important; }
+    .ds-details-section {
+      margin-bottom: 1px;
+      margin-top: 8px;
+      font-weight: 600;
+      opacity: 0.4;
+      text-transform: uppercase;
+      font-size: 9px;
+      letter-spacing: 0.6px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 2px;
+    }
+    .ds-details-section:first-child { margin-top: 0; }
+    .ds-details-pages {
+      opacity: 0.55;
+      font-size: 10px;
+      line-height: 1.45;
+      padding: 2px 0 0;
+      word-break: break-word;
+    }
+    .ds-chevron {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      margin-left: 4px;
+      vertical-align: middle;
+      transition: transform 0.15s;
+      opacity: 0.4;
+    }
+    .ds-status-banner.expanded .ds-chevron { transform: rotate(180deg); }
+    body.settings-open > .ds-status-banner { display: none !important; }
   </style>
 </head>
 <body>
@@ -1162,19 +1347,9 @@
         </button>
         <div id="menu-dropdown" class="menu-dropdown">
           <div id="menu-page-root" class="menu-page">
-            <button class="menu-item" id="menu-export-json">
-              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Export to JSON
-            </button>
-            <div class="menu-separator"></div>
-            <button class="menu-item" id="menu-import-json">
-              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 11l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              Import from JSON
-            </button>
-            <div class="menu-separator"></div>
-            <button class="menu-item" id="menu-export-docs">
-              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M5 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-              Export Design Docs
+            <button class="menu-item" id="menu-extract-ds">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3z" stroke="currentColor" stroke-width="1.2"/><path d="M5 6h6M5 8.5h4M5 11h2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="12" cy="4" r="2.5" fill="#4caf50" stroke="currentColor" stroke-width="0.5"/></svg>
+              Extract Design System
             </button>
             <div class="menu-separator"></div>
             <button class="menu-item menu-item-sub" id="menu-analyze-drill">
@@ -1183,9 +1358,34 @@
               <svg class="menu-chevron" viewBox="0 0 8 12" fill="none"><path d="M1.5 1l5 5-5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             <div class="menu-separator"></div>
+            <button class="menu-item menu-item-sub" id="menu-importexport-drill">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Import / Export
+              <svg class="menu-chevron" viewBox="0 0 8 12" fill="none"><path d="M1.5 1l5 5-5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="menu-separator"></div>
             <button class="menu-item" id="menu-settings">
               <svg viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3l.4 2 1.3.7 1.8-1 2.1 2.1-1 1.8.7 1.3 2 .4v3l-2 .4-1.3.7 1 1.8-2.1 2.1-1.8-1-.7 1.3-.4 2h-3l-.4-2-1.3-.7-1.8 1L.9 13.1l1-1.8L1.2 10l-2-.4v-3l2-.4.7-1.3-1-1.8L3 .9l1.8 1L6.1 1.2l.4-2z" stroke="currentColor" stroke-width="1.1"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.1"/></svg>
               Settings
+            </button>
+          </div>
+          <div id="menu-page-importexport" class="menu-page" style="display:none;">
+            <button class="menu-item menu-item-back" id="menu-back-ie">
+              <svg class="menu-back-chevron" viewBox="0 0 8 12" fill="none"><path d="M6.5 1l-5 5 5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Back
+            </button>
+            <div class="menu-separator"></div>
+            <button class="menu-item" id="menu-export-json">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 9l2 2 2-2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Export to JSON
+            </button>
+            <button class="menu-item" id="menu-import-json">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M6 11l2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Import from JSON
+            </button>
+            <button class="menu-item" id="menu-export-docs">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M4 1h5l4 4v9a1 1 0 01-1 1H4a1 1 0 01-1-1V2a1 1 0 011-1z" stroke="currentColor" stroke-width="1.2"/><path d="M9 1v4h4" stroke="currentColor" stroke-width="1.2"/><path d="M5 8h6M5 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+              Export Design Docs
             </button>
           </div>
           <div id="menu-page-analyze" class="menu-page" style="display:none;">
@@ -1219,6 +1419,17 @@
   <div class="btn-row">
     <button id="btn-apply" class="btn-primary" disabled>Apply</button>
     <button id="btn-cancel" class="btn-cancel">Cancel</button>
+  </div>
+
+  <!-- Design System extraction status banner (below Generate so prompt stays usable) -->
+  <div id="ds-status-banner" class="ds-status-banner" style="display:none;">
+    <div class="ds-status-content" id="ds-status-content">
+      <span id="ds-status-icon" class="ds-status-icon"></span>
+      <span id="ds-status-text" class="ds-status-text">No design system extracted</span>
+      <svg class="ds-chevron" id="ds-chevron" style="display:none;" viewBox="0 0 10 10" fill="none"><path d="M2 3.5l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <button id="ds-status-cancel" class="ds-cancel-btn" style="display:none;" title="Cancel extraction">✕</button>
+    <div class="ds-details" id="ds-details"></div>
   </div>
 
   <!-- Parallel generate job list (fills remaining space, scrolls) -->
@@ -1364,6 +1575,14 @@
     <div id="state-audit-findings" class="state-audit-findings"></div>
   </div>
 
+  <!-- Startup key validation warning -->
+  <div id="key-warning-banner" class="key-warning-banner">
+    <span class="warn-icon">&#9888;</span>
+    <span class="warn-text" id="key-warning-text"></span>
+    <span class="warn-link" id="key-warning-settings">Open Settings</span>
+    <button class="warn-dismiss" id="key-warning-dismiss" title="Dismiss">&#10005;</button>
+  </div>
+
   <div id="status-bar" class="status-bar">Nothing selected — will generate new frame</div>
 
   <!-- Resize handle -->
@@ -1392,9 +1611,9 @@
       var baseH = _userHeight || MIN_H;
       var targetH;
       if (jobCount > 0) {
-        targetH = Math.min(baseH + jobCount * JOB_CARD_H, MAX_PLUGIN_H);
+        targetH = Math.min(baseH + jobCount * JOB_CARD_H + (_dsExpandedExtra || 0), MAX_PLUGIN_H);
       } else {
-        targetH = baseH;
+        targetH = Math.min(baseH + (_dsExpandedExtra || 0), MAX_PLUGIN_H);
       }
       var w = _userWidth || MIN_W;
       parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(targetH) } }, '*');
@@ -1459,9 +1678,12 @@
     const menuClearA11y = document.getElementById("menu-clear-a11y");
     const menuAuditStates = document.getElementById("menu-audit-states");
     const menuAnalyzeDrill = document.getElementById("menu-analyze-drill");
+    const menuImportExportDrill = document.getElementById("menu-importexport-drill");
     const menuBack = document.getElementById("menu-back");
+    const menuBackIE = document.getElementById("menu-back-ie");
     const menuPageRoot = document.getElementById("menu-page-root");
     const menuPageAnalyze = document.getElementById("menu-page-analyze");
+    const menuPageImportExport = document.getElementById("menu-page-importexport");
     const auditPanel = document.getElementById("audit-panel");
     const auditSummary = document.getElementById("audit-summary");
     const auditFindings = document.getElementById("audit-findings");
@@ -1480,6 +1702,69 @@
     const btnFixAll = document.getElementById("btn-fix-all");
     const btnCancelA11yAudit = document.getElementById("btn-cancel-a11y-audit");
     const btnCancelStateAudit = document.getElementById("btn-cancel-state-audit");
+    const menuExtractDS = document.getElementById("menu-extract-ds");
+    const dsBanner = document.getElementById("ds-status-banner");
+    const dsStatusContent = document.getElementById("ds-status-content");
+    const dsStatusIcon = document.getElementById("ds-status-icon");
+    const dsStatusText = document.getElementById("ds-status-text");
+    const dsCancelBtn = document.getElementById("ds-status-cancel");
+    const dsChevron = document.getElementById("ds-chevron");
+    const dsDetails = document.getElementById("ds-details");
+
+    // Toggle expanded details on click (only when ready)
+    var _dsExpandedExtra = 0; // extra height added when expanded
+    var DS_EXPAND_H = 160; // fixed expand height (150px content + border/margin)
+    dsStatusContent.addEventListener("click", () => {
+      if (!dsBanner.classList.contains("ready")) return;
+      const expanding = !dsBanner.classList.contains("expanded");
+      dsBanner.classList.toggle("expanded");
+      _dsExpandedExtra = expanding ? DS_EXPAND_H : 0;
+      // Resize the plugin window
+      const w = _userWidth || MIN_W;
+      const baseH = _userHeight || MIN_H;
+      const jobCount = document.getElementById('job-list').children.length;
+      let targetH = baseH + (jobCount > 0 ? jobCount * JOB_CARD_H : 0) + _dsExpandedExtra;
+      targetH = Math.min(targetH, MAX_PLUGIN_H);
+      parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(targetH) } }, '*');
+    });
+
+    function renderDSDetails(s) {
+      if (!s) { dsDetails.innerHTML = ""; return; }
+      let html = "";
+      // Pages
+      html += `<div class="ds-details-section">Pages (${s.pages})</div>`;
+      if (s.pageNames && s.pageNames.length) {
+        html += `<div class="ds-details-pages">${s.pageNames.join(" \u00b7 ")}</div>`;
+      }
+      // Colors
+      html += `<div class="ds-details-section">Colors (${s.colors})</div>`;
+      const cb = s.colorBreakdown || {};
+      if (cb.paintStyles) html += `<div class="ds-details-row"><span>Paint styles</span><span>${cb.paintStyles}</span></div>`;
+      if (cb.variables) html += `<div class="ds-details-row"><span>From variables</span><span>${cb.variables}</span></div>`;
+      if (cb.scraped) html += `<div class="ds-details-row"><span>Scraped from fills</span><span>${cb.scraped}</span></div>`;
+      // Typography
+      html += `<div class="ds-details-section">Typography</div>`;
+      html += `<div class="ds-details-row"><span>Text styles</span><span>${s.typography}</span></div>`;
+      // Components
+      html += `<div class="ds-details-section">Components (${s.components})</div>`;
+      const compB = s.componentBreakdown || {};
+      if (compB.sets != null) html += `<div class="ds-details-row"><span>Component sets</span><span>${compB.sets}</span></div>`;
+      if (compB.individual != null) html += `<div class="ds-details-row"><span>Individual variants</span><span>${compB.individual}</span></div>`;
+      // Variables
+      html += `<div class="ds-details-section">Variables</div>`;
+      html += `<div class="ds-details-row"><span>Total</span><span>${s.variables}</span></div>`;
+      const themeLabel = { complete: "Multi-mode (complete)", partial: "Single-mode", none: "None" };
+      html += `<div class="ds-details-row"><span>Theming</span><span>${themeLabel[s.themingStatus] || "None"}</span></div>`;
+      // Tokens
+      if (s.spacingCount || s.cornerRadiusCount || s.buttonStyles || s.inputStyles) {
+        html += `<div class="ds-details-section">Tokens</div>`;
+        if (s.spacingCount) html += `<div class="ds-details-row"><span>Spacing values</span><span>${s.spacingCount}</span></div>`;
+        if (s.cornerRadiusCount) html += `<div class="ds-details-row"><span>Corner radii</span><span>${s.cornerRadiusCount}</span></div>`;
+        if (s.buttonStyles) html += `<div class="ds-details-row"><span>Button styles</span><span>${s.buttonStyles}</span></div>`;
+        if (s.inputStyles) html += `<div class="ds-details-row"><span>Input styles</span><span>${s.inputStyles}</span></div>`;
+      }
+      dsDetails.innerHTML = html;
+    }
 
     // Cached audit results for export
     var _lastA11yFindings = null;
@@ -1622,8 +1907,9 @@
     // to 100% green. No positional confusion — label sits below its bar.
     // After each run, timings are persisted via figma.clientStorage.
 
-    // Default estimates (ms). Updated after each successful run.
-    let phaseEstimates = { analyze: 5000, generate: 45000, create: 4000 };
+    // Default estimates (ms). Conservative first-run values — most generate
+    // calls take 60-120s on typical frames. Updated after each successful run.
+    let phaseEstimates = { analyze: 8000, generate: 90000, create: 6000 };
     const PHASE_ORDER = ["analyze", "generate", "create"];
 
     let _progressInterval = null;
@@ -1658,12 +1944,19 @@
       var est = phaseEstimates[_progressPhase] || 30000;
       var elapsed = Date.now() - _phaseStartTime;
       var pct;
-      if (elapsed < est) {
-        pct = 85 * (elapsed / est);
+      var ratio = elapsed / est;
+      if (ratio < 1.0) {
+        // Smooth S-curve: fills to ~65% by estimated time
+        var xp = Math.pow(ratio, 0.8);
+        pct = 65 * xp / (xp + 0.6);
       } else {
-        var overtime = elapsed - est;
-        pct = 85 + 13 * (1 - Math.exp(-overtime / (est * 0.5)));
+        // After estimate: asymptotically approach 95%
+        var overtime = ratio - 1.0;
+        pct = 65 + 30 * (1 - Math.exp(-overtime * 0.8));
       }
+      // Ensure monotonic (never go backwards)
+      var prevPct = parseFloat(fill.style.width) || 0;
+      if (pct < prevPct) pct = prevPct;
       fill.style.width = Math.min(pct, 98).toFixed(1) + "%";
     }
 
@@ -1777,6 +2070,7 @@
       // Reset to root page
       menuPageRoot.style.display = "";
       menuPageAnalyze.style.display = "none";
+      menuPageImportExport.style.display = "none";
     }
 
     menuToggle.addEventListener("click", (e) => {
@@ -1787,7 +2081,22 @@
         // Always open to root page
         menuPageRoot.style.display = "";
         menuPageAnalyze.style.display = "none";
+        menuPageImportExport.style.display = "none";
       }
+    });
+
+    // Drill into Import/Export submenu
+    menuImportExportDrill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuPageRoot.style.display = "none";
+      menuPageImportExport.style.display = "";
+    });
+
+    // Back from Import/Export
+    menuBackIE.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuPageImportExport.style.display = "none";
+      menuPageRoot.style.display = "";
     });
 
     // Drill into Analyze submenu
@@ -1829,6 +2138,62 @@
     });
 
     // ── Save API Key ─────────────────────────────────────────────
+    // ── Startup API Key Validation ────────────────────────────
+    const PROVIDER_DISPLAY_NAMES = { anthropic: "Anthropic", openai: "OpenAI", gemini: "Gemini" };
+
+    async function validateStartupKeys() {
+      const keysToValidate = [];
+      for (const [provider, key] of Object.entries(_providerKeys)) {
+        if (key) keysToValidate.push({ provider, key });
+      }
+      if (keysToValidate.length === 0) return;
+
+      const invalidKeys = [];
+      for (const { provider, key } of keysToValidate) {
+        try {
+          const resp = await fetch(BACKEND_URL + "/validate-key", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ apiKey: key, provider }),
+          });
+          const result = await resp.json();
+          if (!result.valid) {
+            invalidKeys.push({ provider, error: result.error || "Invalid API key" });
+          }
+        } catch (err) {
+          // Backend unreachable (cold start) -- skip, don't false-alarm
+        }
+      }
+
+      if (invalidKeys.length > 0) {
+        const banner = document.getElementById("key-warning-banner");
+        const text = document.getElementById("key-warning-text");
+        banner._failedProvider = invalidKeys[0].provider;
+        if (invalidKeys.length === 1) {
+          const p = invalidKeys[0];
+          text.textContent = (PROVIDER_DISPLAY_NAMES[p.provider] || p.provider) + " key invalid";
+          text.title = p.error;
+        } else {
+          const names = invalidKeys.map(k => PROVIDER_DISPLAY_NAMES[k.provider] || k.provider).join(", ");
+          text.textContent = "Keys invalid: " + names;
+          text.title = invalidKeys.map(k => (PROVIDER_DISPLAY_NAMES[k.provider] || k.provider) + ": " + k.error).join("\n");
+        }
+        banner.style.display = "flex";
+      }
+    }
+
+    document.getElementById("key-warning-settings").addEventListener("click", () => {
+      const banner = document.getElementById("key-warning-banner");
+      if (banner._failedProvider) {
+        switchProvider(banner._failedProvider);
+      }
+      openSettings();
+      banner.style.display = "none";
+    });
+    document.getElementById("key-warning-dismiss").addEventListener("click", () => {
+      document.getElementById("key-warning-banner").style.display = "none";
+    });
+
     btnSaveKey.addEventListener("click", async () => {
       const key = apiKeyInput.value.trim();
       if (!key) {
@@ -1894,6 +2259,21 @@
       closeMenu();
       setStatus("Generating design docs…");
       postToPlugin({ type: "generate-docs" });
+    });
+
+    // ── Menu: Extract Design System ─────────────────────────────
+    menuExtractDS.addEventListener("click", () => {
+      closeMenu();
+      dsBanner.style.display = "flex";
+      dsBanner.className = "ds-status-banner extracting";
+      dsStatusText.textContent = "Starting extraction…";
+      dsCancelBtn.style.display = "inline-flex";
+      postToPlugin({ type: "extract-design-system" });
+    });
+    dsCancelBtn.addEventListener("click", () => {
+      postToPlugin({ type: "cancel-extract-ds" });
+      dsCancelBtn.style.display = "none";
+      dsStatusText.textContent = "Cancelling…";
     });
 
     // ── Menu: Audit Accessibility ───────────────────────────────
@@ -2709,21 +3089,56 @@
     }
 
     // ── Parallel Job Queue ────────────────────────────────────────
-    const _jobs = new Map(); // jobId -> { prompt, phase, phaseStartTime }
+    const _jobs = new Map(); // jobId -> { prompt, phase, phaseStartTime, phaseActuals, overallStart, jitterSeed }
     let _jobTickInterval = null;
 
-    // Phase ranges for single progress bar (0-100%)
+    // Phase ranges: analyze gets less bar space since it's fast,
+    // generate gets the lion's share, create gets the rest.
+    // These reflect actual time proportions more accurately.
     const JOB_PHASE_RANGES = {
-      analyze:  [0, 15],
-      generate: [15, 85],
-      create:   [85, 100],
+      analyze:  [0, 5],
+      generate: [5, 92],
+      create:   [92, 100],
     };
+
+    // Count how many jobs are concurrently "active" (not done/error/cancelled)
+    function activeJobCount() {
+      var count = 0;
+      for (var [, j] of _jobs) {
+        if (j.phase !== "done" && j.phase !== "error" && j.phase !== "cancelled") count++;
+      }
+      return count;
+    }
+
+    // Concurrency multiplier: more parallel jobs = each takes longer (API contention, rate limits)
+    function concurrencyMultiplier() {
+      var n = activeJobCount();
+      if (n <= 1) return 1.0;
+      // Logarithmic scaling: 2 jobs → 1.4x, 4 → 1.8x, 7 → 2.1x
+      return 1.0 + 0.5 * Math.log2(n);
+    }
+
+    // Perceptual jitter: small random speed variations make progress feel organic.
+    // Research shows users perceive jerky-then-fast progress as shorter than smooth uniform.
+    // Returns a multiplier in [0.6, 1.6] that changes every ~1.5s, seeded per job.
+    function jitterMultiplier(jobId, elapsed) {
+      // Use a deterministic hash of jobId + time bucket for reproducible jitter
+      var bucket = Math.floor(elapsed / 1500);
+      var seed = (jobId * 2654435761 + bucket * 40503) >>> 0; // Knuth multiplicative hash
+      // Simple LCG step to get a float in [0, 1]
+      var r = ((seed * 1103515245 + 12345) >>> 16) / 32768.0;
+      // Map to [0.6, 1.6] - sometimes slower, sometimes faster
+      return 0.6 + r * 1.0;
+    }
 
     function addJob(jobId, prompt) {
       _jobs.set(jobId, {
         prompt: prompt,
         phase: "analyze",
         phaseStartTime: Date.now(),
+        overallStart: Date.now(),
+        phaseActuals: {},  // { analyze: ms, generate: ms } — filled as phases complete
+        jitterSeed: jobId,
       });
       renderJobItem(jobId);
       startJobTick();
@@ -2755,6 +3170,17 @@
     function updateJobPhase(jobId, phase) {
       const job = _jobs.get(jobId);
       if (!job) return;
+      // Record actual duration for the phase that just finished
+      var prevPhase = job.phase;
+      if (prevPhase && prevPhase !== phase) {
+        var actualMs = Date.now() - job.phaseStartTime;
+        job.phaseActuals[prevPhase] = actualMs;
+        // Update global estimates with exponential moving average
+        // Weight recent observation heavily (0.6) but keep some history (0.4)
+        if (phaseEstimates[prevPhase]) {
+          phaseEstimates[prevPhase] = Math.round(actualMs * 0.6 + phaseEstimates[prevPhase] * 0.4);
+        }
+      }
       job.phase = phase;
       job.phaseStartTime = Date.now();
       const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
@@ -2766,6 +3192,20 @@
 
     function completeJob(jobId, summary) {
       const job = _jobs.get(jobId);
+      if (job) {
+        // Record final phase timing
+        var prevPhase = job.phase;
+        if (prevPhase) {
+          job.phaseActuals[prevPhase] = Date.now() - job.phaseStartTime;
+          if (phaseEstimates[prevPhase]) {
+            phaseEstimates[prevPhase] = Math.round(
+              job.phaseActuals[prevPhase] * 0.6 + phaseEstimates[prevPhase] * 0.4
+            );
+          }
+        }
+        // Persist updated estimates
+        postToPlugin({ type: "save-timings", timings: phaseEstimates });
+      }
       const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
       if (el) {
         el.classList.add("done");
@@ -2826,22 +3266,46 @@
     }
 
     function tickAllJobs() {
+      var concMult = concurrencyMultiplier();
       for (const [jobId, job] of _jobs) {
         if (job.phase === "done" || job.phase === "error" || job.phase === "cancelled") continue;
         const el = jobListEl.querySelector('[data-job-id="' + jobId + '"] .job-bar-fill');
         if (!el) continue;
         const range = JOB_PHASE_RANGES[job.phase];
         if (!range) continue;
-        const est = phaseEstimates[job.phase] || 30000;
-        const elapsed = Date.now() - job.phaseStartTime;
+
+        // Estimated time for this phase, scaled by concurrency
+        var baseEst = phaseEstimates[job.phase] || 30000;
+        var est = baseEst * concMult;
+
+        var elapsed = Date.now() - job.phaseStartTime;
+
+        // Smooth log-sigmoid curve:
+        // - First half of estimated time: fills to ~40% (conservative, not 85%)
+        // - At estimated time: fills to ~65% (leaves room for overshoot)
+        // - After estimated time: slowly approaches 95% asymptotically
         var phasePct;
-        if (elapsed < est) {
-          phasePct = 0.85 * (elapsed / est);
+        var ratio = elapsed / est;
+        if (ratio < 1.0) {
+          // Before estimate reached: smoother S-curve (slow start, accelerate, slow down)
+          // Using a modified logistic: f(x) = 0.65 * x^0.8 / (x^0.8 + 0.6)
+          var xp = Math.pow(ratio, 0.8);
+          phasePct = 0.65 * xp / (xp + 0.6);
         } else {
-          var overtime = elapsed - est;
-          phasePct = 0.85 + 0.13 * (1 - Math.exp(-overtime / (est * 0.5)));
+          // After estimate: asymptotically approach 95%
+          var overtime = ratio - 1.0;
+          phasePct = 0.65 + 0.30 * (1 - Math.exp(-overtime * 0.8));
         }
-        var overallPct = range[0] + (range[1] - range[0]) * phasePct;
+
+        // Apply perceptual jitter: small speed variations every ~1.5s
+        var jitter = jitterMultiplier(jobId, elapsed);
+        // Jitter adjusts the "perceived ratio" but we clamp to avoid going backwards
+        var jitteredPct = phasePct * jitter;
+        // Ensure we never go below what we previously showed (monotonic increase)
+        var prevPct = parseFloat(el.style.width) || 0;
+        var overallPct = range[0] + (range[1] - range[0]) * Math.min(jitteredPct, 0.98);
+        if (overallPct < prevPct) overallPct = prevPct; // never go backwards
+
         el.style.width = Math.min(overallPct, 98).toFixed(1) + "%";
       }
     }
@@ -2865,6 +3329,12 @@
         return;
       }
       _cancelledAt = 0; // clear cancel guard for new run
+      // Hide DS banner once user starts prompting
+      if (dsBanner.style.display !== "none") {
+        dsBanner.classList.remove("expanded");
+        if (_dsExpandedExtra) { _dsExpandedExtra = 0; }
+        dsBanner.style.display = "none";
+      }
       postToPlugin({ type: "run", intent });
     });
 
@@ -3183,6 +3653,49 @@
           } else {
             apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
           }
+          // Validate stored keys on startup
+          validateStartupKeys();
+          break;
+        }
+        // ── Design System Extraction Messages ───────────────────
+        case "extract-ds-progress": {
+          dsBanner.style.display = "flex";
+          dsBanner.className = "ds-status-banner extracting";
+          dsCancelBtn.style.display = "inline-flex";
+          dsChevron.style.display = "none";
+          if (_dsExpandedExtra) { _dsExpandedExtra = 0; requestPluginResize(); }
+          dsStatusText.textContent = `Scanning page ${(msg.pageIndex || 0) + 1}/${msg.totalPages}: ${msg.page || ""}`;
+          break;
+        }
+        case "extract-ds-complete": {
+          dsBanner.style.display = "flex";
+          dsBanner.className = "ds-status-banner ready";
+          dsCancelBtn.style.display = "none";
+          dsChevron.style.display = "inline-block";
+          const s = msg.summary || {};
+          dsStatusText.textContent = `Design system: ${s.colors || 0} colors, ${s.typography || 0} types, ${s.components || 0} components, ${s.variables || 0} variables`;
+          renderDSDetails(s);
+          break;
+        }
+        case "extract-ds-error": {
+          dsBanner.style.display = "flex";
+          dsBanner.className = "ds-status-banner error";
+          dsCancelBtn.style.display = "none";
+          dsChevron.style.display = "none";
+          if (_dsExpandedExtra) { _dsExpandedExtra = 0; requestPluginResize(); }
+          dsStatusText.textContent = msg.error === "Cancelled" ? "Extraction cancelled" : `Extraction failed: ${msg.error}`;
+          setTimeout(() => { if (dsBanner.classList.contains("error")) dsBanner.style.display = "none"; }, 5000);
+          break;
+        }
+        case "extract-ds-cached": {
+          dsBanner.style.display = "flex";
+          dsBanner.className = "ds-status-banner ready";
+          dsCancelBtn.style.display = "none";
+          dsChevron.style.display = "inline-block";
+          const cs = msg.summary || {};
+          const when = msg.extractedAt ? new Date(msg.extractedAt).toLocaleTimeString() : "";
+          dsStatusText.textContent = `Design system loaded (${cs.colors || 0} colors, ${cs.components || 0} comp${when ? ", " + when : ""})`;
+          renderDSDetails(cs);
           break;
         }
       }
