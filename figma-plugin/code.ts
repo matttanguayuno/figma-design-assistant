@@ -129,8 +129,7 @@ figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Desig
 // Clean up any leftover audit badges from a previous session
 clearAuditBadges();
 
-// Load cached full design system from previous extraction
-loadCachedFullDesignSystem().catch(() => {});
+// DS cache loading is deferred until the UI sends "ui-ready"
 
 // ── Helpers: send message to UI ─────────────────────────────────────
 
@@ -7821,6 +7820,12 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
 figma.ui.onmessage = async (msg: UIToPluginMessage) => {
   try {
     switch (msg.type) {
+      // ── UI ready handshake ────────────────────────────────
+      case "ui-ready" as any: {
+        loadCachedFullDesignSystem().catch(() => {});
+        return;
+      }
+
       // ── Resize enforcement ────────────────────────────────
       case "resize" as any: {
         const w = Math.max((msg as any).width || MIN_WIDTH, MIN_WIDTH);

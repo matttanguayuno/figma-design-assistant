@@ -75,8 +75,7 @@
   var MIN_HEIGHT = 280;
   figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
   clearAuditBadges();
-  loadCachedFullDesignSystem().catch(() => {
-  });
+  // DS cache loading is deferred until the UI sends "ui-ready"
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
   }
@@ -6013,6 +6012,11 @@ RULES:
   figma.ui.onmessage = async (msg) => {
     try {
       switch (msg.type) {
+        // ── UI ready handshake ────────────────────────────────
+        case "ui-ready": {
+          loadCachedFullDesignSystem().catch(() => {});
+          return;
+        }
         // ── Resize enforcement ────────────────────────────────
         case "resize": {
           const w = Math.max(msg.width || MIN_WIDTH, MIN_WIDTH);

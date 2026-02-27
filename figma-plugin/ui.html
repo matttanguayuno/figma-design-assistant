@@ -3700,6 +3700,9 @@
         }
       }
     };
+
+    // Signal to plugin that UI is ready to receive messages
+    parent.postMessage({ pluginMessage: { type: "ui-ready" } }, "*");
   </script>
 </body>
 </html>
