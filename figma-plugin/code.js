@@ -1791,11 +1791,11 @@
           componentSet.layoutMode = snap.layoutMode === "VERTICAL" ? "VERTICAL" : "HORIZONTAL";
           componentSet.primaryAxisSizingMode = "AUTO";
           componentSet.counterAxisSizingMode = "AUTO";
-          componentSet.itemSpacing = snap.itemSpacing ?? 16;
-          componentSet.paddingTop = snap.paddingTop ?? 40;
-          componentSet.paddingRight = snap.paddingRight ?? 40;
-          componentSet.paddingBottom = snap.paddingBottom ?? 40;
-          componentSet.paddingLeft = snap.paddingLeft ?? 40;
+          componentSet.itemSpacing = snap.itemSpacing != null ? snap.itemSpacing : 16;
+          componentSet.paddingTop = snap.paddingTop != null ? snap.paddingTop : 40;
+          componentSet.paddingRight = snap.paddingRight != null ? snap.paddingRight : 40;
+          componentSet.paddingBottom = snap.paddingBottom != null ? snap.paddingBottom : 40;
+          componentSet.paddingLeft = snap.paddingLeft != null ? snap.paddingLeft : 40;
           // Do NOT apply fillColor or cornerRadius to the component set wrapper.
           // Figma component sets should have transparent bg with dashed purple border.
           componentSet.fills = [];
