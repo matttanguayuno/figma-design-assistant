@@ -391,17 +391,20 @@ Style-by-Name fields (PREFERRED when the user specifies style names):
 Effects: [{"type":"DROP_SHADOW","radius":8,"spread":0,"offset":{"x":0,"y":2},"color":{"r":0,"g":0,"b":0,"a":0.08}}]
 
 Rules:
+- MANDATORY STYLE BINDING (HIGHEST PRIORITY RULE): Every node that has a color MUST include fillStyleName. Every TEXT node MUST include textStyleName. These fields bind the node to the design system. Raw hex values alone are NOT acceptable — you MUST ALWAYS set the named style field. Example of a correct TEXT node:
+  {"type":"TEXT","characters":"Active","fontSize":14,"fontFamily":"Segoe UI Variable","fontStyle":"Regular","fillColor":"#000000","fillStyleName":"Light/Fill Color/Text/Secondary","textStyleName":"Live/Body/SmallTrimm"}
+  Example of a correct FRAME node:
+  {"type":"FRAME","fillColor":"#F9F9F9","fillStyleName":"Light/Fill Color/Control/Secondary"}
+  NEVER output a fillColor without a corresponding fillStyleName. NEVER output a TEXT node without textStyleName. Match the style name to the semantic purpose of the element.
 - Root: layoutMode:"VERTICAL", layoutSizingVertical:"HUG", width 390 (mobile) or 1440 (desktop)
 - Use layoutMode on ALL frames. Use FILL for full-width children, HUG for content-fit
-- STYLE-BY-NAME PRIORITY: When the user explicitly mentions style names (e.g. "use Light/Primary for the background"), ALWAYS use fillStyleName or textStyleName. When style names are available in the design system context, prefer fillStyleName over raw fillColor hex values. This ensures proper design system binding.
 - COMPONENT SET CREATION: When asked to create a component set, component, or variants:
   * Root node type: "COMPONENT_SET"
   * Each variant is a child with type: "COMPONENT"
   * Component names MUST use Figma variant syntax: "Property=Value" (e.g. "State=Default", "State=Hover", "State=Disabled", "Size=Small, State=Active"). If unsure what property to use, default to "State=..."
   * CRITICAL: Each COMPONENT variant MUST contain FULL children[] with the actual UI content (text nodes, shapes, icons, frames, etc.). Do NOT create empty/blank component variants — they must have the same visual richness as a regular FRAME. Each variant should be a complete, fully-designed UI element.
-  * STYLE BINDING: When paint styles are available, use fillStyleName on COMPONENT children and their descendants to bind colors to the design system. For example: {"fillColor": "#003E92", "fillStyleName": "Light/Fill Color/Accent Text/Primary"}. This ensures the generated components use the file's named styles rather than raw hex values.
+  * STYLE BINDING (MANDATORY): Every COMPONENT child and ALL of its descendants MUST have fillStyleName on every colored node and textStyleName on every TEXT node. There are NO exceptions. Raw hex without a style name is a broken output.
   * All variants should have the same dimensions and layout structure
-  * Use fillStyleName and textStyleName when the user specifies named styles
 - Buttons: replicate the exact cornerRadius, alignment (primaryAxisAlignItems, counterAxisAlignItems), text color, font, fillColor, and layoutSizingHorizontal from the provided button style tokens. CRITICAL SIZING: buttons must look visually substantial and tappable. Set the button FRAME height to FIXED at the height from the style tokens (e.g. height:36 means the frame is 36px tall). Add vertical padding so the text is centered: paddingTop and paddingBottom should each be at least 8. If the button tokens show layoutSizingVertical:"HUG" with 0 padding, IGNORE the 0 padding — set paddingTop:10, paddingBottom:10 instead, and use layoutSizingVertical:"HUG" so the button grows to fit. The button text must be vertically and horizontally centered (primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER"). For full-width mobile buttons (width close to the root frame width), use layoutSizingHorizontal:"FILL" so they stretch to fill the parent container.
 - Do NOT include phone status bar elements (time, battery, signal icons). Start directly with the actual screen UI content.
 - Do NOT create colored circles or shapes as icon placeholders. For social login buttons (Google, Apple), just use a FRAME with a text label. No icon shapes.
