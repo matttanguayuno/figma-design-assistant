@@ -2258,8 +2258,6 @@ async function createNodeFromSnapshot(
         // purple border — applying a fill would hide that native appearance.
         componentSet.fills = [];
         _importStats.frames++;
-        // Tag so caller knows not to apply sourcePosition resize
-        (componentSet as any).__isComponentSet = true;
         return componentSet;
       } catch (combineErr) {
         // combineAsVariants failed — clean up orphaned components
@@ -7748,7 +7746,7 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
       node.x = placeX;
       node.y = placeY;
       // Force the generated frame to match source frame dimensions — skip for component sets
-      if (sourcePosition && "resize" in node && !(node as any).__isComponentSet) {
+      if (sourcePosition && "resize" in node && node.type !== "COMPONENT_SET") {
         const targetW = sourcePosition.width;
         const targetH = sourcePosition.height;
         if (targetW > 0 && targetH > 0) {

@@ -1799,7 +1799,6 @@
           // Figma component sets should have transparent bg with dashed purple border.
           componentSet.fills = [];
           _importStats.frames++;
-          componentSet.__isComponentSet = true;
           return componentSet;
         } catch (combineErr) {
           console.error(`[createNodeFromSnapshot] combineAsVariants FAILED:`, combineErr.message);
@@ -5928,7 +5927,7 @@ RULES:
       if (node) {
         node.x = placeX;
         node.y = placeY;
-        if (sourcePosition && "resize" in node && !node.__isComponentSet) {
+        if (sourcePosition && "resize" in node && node.type !== "COMPONENT_SET") {
           const targetW = sourcePosition.width;
           const targetH = sourcePosition.height;
           if (targetW > 0 && targetH > 0) {
