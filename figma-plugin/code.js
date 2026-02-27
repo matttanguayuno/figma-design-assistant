@@ -2504,10 +2504,9 @@
         const currentHash = computeDocumentHash();
         const isStale = parsed.documentHash !== currentHash;
         console.log(`[extractFullDS] Loaded cached DS from ${cached ? cacheKey : "legacy key"} (${parsed.colorPalette.length} colors, stale=${isStale})`);
-        if (isStale) {
-          console.log(`[extractFullDS] Skipping stale cache (hash mismatch)`);
-          return;
-        }
+        // Always load the cached data — paint styles/typography rarely change
+        // when frames are added/removed. The stale flag just means the page
+        // structure changed, not necessarily the design system itself.
         _fullDesignSystem = parsed;
         if (!cached && data) {
           await saveDSToCache(parsed);
@@ -2517,7 +2516,8 @@
         sendToUI({
           type: "extract-ds-cached",
           summary: buildDSSummary(parsed),
-          extractedAt: parsed.extractedAt
+          extractedAt: parsed.extractedAt,
+          stale: isStale
         });
       }
     } catch (_) {

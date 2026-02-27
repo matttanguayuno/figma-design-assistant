@@ -3694,7 +3694,8 @@
           dsChevron.style.display = "inline-block";
           const cs = msg.summary || {};
           const when = msg.extractedAt ? new Date(msg.extractedAt).toLocaleTimeString() : "";
-          dsStatusText.textContent = `Design system loaded (${cs.colors || 0} colors, ${cs.components || 0} comp${when ? ", " + when : ""})`;
+          const staleNote = msg.stale ? " · may be outdated" : "";
+          dsStatusText.textContent = `Design system loaded (${cs.colors || 0} colors, ${cs.components || 0} comp${when ? ", " + when : ""}${staleNote})`;
           renderDSDetails(cs);
           break;
         }
