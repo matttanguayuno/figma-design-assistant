@@ -3148,14 +3148,13 @@
     function renderJobItem(jobId) {
       const job = _jobs.get(jobId);
       if (!job) return;
-      // Truncate prompt for display
-      const display = job.prompt.length > 40 ? job.prompt.slice(0, 37) + "…" : job.prompt;
+
       const el = document.createElement("div");
       el.className = "job-item";
       el.dataset.jobId = String(jobId);
       el.innerHTML =
         '<div class="job-header">' +
-          '<span class="job-prompt" title="' + job.prompt.replace(/"/g, '&quot;') + '">' + display + '</span>' +
+          '<span class="job-prompt" title="' + job.prompt.replace(/"/g, '&quot;') + '">' + job.prompt.replace(/</g, '&lt;') + '</span>' +
           '<span class="job-phase">Analyzing</span>' +
           '<button class="job-cancel" title="Cancel">✕</button>' +
         '</div>' +

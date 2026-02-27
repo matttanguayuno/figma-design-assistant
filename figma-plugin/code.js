@@ -1787,14 +1787,15 @@
           const componentSet = figma.combineAsVariants(components, parent);
           componentSet.name = snap.name || "Component Set";
           console.log(`[createNodeFromSnapshot] combineAsVariants succeeded: "${componentSet.name}" (${componentSet.children.length} variants)`);
-          if (snap.layoutMode === "HORIZONTAL" || snap.layoutMode === "VERTICAL") {
-            componentSet.layoutMode = snap.layoutMode;
-          }
-          if (snap.itemSpacing != null) componentSet.itemSpacing = snap.itemSpacing;
-          if (snap.paddingTop != null) componentSet.paddingTop = snap.paddingTop;
-          if (snap.paddingRight != null) componentSet.paddingRight = snap.paddingRight;
-          if (snap.paddingBottom != null) componentSet.paddingBottom = snap.paddingBottom;
-          if (snap.paddingLeft != null) componentSet.paddingLeft = snap.paddingLeft;
+          // Always apply auto-layout so variants are spaced out (not overlapping at 0,0)
+          componentSet.layoutMode = snap.layoutMode === "VERTICAL" ? "VERTICAL" : "HORIZONTAL";
+          componentSet.primaryAxisSizingMode = "AUTO";
+          componentSet.counterAxisSizingMode = "AUTO";
+          componentSet.itemSpacing = snap.itemSpacing ?? 16;
+          componentSet.paddingTop = snap.paddingTop ?? 40;
+          componentSet.paddingRight = snap.paddingRight ?? 40;
+          componentSet.paddingBottom = snap.paddingBottom ?? 40;
+          componentSet.paddingLeft = snap.paddingLeft ?? 40;
           // Do NOT apply fillColor or cornerRadius to the component set wrapper.
           // Figma component sets should have transparent bg with dashed purple border.
           componentSet.fills = [];
