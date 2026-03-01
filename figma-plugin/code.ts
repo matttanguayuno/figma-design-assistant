@@ -9982,208 +9982,360 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
             sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup...` });
 
-            // ── Build a rich description of current layout state ──
-            // Group frames by parent to emphasize sibling consistency
-            const frameDescriptions = allFrames.map(f => {
-              const problems: string[] = [];
+            // ═══════════════════════════════════════════════════════════════
+            // MULTI-PASS LLM CLEANUP ARCHITECTURE
+            // Pass 1: Visual analysis — LLM examines screenshot, lists problems
+            // Pass 2: Fix mapping — LLM maps problems to frames, outputs JSON fixes
+            // Pass 3+: Verify loop — apply, re-screenshot, check for remaining issues
+            // ═══════════════════════════════════════════════════════════════
+            const MAX_CLEANUP_PASSES = 5;
 
-              // Detect semantic type from name
-              const nameLower = f.name.toLowerCase();
-              const isImage = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
-              const isSeparator = /separator|divider|line|rule/i.test(nameLower);
-              const isCarousel = /carousel|slider|swiper/i.test(nameLower);
-              const isButton = /button|btn|cta/i.test(nameLower);
-              const hasText = f.childSummary.includes("(TEXT)");
-
-              // ── SIZING issues (most critical for text overflow) ──
-              // Only flag sizing issues on content frames, NOT images/separators/carousels
-              if (!isImage && !isSeparator && !isCarousel && f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
-                // In a VERTICAL parent: child width should be FILL (stretch to parent width)
-                if (f.parentLayoutMode === "VERTICAL" && f.sizingH === "FIXED") {
-                  problems.push("[ISSUE] FIXED width inside VERTICAL auto-layout parent -- should be sizingH=FILL to stretch to parent width and prevent horizontal overflow");
-                }
-                // In a HORIZONTAL parent: child height should typically be FILL or HUG
-                if (f.parentLayoutMode === "HORIZONTAL" && f.sizingV === "FIXED" && f.height > 60) {
-                  problems.push("[ISSUE] FIXED height inside HORIZONTAL parent -- consider sizingV=FILL or HUG");
-                }
-              }
-
-              // ClipsContent with FIXED = content cut off (but not for images)
-              if (!isImage && !isCarousel && f.clipsContent && f.sizingH === "FIXED") {
-                problems.push("[ISSUE] clipsContent=true with FIXED width -- content IS being clipped. Set sizingH=FILL");
-              }
-              if (!isImage && !isCarousel && f.clipsContent && f.sizingV === "FIXED") {
-                problems.push("[ISSUE] clipsContent=true with FIXED height -- content IS being clipped vertically. Consider sizingV=HUG");
-              }
-
-              // ── PADDING issues ──
-              // Text content flush against edges — check both direct TEXT children and frame children with text-related names
-              const hasDeepText = hasText || /labels|content|body|description|title|subtitle|text|paragraph|caption/i.test(f.childSummary);
-              if (!isImage && !isSeparator && !isCarousel && hasDeepText) {
-                if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
-                  problems.push("[ISSUE] text content flush against L/R edges -- needs horizontal padding (16px)");
-                }
-                if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
-                  problems.push("[ISSUE] text content with no vertical padding -- needs top/bottom padding");
-                }
-              }
-              // Asymmetric padding where one side is 0 and the other isn't (not for separators/dividers)
-              if (!isSeparator && !isCarousel) {
-                if ((f.paddingLeft === 0) !== (f.paddingRight === 0) && (f.paddingLeft + f.paddingRight > 0)) {
-                  problems.push(`[ISSUE] one-sided horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight}) -- should be symmetric`);
-                }
-                if ((f.paddingTop === 0) !== (f.paddingBottom === 0) && (f.paddingTop + f.paddingBottom > 4)) {
-                  problems.push(`[ISSUE] one-sided vertical padding (T=${f.paddingTop}, B=${f.paddingBottom}) -- should be symmetric`);
-                }
-              }
-
-              // Excessive padding (buttons/frames that are too fat)
-              if (isButton) {
-                const vPad = f.paddingTop + f.paddingBottom;
-                const hPad = f.paddingLeft + f.paddingRight;
-                if (vPad > 40) {
-                  problems.push(`[ISSUE] button has excessive vertical padding (${f.paddingTop}+${f.paddingBottom}=${vPad}) -- buttons should have 8-16px vertical padding`);
-                }
-                if (hPad > 64) {
-                  problems.push(`[ISSUE] button has excessive horizontal padding (${f.paddingLeft}+${f.paddingRight}=${hPad}) -- should be 16-32px horizontal`);
-                }
-              }
-
-              // Oversized padding on non-root frames
-              if (!isButton && f.depth > 0) {
-                if (f.paddingTop > 48 || f.paddingBottom > 48) {
-                  problems.push(`[ISSUE] excessive vertical padding (T=${f.paddingTop}, B=${f.paddingBottom}) -- reduce to 16-24px`);
-                }
-                if (f.paddingLeft > 48 || f.paddingRight > 48) {
-                  problems.push(`[ISSUE] excessive horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight}) -- reduce to 16-24px`);
-                }
-              }
-
-              // Asymmetric padding
-              if (f.paddingLeft !== f.paddingRight && f.paddingLeft > 0 && f.paddingRight > 0) {
-                problems.push(`[ISSUE] asymmetric LR padding (${f.paddingLeft} vs ${f.paddingRight})`);
-              }
-              if (f.paddingTop !== f.paddingBottom && f.paddingTop > 0 && f.paddingBottom > 0) {
-                problems.push(`[ISSUE] asymmetric TB padding (${f.paddingTop} vs ${f.paddingBottom})`);
-              }
-
-              // Fractional values
-              if ([f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft, f.itemSpacing].some(v => v % 1 !== 0)) {
-                problems.push("[ISSUE] fractional values (should be whole numbers on 4px grid)");
-              }
-
-              // Negative spacing
-              if (f.itemSpacing < 0) {
-                problems.push(`[ISSUE] NEGATIVE spacing (${f.itemSpacing}) -- must be 0 or positive`);
-              }
-
-              // Excessive spacing
-              if (f.itemSpacing > 48 && !isCarousel) {
-                problems.push(`[ISSUE] very large spacing (${f.itemSpacing}) -- consider reducing to 16-24px`);
-              }
-
-              // ── CHILD WIDER/TALLER THAN PARENT ──
-              if (f.parentWidth && f.width > f.parentWidth) {
-                problems.push(`[ISSUE] frame width (${f.width}) exceeds parent width (${f.parentWidth}) -- overflowing. Set sizingH=FILL`);
-              }
-
-              // ── SIBLING CONSISTENCY ──
-              const siblings = allFrames.filter(s => s.parentId === f.parentId && s.id !== f.id);
-              const sameName = siblings.filter(s => s.name === f.name);
-              if (sameName.length > 0) {
-                const ref = sameName[0];
-                if (ref.paddingTop !== f.paddingTop || ref.paddingRight !== f.paddingRight ||
-                    ref.paddingBottom !== f.paddingBottom || ref.paddingLeft !== f.paddingLeft ||
-                    ref.itemSpacing !== f.itemSpacing) {
-                  problems.push(`[ISSUE] INCONSISTENT with sibling "${ref.name}" (id=${ref.id}) -- same-named frames MUST have identical padding/spacing`);
-                }
-                if (ref.sizingH !== f.sizingH || ref.sizingV !== f.sizingV) {
-                  problems.push(`[ISSUE] INCONSISTENT sizing with sibling -- should match (${ref.sizingH}/${ref.sizingV})`);
-                }
-              }
-              // Also check siblings with similar names (e.g. "Button Large Primary" vs "Button Large Secondary")
-              const samePrefix = siblings.filter(s => {
-                const prefix = f.name.split(" ").slice(0, 2).join(" ");
-                return prefix.length > 3 && s.name.startsWith(prefix) && s.name !== f.name;
-              });
-              if (samePrefix.length > 0) {
-                const ref = samePrefix[0];
-                if (ref.paddingTop !== f.paddingTop || ref.paddingBottom !== f.paddingBottom ||
-                    ref.paddingLeft !== f.paddingLeft || ref.paddingRight !== f.paddingRight) {
-                  problems.push(`[ISSUE] padding differs from similar sibling "${ref.name}" (pad=[${ref.paddingTop},${ref.paddingRight},${ref.paddingBottom},${ref.paddingLeft}] vs [${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]) -- should match`);
-                }
-              }
-
-              // Frame height way too large for a frame with few children (e.g. button at 154px)
-              if (f.sizingV === "FIXED" && f.childCount <= 3 && f.height > 100 && !isImage && !isCarousel) {
-                const expectedH = (f.paddingTop + f.paddingBottom) + (f.childCount * 30) + ((f.childCount - 1) * f.itemSpacing);
-                if (f.height > expectedH * 2) {
-                  problems.push(`[ISSUE] frame height (${f.height}px) seems excessive for ${f.childCount} children -- consider sizingV=HUG`);
-                }
-              }
-
-              let desc =
-                `- id="${f.id}" name="${f.name}" depth=${f.depth}` +
-                (f.parentName ? ` parent="${f.parentName}"` : "") +
-                (f.parentLayoutMode ? ` parentLayout=${f.parentLayoutMode}` : "") +
-                (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") +
-                ` size=${f.width}x${f.height}` +
-                ` layout=${f.layoutMode}` +
-                ` padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]` +
-                ` spacing=${f.itemSpacing}` +
-                ` align=${f.primaryAxisAlign}/${f.counterAxisAlign}` +
-                ` sizing=${f.sizingH}/${f.sizingV}` +
-                ` clips=${f.clipsContent}` +
-                ` children(${f.childCount}): [${f.childSummary}]`;
-              if (problems.length > 0) {
-                desc += `\n  ** ${problems.join("\n  ** ")}`;
-              }
-              return desc;
-            }).join("\n");
-
-            // ── Debug: log detected issues per frame ──
-            console.log(`[Cleanup] ═══════════════════════════════════════════`);
-            console.log(`[Cleanup] FRAME ANALYSIS (${allFrames.length} frames):`);
-            console.log(`[Cleanup] ═══════════════════════════════════════════`);
-            console.log(frameDescriptions);
-            console.log(`[Cleanup] ═══════════════════════════════════════════`);
-
-            // ── Export a screenshot of the selected frame for vision analysis ──
-            let screenshotBase64 = "";
-            try {
-              const rootNode = selection[0];
-              if (rootNode && "exportAsync" in rootNode) {
-                // Scale to max ~1200px wide for reasonable token cost
-                const scale = Math.min(2, 1200 / Math.max(rootNode.width, 1));
-                const pngBytes = await (rootNode as ExportMixin).exportAsync({
-                  format: "PNG",
-                  constraint: { type: "SCALE", value: Math.max(0.5, scale) },
+            // ── Helper: re-collect live frame descriptions with issue annotations ──
+            function buildFrameDescriptions(frames: CleanupFrameInfo[]): string {
+              // Re-read live values from Figma nodes
+              for (const f of frames) {
+                const node = figma.getNodeById(f.id) as SceneNode | null;
+                if (!node || node.type !== "FRAME") continue;
+                const fr = node as FrameNode;
+                f.width = Math.round(fr.width);
+                f.height = Math.round(fr.height);
+                f.paddingTop = fr.paddingTop ?? 0;
+                f.paddingRight = fr.paddingRight ?? 0;
+                f.paddingBottom = fr.paddingBottom ?? 0;
+                f.paddingLeft = fr.paddingLeft ?? 0;
+                f.itemSpacing = fr.itemSpacing ?? 0;
+                f.counterAxisSpacing = (fr as any).counterAxisSpacing ?? 0;
+                f.primaryAxisAlign = (fr as any).primaryAxisAlignItems || "MIN";
+                f.counterAxisAlign = (fr as any).counterAxisAlignItems || "MIN";
+                f.sizingH = (fr as any).layoutSizingHorizontal || "FIXED";
+                f.sizingV = (fr as any).layoutSizingVertical || "FIXED";
+                f.clipsContent = fr.clipsContent ?? false;
+                // Update child summary
+                const childNames = fr.children.map((c: SceneNode) => {
+                  if (c.type === "TEXT") return `"${(c as TextNode).characters.substring(0, 30)}" (TEXT)`;
+                  return `"${c.name}" (${c.type}, ${Math.round(c.width)}×${Math.round(c.height)})`;
                 });
-                screenshotBase64 = uint8ToBase64(pngBytes);
-                console.log(`[Cleanup] Captured screenshot (${pngBytes.length} bytes, scale=${scale.toFixed(2)})`);
+                f.childCount = fr.children.length;
+                f.childSummary = childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` … +${childNames.length - 10} more` : "");
               }
-            } catch (e: any) {
-              console.warn(`[Cleanup] Screenshot export failed: ${e.message}`);
+
+              return frames.map(f => {
+                const problems: string[] = [];
+                const nameLower = f.name.toLowerCase();
+                const isImage = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
+                const isSeparator = /separator|divider|line|rule/i.test(nameLower);
+                const isCarousel = /carousel|slider|swiper/i.test(nameLower);
+                const isButton = /button|btn|cta/i.test(nameLower);
+                const hasText = f.childSummary.includes("(TEXT)");
+                const hasDeepText = hasText || /labels|content|body|description|title|subtitle|text|paragraph|caption/i.test(f.childSummary);
+
+                if (!isImage && !isSeparator && !isCarousel && f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
+                  if (f.parentLayoutMode === "VERTICAL" && f.sizingH === "FIXED") {
+                    problems.push("[ISSUE] FIXED width inside VERTICAL parent -- should be sizingH=FILL");
+                  }
+                  if (f.parentLayoutMode === "HORIZONTAL" && f.sizingV === "FIXED" && f.height > 60) {
+                    problems.push("[ISSUE] FIXED height inside HORIZONTAL parent -- consider sizingV=FILL or HUG");
+                  }
+                }
+                if (!isImage && !isCarousel && f.clipsContent && f.sizingH === "FIXED") {
+                  problems.push("[ISSUE] clipsContent=true with FIXED width -- content IS being clipped. Set sizingH=FILL");
+                }
+                if (!isImage && !isCarousel && f.clipsContent && f.sizingV === "FIXED") {
+                  problems.push("[ISSUE] clipsContent=true with FIXED height -- content clipped. Consider sizingV=HUG");
+                }
+                if (!isImage && !isSeparator && !isCarousel && hasDeepText) {
+                  if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
+                    problems.push("[ISSUE] text flush against L/R edges -- needs horizontal padding (16px)");
+                  }
+                  if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
+                    problems.push("[ISSUE] text with no vertical padding -- needs top/bottom padding");
+                  }
+                }
+                if (!isSeparator && !isCarousel) {
+                  if ((f.paddingLeft === 0) !== (f.paddingRight === 0) && (f.paddingLeft + f.paddingRight > 0)) {
+                    problems.push(`[ISSUE] one-sided horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight}) -- should be symmetric`);
+                  }
+                  if ((f.paddingTop === 0) !== (f.paddingBottom === 0) && (f.paddingTop + f.paddingBottom > 4)) {
+                    problems.push(`[ISSUE] one-sided vertical padding (T=${f.paddingTop}, B=${f.paddingBottom}) -- should be symmetric`);
+                  }
+                }
+                if (isButton) {
+                  const vPad = f.paddingTop + f.paddingBottom;
+                  if (vPad > 40) problems.push(`[ISSUE] excessive button vertical padding (${vPad}px) -- should be 24-32px total`);
+                }
+                if (!isButton && f.depth > 0) {
+                  if (f.paddingTop > 48 || f.paddingBottom > 48) problems.push(`[ISSUE] excessive vertical padding (T=${f.paddingTop}, B=${f.paddingBottom})`);
+                  if (f.paddingLeft > 48 || f.paddingRight > 48) problems.push(`[ISSUE] excessive horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight})`);
+                }
+                if (f.paddingLeft !== f.paddingRight && f.paddingLeft > 0 && f.paddingRight > 0) {
+                  problems.push(`[ISSUE] asymmetric LR padding (${f.paddingLeft} vs ${f.paddingRight})`);
+                }
+                if (f.paddingTop !== f.paddingBottom && f.paddingTop > 0 && f.paddingBottom > 0) {
+                  problems.push(`[ISSUE] asymmetric TB padding (${f.paddingTop} vs ${f.paddingBottom})`);
+                }
+                if ([f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft, f.itemSpacing].some(v => v % 1 !== 0)) {
+                  problems.push("[ISSUE] fractional values (should be whole numbers on 4px grid)");
+                }
+                if (f.itemSpacing < 0) problems.push(`[ISSUE] NEGATIVE spacing (${f.itemSpacing})`);
+                if (f.itemSpacing > 48 && !isCarousel) problems.push(`[ISSUE] very large spacing (${f.itemSpacing})`);
+                if (f.parentWidth && f.width > f.parentWidth) {
+                  problems.push(`[ISSUE] frame width (${f.width}) exceeds parent width (${f.parentWidth}) -- overflowing. Set sizingH=FILL`);
+                }
+                // Sibling consistency
+                const siblings = frames.filter(s => s.parentId === f.parentId && s.id !== f.id);
+                const sameName = siblings.filter(s => s.name === f.name);
+                if (sameName.length > 0) {
+                  const ref = sameName[0];
+                  if (ref.paddingTop !== f.paddingTop || ref.paddingRight !== f.paddingRight ||
+                      ref.paddingBottom !== f.paddingBottom || ref.paddingLeft !== f.paddingLeft ||
+                      ref.itemSpacing !== f.itemSpacing) {
+                    problems.push(`[ISSUE] INCONSISTENT with sibling "${ref.name}" (id=${ref.id})`);
+                  }
+                }
+                const samePrefix = siblings.filter(s => {
+                  const prefix = f.name.split(" ").slice(0, 2).join(" ");
+                  return prefix.length > 3 && s.name.startsWith(prefix) && s.name !== f.name;
+                });
+                if (samePrefix.length > 0) {
+                  const ref = samePrefix[0];
+                  if (ref.paddingTop !== f.paddingTop || ref.paddingBottom !== f.paddingBottom ||
+                      ref.paddingLeft !== f.paddingLeft || ref.paddingRight !== f.paddingRight) {
+                    problems.push(`[ISSUE] padding differs from similar sibling "${ref.name}"`);
+                  }
+                }
+                if (f.sizingV === "FIXED" && f.childCount <= 3 && f.height > 100 && !isImage && !isCarousel) {
+                  const expectedH = (f.paddingTop + f.paddingBottom) + (f.childCount * 30) + ((f.childCount - 1) * f.itemSpacing);
+                  if (f.height > expectedH * 2) {
+                    problems.push(`[ISSUE] height (${f.height}px) excessive for ${f.childCount} children -- consider sizingV=HUG`);
+                  }
+                }
+
+                let desc =
+                  `- id="${f.id}" name="${f.name}" depth=${f.depth}` +
+                  (f.parentName ? ` parent="${f.parentName}"` : "") +
+                  (f.parentLayoutMode ? ` parentLayout=${f.parentLayoutMode}` : "") +
+                  (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") +
+                  ` size=${f.width}x${f.height}` +
+                  ` layout=${f.layoutMode}` +
+                  ` padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]` +
+                  ` spacing=${f.itemSpacing}` +
+                  ` align=${f.primaryAxisAlign}/${f.counterAxisAlign}` +
+                  ` sizing=${f.sizingH}/${f.sizingV}` +
+                  ` clips=${f.clipsContent}` +
+                  ` children(${f.childCount}): [${f.childSummary}]`;
+                if (problems.length > 0) {
+                  desc += `\n  ** ${problems.join("\n  ** ")}`;
+                }
+                return desc;
+              }).join("\n");
             }
 
-            const cleanupPrompt =
-              (screenshotBase64 ?
-              `STEP 1 — VISUAL ANALYSIS (screenshot attached):\n` +
-              `Study the screenshot carefully. You are a senior UI designer reviewing this layout. List every visual problem you can see:\n` +
-              `- Text that is cropped, clipped, cut off, or overlapping\n` +
-              `- Buttons or sections that are way too tall, too wide, or have excessive whitespace inside them\n` +
-              `- Elements that overflow or extend beyond their container\n` +
-              `- Inconsistent spacing: similar items (cards, list rows, buttons) with different gaps between them\n` +
-              `- Inconsistent padding: similar items with different internal spacing\n` +
-              `- Misaligned elements that should line up\n` +
-              `- Missing padding: text jammed against edges with no breathing room\n` +
-              `The screenshot is the TRUTH. Trust what you see over the data.\n\n` : "") +
-              `STEP 2 — MAP PROBLEMS TO FRAMES:\n` +
-              `${rootContext}\n\n` +
-              `Below are the auto-layout frames you can modify. Match each visual problem from Step 1 to the correct frame ID.\n` +
-              `Frames marked with ** have programmatically-detected issues that confirm what you see.\n\n` +
-              `${frameDescriptions}\n\n` +
-              `STEP 3 — FIX EVERY PROBLEM:\n` +
+            // ── Helper: capture fresh screenshot ──
+            async function captureScreenshot(): Promise<string> {
+              try {
+                const rootNode = selection[0];
+                if (rootNode && "exportAsync" in rootNode) {
+                  const scale = Math.min(2, 1200 / Math.max(rootNode.width, 1));
+                  const pngBytes = await (rootNode as ExportMixin).exportAsync({
+                    format: "PNG",
+                    constraint: { type: "SCALE", value: Math.max(0.5, scale) },
+                  });
+                  return uint8ToBase64(pngBytes);
+                }
+              } catch (e: any) {
+                console.warn(`[Cleanup] Screenshot export failed: ${e.message}`);
+              }
+              return "";
+            }
+
+            // ── Helper: parse LLM response into cleanup settings array ──
+            type CleanupSetting = {
+              id: string;
+              paddingTop?: number;
+              paddingRight?: number;
+              paddingBottom?: number;
+              paddingLeft?: number;
+              itemSpacing?: number;
+              counterAxisSpacing?: number;
+              alignment?: string;
+              counterAlignment?: string;
+              sizingH?: string;
+              sizingV?: string;
+              clipsContent?: boolean;
+            };
+
+            function parseCleanupResponse(rawResult: any): CleanupSetting[] {
+              if (Array.isArray(rawResult)) return rawResult;
+              if (rawResult && typeof rawResult === "object") {
+                const wrapper = rawResult.frames || rawResult.result || rawResult.results || rawResult.content;
+                if (Array.isArray(wrapper)) return wrapper;
+                const keys = Object.keys(rawResult);
+                if (keys.length === 1 && Array.isArray(rawResult[keys[0]])) return rawResult[keys[0]];
+                if (rawResult.id) return [rawResult];
+                // Regex fallback
+                const rawStr = JSON.stringify(rawResult);
+                const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                if (arrMatch) {
+                  const parsed = JSON.parse(arrMatch[0]);
+                  if (Array.isArray(parsed)) return parsed;
+                }
+              }
+              return [];
+            }
+
+            // ── Helper: apply cleanup settings to frames (bottom-up, guarded) ──
+            function applyCleanupSettings(
+              settings: CleanupSetting[],
+              frames: CleanupFrameInfo[],
+              passLabel: string
+            ): { applied: number; changes: string[] } {
+              const frameDepthMap = new Map<string, number>();
+              for (const f of frames) frameDepthMap.set(f.id, f.depth);
+
+              const sorted = [...settings].sort((a, b) =>
+                (frameDepthMap.get(b.id) ?? 0) - (frameDepthMap.get(a.id) ?? 0)
+              );
+
+              let applied = 0;
+              const changes: string[] = [];
+
+              for (const s of sorted) {
+                const node = figma.getNodeById(s.id) as SceneNode | null;
+                if (!node || node.type !== "FRAME") continue;
+                const frame = node as FrameNode;
+                const isRoot = (frameDepthMap.get(s.id) ?? 0) === 0;
+                const origWidth = frame.width;
+
+                // Safety guard: visual frames — strip sizing unless overflowing
+                const fnLower = frame.name.toLowerCase();
+                const isVisualGuard = /image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider/i.test(fnLower);
+                const parentFrame = node.parent && "width" in node.parent ? node.parent as FrameNode : null;
+                const isOverflowing = parentFrame && frame.width > parentFrame.width;
+                if (isVisualGuard && !isOverflowing) { delete s.sizingH; delete s.sizingV; }
+
+                // Safety guard: parent layoutMode=NONE — strip sizing
+                const parentNode = node.parent;
+                if (parentNode && "layoutMode" in parentNode && (parentNode as any).layoutMode === "NONE") {
+                  if (s.sizingH) { console.log(`[${passLabel}] Skipping sizingH=${s.sizingH} on "${frame.name}" — parent NONE`); delete s.sizingH; }
+                  if (s.sizingV) { console.log(`[${passLabel}] Skipping sizingV=${s.sizingV} on "${frame.name}" — parent NONE`); delete s.sizingV; }
+                }
+
+                if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
+                  const before = {
+                    pT: frame.paddingTop, pR: frame.paddingRight,
+                    pB: frame.paddingBottom, pL: frame.paddingLeft,
+                    iS: frame.itemSpacing,
+                    cS: (frame as any).counterAxisSpacing ?? 0,
+                    align: (frame as any).primaryAxisAlignItems || "MIN",
+                    crossAlign: (frame as any).counterAxisAlignItems || "MIN",
+                    sizH: (frame as any).layoutSizingHorizontal || "FIXED",
+                    sizV: (frame as any).layoutSizingVertical || "FIXED",
+                    clips: frame.clipsContent,
+                  };
+
+                  if (s.paddingTop !== undefined) frame.paddingTop = s.paddingTop;
+                  if (s.paddingRight !== undefined) frame.paddingRight = s.paddingRight;
+                  if (s.paddingBottom !== undefined) frame.paddingBottom = s.paddingBottom;
+                  if (s.paddingLeft !== undefined) frame.paddingLeft = s.paddingLeft;
+                  if (s.itemSpacing !== undefined) frame.itemSpacing = s.itemSpacing;
+                  if (s.counterAxisSpacing !== undefined) (frame as any).counterAxisSpacing = s.counterAxisSpacing;
+                  if (s.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(s.alignment)) {
+                    frame.primaryAxisAlignItems = s.alignment as any;
+                  }
+                  if (s.counterAlignment && ["MIN", "CENTER", "MAX"].includes(s.counterAlignment)) {
+                    frame.counterAxisAlignItems = s.counterAlignment as any;
+                  }
+                  if (s.sizingH && ["FILL", "HUG", "FIXED"].includes(s.sizingH)) {
+                    try { (frame as any).layoutSizingHorizontal = s.sizingH; } catch (_e) { /* ignore */ }
+                  }
+                  if (s.sizingV && ["FILL", "HUG", "FIXED"].includes(s.sizingV)) {
+                    try { (frame as any).layoutSizingVertical = s.sizingV; } catch (_e) { /* ignore */ }
+                  }
+                  if (s.clipsContent !== undefined) frame.clipsContent = s.clipsContent;
+
+                  const after = {
+                    pT: frame.paddingTop, pR: frame.paddingRight,
+                    pB: frame.paddingBottom, pL: frame.paddingLeft,
+                    iS: frame.itemSpacing,
+                    cS: (frame as any).counterAxisSpacing ?? 0,
+                    align: (frame as any).primaryAxisAlignItems || "MIN",
+                    crossAlign: (frame as any).counterAxisAlignItems || "MIN",
+                    sizH: (frame as any).layoutSizingHorizontal || "FIXED",
+                    sizV: (frame as any).layoutSizingVertical || "FIXED",
+                    clips: frame.clipsContent,
+                  };
+
+                  const realChanges: string[] = [];
+                  if (before.pT !== after.pT || before.pR !== after.pR || before.pB !== after.pB || before.pL !== after.pL) {
+                    realChanges.push(`padding [${before.pT},${before.pR},${before.pB},${before.pL}]→[${after.pT},${after.pR},${after.pB},${after.pL}]`);
+                  }
+                  if (before.iS !== after.iS) realChanges.push(`spacing ${before.iS}→${after.iS}`);
+                  if (before.cS !== after.cS) realChanges.push(`counterSpacing ${before.cS}→${after.cS}`);
+                  if (before.align !== after.align) realChanges.push(`align ${before.align}→${after.align}`);
+                  if (before.crossAlign !== after.crossAlign) realChanges.push(`crossAlign ${before.crossAlign}→${after.crossAlign}`);
+                  if (before.sizH !== after.sizH) realChanges.push(`sizingH ${before.sizH}→${after.sizH}`);
+                  if (before.sizV !== after.sizV) realChanges.push(`sizingV ${before.sizV}→${after.sizV}`);
+                  if (before.clips !== after.clips) realChanges.push(`clipsContent ${before.clips}→${after.clips}`);
+
+                  if (realChanges.length > 0) {
+                    applied++;
+                    changes.push(`"${frame.name}": ${realChanges.join(", ")}`);
+                    console.log(`[${passLabel}] Updated "${frame.name}": ${realChanges.join(", ")}`);
+                  }
+
+                  if (isRoot) {
+                    frame.counterAxisSizingMode = "FIXED";
+                    frame.primaryAxisSizingMode = "AUTO";
+                    frame.resize(origWidth, frame.height);
+                  }
+                }
+              }
+              return { applied, changes };
+            }
+
+            // ── Helper: post-LLM sibling consistency enforcement ──
+            function enforcePostLLMConsistency(frames: CleanupFrameInfo[], passLabel: string): { count: number; changes: string[] } {
+              let count = 0;
+              const changes: string[] = [];
+              const groups = new Map<string, Array<{ id: string; name: string }>>();
+              for (const fi of frames) {
+                const key = `${fi.parentId}::${fi.name}`;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key)!.push({ id: fi.id, name: fi.name });
+              }
+              for (const [_key, group] of groups) {
+                if (group.length < 2) continue;
+                const live: Array<{ node: FrameNode; pT: number; pR: number; pB: number; pL: number }> = [];
+                for (const g of group) {
+                  const n = figma.getNodeById(g.id) as SceneNode | null;
+                  if (!n || n.type !== "FRAME") continue;
+                  const f = n as FrameNode;
+                  live.push({ node: f, pT: f.paddingTop, pR: f.paddingRight, pB: f.paddingBottom, pL: f.paddingLeft });
+                }
+                if (live.length < 2) continue;
+                const padCounts = new Map<string, number>();
+                for (const l of live) {
+                  const pk = `${l.pT},${l.pR},${l.pB},${l.pL}`;
+                  padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
+                }
+                let bestP = ""; let bestC = 0;
+                for (const [pk, cnt] of padCounts) { if (cnt > bestC) { bestC = cnt; bestP = pk; } }
+                const [tT, tR, tB, tL] = bestP.split(",").map(Number);
+                for (const l of live) {
+                  if (l.pT === tT && l.pR === tR && l.pB === tB && l.pL === tL) continue;
+                  const oldP = `[${l.pT},${l.pR},${l.pB},${l.pL}]`;
+                  l.node.paddingTop = tT; l.node.paddingRight = tR;
+                  l.node.paddingBottom = tB; l.node.paddingLeft = tL;
+                  count++;
+                  changes.push(`"${l.node.name}": pad ${oldP}->[${tT},${tR},${tB},${tL}] (sibling fix)`);
+                  console.log(`[${passLabel}] "${l.node.name}": pad ${oldP}->[${tT},${tR},${tB},${tL}]`);
+                }
+              }
+              return { count, changes };
+            }
+
+            // ── Build the fix rules text (shared across pass 2 and verify passes) ──
+            const fixRulesText =
               `Apply fixes using these Figma layout rules:\n` +
               `- sizingH="FILL" makes a child stretch to its parent width. ONLY works when the parent has layoutMode=VERTICAL or HORIZONTAL (not NONE).\n` +
               `- sizingH="FILL" does NOT work if parentLayout=NONE. Skip sizing changes for those frames.\n` +
@@ -10199,302 +10351,201 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `Respond ONLY with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}\n` +
               `Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, ` +
               `alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), ` +
-              `sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).\n` +
-              `Fix EVERY visual problem. Return ALL frames that need changes — typically most frames need at least one fix.`;
+              `sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).`;
 
-            const cleanupPayload = {
-              intent: cleanupPrompt,
-              selection: { nodes: [] },
-              designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
-              apiKey: _userApiKey,
-              provider: _selectedProvider,
-              model: _selectedModel,
-              imageBase64: screenshotBase64 || undefined,
-            };
+            // ── Cumulative tracking across all passes ──
+            let totalLLMApplied = 0;
+            let totalPostFix = 0;
+            const allLLMChanges: string[] = [];
+            const allPostFixChanges: string[] = [];
 
-            let cleanupSettings: Array<{
-              id: string;
-              paddingTop?: number;
-              paddingRight?: number;
-              paddingBottom?: number;
-              paddingLeft?: number;
-              itemSpacing?: number;
-              counterAxisSpacing?: number;
-              alignment?: string;
-              counterAlignment?: string;
-              sizingH?: string;
-              sizingV?: string;
-              clipsContent?: boolean;
-            }> = [];
+            // ═══════════════════════════════════════════
+            // PASS 1: VISUAL ANALYSIS — LLM examines screenshot, returns problem list
+            // ═══════════════════════════════════════════
+            sendToUI({ type: "status", message: `Cleanup pass 1/${MAX_CLEANUP_PASSES}: analyzing layout...` });
+            figma.notify(`Cleanup pass 1/${MAX_CLEANUP_PASSES}: analyzing layout...`, { timeout: 3000 });
+
+            let screenshotBase64 = await captureScreenshot();
+            let problemList = "";
+
+            if (screenshotBase64) {
+              const visualPrompt =
+                `Examine this mobile app screenshot carefully. List every visual layout problem you can see.\n\n` +
+                `Look for:\n` +
+                `1. Text that is cropped, clipped, cut off, or overlapping other elements\n` +
+                `2. Buttons or sections that are way too tall (excessive internal whitespace)\n` +
+                `3. Elements that overflow or extend beyond their container (visible on right side being cut off)\n` +
+                `4. Inconsistent spacing: groups of similar items (cards, list rows, buttons) with different gaps between them\n` +
+                `5. Inconsistent padding: similar items with different amounts of internal space\n` +
+                `6. Misaligned elements that should line up vertically or horizontally\n` +
+                `7. Text jammed against container edges with no breathing room\n` +
+                `8. Excessive empty space/gaps between sections\n\n` +
+                `Be specific: describe WHERE each problem is and WHAT is wrong.\n` +
+                `Example: "The Buy Now button has excessive vertical height — appears to be ~150px tall when it should be ~50px"\n` +
+                `Example: "The review cards have inconsistent internal spacing"\n\n` +
+                `List ALL problems, even minor ones. Number each problem.`;
+
+              try {
+                console.log(`[Cleanup Pass 1] Sending visual analysis request...`);
+                const visualResult = await fetchViaUI("/plan?lenient=true&analyze=true&mode=visualReview", {
+                  intent: visualPrompt,
+                  selection: { nodes: [] },
+                  designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel,
+                  imageBase64: screenshotBase64,
+                }) as any;
+
+                problemList = (visualResult && visualResult.text) ? visualResult.text : JSON.stringify(visualResult);
+                console.log(`[Cleanup Pass 1] ═══════════════════════════════════════════`);
+                console.log(`[Cleanup Pass 1] VISUAL PROBLEMS FOUND:`);
+                console.log(`[Cleanup Pass 1] ═══════════════════════════════════════════`);
+                console.log(problemList);
+                console.log(`[Cleanup Pass 1] ═══════════════════════════════════════════`);
+              } catch (err: any) {
+                console.warn(`[Cleanup Pass 1] Visual analysis failed: ${err.message}`);
+                // Fall back to combined prompt
+              }
+            }
+
+            // ═══════════════════════════════════════════
+            // PASS 2: FIX MAPPING — Send problems + frame data, get JSON fixes
+            // ═══════════════════════════════════════════
+            sendToUI({ type: "status", message: `Cleanup pass 2/${MAX_CLEANUP_PASSES}: mapping fixes...` });
+            figma.notify(`Cleanup pass 2/${MAX_CLEANUP_PASSES}: generating fixes...`, { timeout: 3000 });
+
+            let frameDescriptions = buildFrameDescriptions(allFrames);
+
+            const fixPrompt = (problemList ?
+              `A senior UI reviewer found these VISUAL PROBLEMS in the layout:\n\n${problemList}\n\n` +
+              `MAP each problem above to the correct frame below and generate fixes.\n\n` : "") +
+              `${rootContext}\n\n` +
+              `Below are the auto-layout frames you can modify.\n` +
+              `Frames marked with ** have programmatically-detected issues.\n\n` +
+              `${frameDescriptions}\n\n` +
+              fixRulesText + `\n` +
+              `Fix EVERY visual problem. Return ALL frames that need changes — typically most frames need at least one fix.` +
+              (problemList ? `\n\nIMPORTANT: Address EVERY problem from the visual review above. Do not skip any.` : "");
+
+            console.log(`[Cleanup Pass 2] ═══════════════════════════════════════════`);
+            console.log(`[Cleanup Pass 2] FIX PROMPT (${fixPrompt.length} chars):`);
+            console.log(`[Cleanup Pass 2] ═══════════════════════════════════════════`);
+            console.log(fixPrompt);
+            console.log(`[Cleanup Pass 2] ═══════════════════════════════════════════`);
 
             try {
-              console.log(`[Cleanup] ═══════════════════════════════════════════`);
-              console.log(`[Cleanup] FULL PROMPT (${cleanupPrompt.length} chars):`);
-              console.log(`[Cleanup] ═══════════════════════════════════════════`);
-              console.log(cleanupPrompt);
-              console.log(`[Cleanup] ═══════════════════════════════════════════`);
-              console.log(`[Cleanup] Sending to LLM with ${allFrames.length} frames, screenshot=${screenshotBase64.length > 0 ? screenshotBase64.length + ' bytes' : 'none'}...`);
-              const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload) as any;
-              console.log(`[Cleanup] ═══════════════════════════════════════════`);
-              console.log(`[Cleanup] FULL LLM RESPONSE:`);
-              console.log(`[Cleanup] ═══════════════════════════════════════════`);
-              console.log(JSON.stringify(cleanupResult, null, 2));
-              console.log(`[Cleanup] ═══════════════════════════════════════════`);
-              console.log(`[Cleanup] Raw response type=${typeof cleanupResult}, isArray=${Array.isArray(cleanupResult)}, keys=${cleanupResult ? Object.keys(cleanupResult).join(",") : "null"}`);
-              // analyze=true returns parsed JSON directly — may be array, single object, or wrapped
-              if (Array.isArray(cleanupResult)) {
-                cleanupSettings = cleanupResult;
-              } else if (cleanupResult && typeof cleanupResult === "object") {
-                // Priority: check for known wrapper keys first
-                const wrapper = cleanupResult.frames || cleanupResult.result || cleanupResult.results || cleanupResult.content;
-                if (Array.isArray(wrapper)) {
-                  const wrapperKey = cleanupResult.frames ? "frames" : cleanupResult.result ? "result" : cleanupResult.results ? "results" : "content";
-                  console.log(`[Cleanup] Unwrapped array from key "${wrapperKey}" (${wrapper.length} items)`);
-                  cleanupSettings = wrapper;
-                } else {
-                  // Fallback: check for any single key with array value
-                  const keys = Object.keys(cleanupResult);
-                  if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
-                    console.log(`[Cleanup] Unwrapped array from key "${keys[0]}" (${cleanupResult[keys[0]].length} items)`);
-                    cleanupSettings = cleanupResult[keys[0]];
-                  } else if (cleanupResult.id) {
-                    // LLM returned a single object instead of an array — wrap it
-                    console.log(`[Cleanup] LLM returned single object, wrapping in array`);
-                    cleanupSettings = [cleanupResult];
-                  } else {
-                    // Last resort: regex extraction
-                    const rawStr = JSON.stringify(cleanupResult);
-                    const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                    if (arrMatch) {
-                      console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
-                      const parsed = JSON.parse(arrMatch[0]);
-                      if (Array.isArray(parsed)) {
-                        cleanupSettings = parsed;
-                      }
-                    } else {
-                      console.warn(`[Cleanup] Could not extract JSON array from response`);
-                    }
-                  }
-                }
+              const fixResult = await fetchViaUI("/plan?lenient=true&analyze=true&mode=fix", {
+                intent: fixPrompt,
+                selection: { nodes: [] },
+                designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                apiKey: _userApiKey,
+                provider: _selectedProvider,
+                model: _selectedModel,
+                imageBase64: screenshotBase64 || undefined,
+              }) as any;
+
+              console.log(`[Cleanup Pass 2] ═══════════════════════════════════════════`);
+              console.log(`[Cleanup Pass 2] LLM RESPONSE:`);
+              console.log(`[Cleanup Pass 2] ═══════════════════════════════════════════`);
+              console.log(JSON.stringify(fixResult, null, 2));
+              console.log(`[Cleanup Pass 2] ═══════════════════════════════════════════`);
+
+              const settings = parseCleanupResponse(fixResult);
+              console.log(`[Cleanup Pass 2] Parsed ${settings.length} frame fixes`);
+
+              if (settings.length > 0) {
+                const result = applyCleanupSettings(settings, allFrames, "Cleanup Pass 2");
+                totalLLMApplied += result.applied;
+                allLLMChanges.push(...result.changes);
+
+                // Post-fix consistency
+                const postResult = enforcePostLLMConsistency(allFrames, "Cleanup Pass 2 post-fix");
+                totalPostFix += postResult.count;
+                allPostFixChanges.push(...postResult.changes);
               }
-              console.log(`[Cleanup] LLM returned settings for ${cleanupSettings.length} frames`);
-            } catch (parseErr: any) {
-              console.warn(`[Cleanup] LLM analysis failed: ${parseErr.message}`);
+            } catch (err: any) {
+              console.warn(`[Cleanup Pass 2] Fix mapping failed: ${err.message}`);
             }
 
-            if (cleanupSettings.length === 0) {
-              figma.notify("No layout changes needed — frame looks consistent.", { timeout: 3000 });
-              sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No cleanup changes needed." } as any);
-              break;
-            }
+            // ═══════════════════════════════════════════
+            // PASSES 3-N: VERIFY LOOP — Re-screenshot, check for remaining problems
+            // ═══════════════════════════════════════════
+            for (let pass = 3; pass <= MAX_CLEANUP_PASSES; pass++) {
+              // Take fresh screenshot to see current state
+              sendToUI({ type: "status", message: `Cleanup pass ${pass}/${MAX_CLEANUP_PASSES}: verifying...` });
+              figma.notify(`Cleanup pass ${pass}/${MAX_CLEANUP_PASSES}: verifying layout...`, { timeout: 3000 });
 
-            // ── Apply changes bottom-up ──
-            const settingsMap = new Map<string, typeof cleanupSettings[0]>();
-            for (const s of cleanupSettings) settingsMap.set(s.id, s);
+              screenshotBase64 = await captureScreenshot();
+              frameDescriptions = buildFrameDescriptions(allFrames);
 
-            // Sort by depth descending (children first)
-            const frameDepthMap = new Map<string, number>();
-            for (const f of allFrames) frameDepthMap.set(f.id, f.depth);
+              const verifyPrompt =
+                `The layout has been cleaned up. Check if any visual problems REMAIN.\n\n` +
+                `${rootContext}\n\n` +
+                `Current frame state:\n${frameDescriptions}\n\n` +
+                fixRulesText + `\n\n` +
+                `If the layout looks correct with no remaining problems, return: {"frames": []}\n` +
+                `Otherwise, return fixes ONLY for problems that STILL exist. Do not re-fix things that are already correct.\n` +
+                `Common remaining issues to check:\n` +
+                `- Buttons still oversized (should be ~50px tall, not 100+)\n` +
+                `- Cards with inconsistent padding\n` +
+                `- Elements still overflowing their parents\n` +
+                `- Excessive spacing between sections`;
 
-            const sortedSettings = [...cleanupSettings].sort((a, b) =>
-              (frameDepthMap.get(b.id) ?? 0) - (frameDepthMap.get(a.id) ?? 0)
-            );
+              console.log(`[Cleanup Pass ${pass}] ═══════════════════════════════════════════`);
+              console.log(`[Cleanup Pass ${pass}] VERIFY PROMPT (${verifyPrompt.length} chars)`);
+              console.log(`[Cleanup Pass ${pass}] ═══════════════════════════════════════════`);
 
-            let appliedCount = 0;
-            const changes: string[] = [];
+              try {
+                const verifyResult = await fetchViaUI("/plan?lenient=true&analyze=true&mode=verify", {
+                  intent: verifyPrompt,
+                  selection: { nodes: [] },
+                  designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel,
+                  imageBase64: screenshotBase64 || undefined,
+                }) as any;
 
-            for (const settings of sortedSettings) {
-              const node = figma.getNodeById(settings.id) as SceneNode | null;
-              if (!node || node.type !== "FRAME") continue;
+                console.log(`[Cleanup Pass ${pass}] ═══════════════════════════════════════════`);
+                console.log(`[Cleanup Pass ${pass}] VERIFY RESPONSE:`);
+                console.log(`[Cleanup Pass ${pass}] ═══════════════════════════════════════════`);
+                console.log(JSON.stringify(verifyResult, null, 2));
+                console.log(`[Cleanup Pass ${pass}] ═══════════════════════════════════════════`);
 
-              const frame = node as FrameNode;
-              const isRoot = (frameDepthMap.get(settings.id) ?? 0) === 0;
-              const origWidth = frame.width;
-              const changeDetails: string[] = [];
+                const settings = parseCleanupResponse(verifyResult);
+                console.log(`[Cleanup Pass ${pass}] Parsed ${settings.length} remaining fixes`);
 
-              // Safety guard: block sizing changes on image/carousel/separator frames
-              // Exception: allow sizing fix if the frame is overflowing its parent
-              const fnLower = frame.name.toLowerCase();
-              const isVisualGuard = /image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider/i.test(fnLower);
-              const parentFrame = node.parent && "width" in node.parent ? node.parent as FrameNode : null;
-              const isOverflowing = parentFrame && frame.width > parentFrame.width;
-              if (isVisualGuard && !isOverflowing) {
-                // Strip sizing changes — these frames should keep their original sizing
-                delete settings.sizingH;
-                delete settings.sizingV;
-              }
-
-              // Safety guard: skip sizing changes for frames whose parent has layoutMode=NONE
-              // (Figma ignores layoutSizingHorizontal/Vertical when parent isn't auto-layout)
-              const parentNode = node.parent;
-              if (parentNode && "layoutMode" in parentNode && (parentNode as any).layoutMode === "NONE") {
-                if (settings.sizingH) {
-                  console.log(`[Cleanup] Skipping sizingH=${settings.sizingH} on "${frame.name}" — parent has layoutMode=NONE`);
-                  delete settings.sizingH;
-                }
-                if (settings.sizingV) {
-                  console.log(`[Cleanup] Skipping sizingV=${settings.sizingV} on "${frame.name}" — parent has layoutMode=NONE`);
-                  delete settings.sizingV;
-                }
-              }
-
-              // Safety: never change layoutMode — it reorders children
-              // Only adjust padding/spacing on frames that already have auto layout
-              if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
-                // Track before values to detect actual changes
-                const before = {
-                  pT: frame.paddingTop, pR: frame.paddingRight,
-                  pB: frame.paddingBottom, pL: frame.paddingLeft,
-                  iS: frame.itemSpacing,
-                  cS: (frame as any).counterAxisSpacing ?? 0,
-                  align: (frame as any).primaryAxisAlignItems || "MIN",
-                  crossAlign: (frame as any).counterAxisAlignItems || "MIN",
-                  sizH: (frame as any).layoutSizingHorizontal || "FIXED",
-                  sizV: (frame as any).layoutSizingVertical || "FIXED",
-                  clips: frame.clipsContent,
-                };
-
-                if (settings.paddingTop !== undefined) { frame.paddingTop = settings.paddingTop; }
-                if (settings.paddingRight !== undefined) { frame.paddingRight = settings.paddingRight; }
-                if (settings.paddingBottom !== undefined) { frame.paddingBottom = settings.paddingBottom; }
-                if (settings.paddingLeft !== undefined) { frame.paddingLeft = settings.paddingLeft; }
-                if (settings.itemSpacing !== undefined) { frame.itemSpacing = settings.itemSpacing; }
-                if (settings.counterAxisSpacing !== undefined) {
-                  (frame as any).counterAxisSpacing = settings.counterAxisSpacing;
+                if (settings.length === 0) {
+                  console.log(`[Cleanup Pass ${pass}] LLM confirms layout is clean — stopping.`);
+                  figma.notify(`Layout verified clean after ${pass} passes.`, { timeout: 3000 });
+                  break;
                 }
 
-                if (settings.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(settings.alignment)) {
-                  frame.primaryAxisAlignItems = settings.alignment as any;
-                }
-                if (settings.counterAlignment && ["MIN", "CENTER", "MAX"].includes(settings.counterAlignment)) {
-                  frame.counterAxisAlignItems = settings.counterAlignment as any;
+                const result = applyCleanupSettings(settings, allFrames, `Cleanup Pass ${pass}`);
+                totalLLMApplied += result.applied;
+                allLLMChanges.push(...result.changes);
+
+                if (result.applied === 0) {
+                  console.log(`[Cleanup Pass ${pass}] No actual changes applied — converged. Stopping.`);
+                  break;
                 }
 
-                // Apply sizing mode changes (FILL / HUG / FIXED)
-                if (settings.sizingH && ["FILL", "HUG", "FIXED"].includes(settings.sizingH)) {
-                  try { (frame as any).layoutSizingHorizontal = settings.sizingH; } catch (_e) { /* ignore */ }
-                }
-                if (settings.sizingV && ["FILL", "HUG", "FIXED"].includes(settings.sizingV)) {
-                  try { (frame as any).layoutSizingVertical = settings.sizingV; } catch (_e) { /* ignore */ }
-                }
+                // Post-fix consistency after each pass
+                const postResult = enforcePostLLMConsistency(allFrames, `Cleanup Pass ${pass} post-fix`);
+                totalPostFix += postResult.count;
+                allPostFixChanges.push(...postResult.changes);
 
-                // Apply clipsContent
-                if (settings.clipsContent !== undefined) {
-                  frame.clipsContent = settings.clipsContent;
-                }
-
-                // Compare after values to detect actual changes
-                const after = {
-                  pT: frame.paddingTop, pR: frame.paddingRight,
-                  pB: frame.paddingBottom, pL: frame.paddingLeft,
-                  iS: frame.itemSpacing,
-                  cS: (frame as any).counterAxisSpacing ?? 0,
-                  align: (frame as any).primaryAxisAlignItems || "MIN",
-                  crossAlign: (frame as any).counterAxisAlignItems || "MIN",
-                  sizH: (frame as any).layoutSizingHorizontal || "FIXED",
-                  sizV: (frame as any).layoutSizingVertical || "FIXED",
-                  clips: frame.clipsContent,
-                };
-
-                const realChanges: string[] = [];
-                if (before.pT !== after.pT || before.pR !== after.pR || before.pB !== after.pB || before.pL !== after.pL) {
-                  realChanges.push(`padding [${before.pT},${before.pR},${before.pB},${before.pL}]→[${after.pT},${after.pR},${after.pB},${after.pL}]`);
-                }
-                if (before.iS !== after.iS) {
-                  realChanges.push(`spacing ${before.iS}→${after.iS}`);
-                }
-                if (before.cS !== after.cS) {
-                  realChanges.push(`counterSpacing ${before.cS}→${after.cS}`);
-                }
-                if (before.align !== after.align) {
-                  realChanges.push(`align ${before.align}→${after.align}`);
-                }
-                if (before.crossAlign !== after.crossAlign) {
-                  realChanges.push(`crossAlign ${before.crossAlign}→${after.crossAlign}`);
-                }
-                if (before.sizH !== after.sizH) {
-                  realChanges.push(`sizingH ${before.sizH}→${after.sizH}`);
-                }
-                if (before.sizV !== after.sizV) {
-                  realChanges.push(`sizingV ${before.sizV}→${after.sizV}`);
-                }
-                if (before.clips !== after.clips) {
-                  realChanges.push(`clipsContent ${before.clips}→${after.clips}`);
-                }
-
-                if (realChanges.length > 0) {
-                  changeDetails.push(...realChanges);
-                } else {
-                  console.log(`[Cleanup] Skipped "${frame.name}" — no actual change`);
-                }
-
-                // Root frame: preserve fixed width
-                if (isRoot) {
-                  frame.counterAxisSizingMode = "FIXED";
-                  frame.primaryAxisSizingMode = "AUTO";
-                  frame.resize(origWidth, frame.height);
-                }
-              }
-
-              if (changeDetails.length > 0) {
-                appliedCount++;
-                changes.push(`"${frame.name}": ${changeDetails.join(", ")}`);
-                console.log(`[Cleanup] Updated "${frame.name}" (depth ${frameDepthMap.get(settings.id)}): ${changeDetails.join(", ")}`);
-              } else if (frame.layoutMode !== "HORIZONTAL" && frame.layoutMode !== "VERTICAL") {
-                console.log(`[Cleanup] Skipped "${frame.name}" — no auto layout (${frame.layoutMode})`);
+              } catch (err: any) {
+                console.warn(`[Cleanup Pass ${pass}] Verify failed: ${err.message}`);
+                break;
               }
             }
 
-            // ── POST-LLM CONSISTENCY ENFORCEMENT ──
-            // After LLM changes, same-named siblings may have been made inconsistent.
-            // Re-enforce that same-named siblings under the same parent have identical padding.
-            let postFixCount = 0;
-            const postFixChanges: string[] = [];
-            const postSiblingGroups = new Map<string, Array<{ id: string; name: string }>>();
-            for (const fi of allFrames) {
-              const key = `${fi.parentId}::${fi.name}`;
-              if (!postSiblingGroups.has(key)) postSiblingGroups.set(key, []);
-              postSiblingGroups.get(key)!.push({ id: fi.id, name: fi.name });
-            }
-            for (const [_key, group] of postSiblingGroups) {
-              if (group.length < 2) continue;
-              // Read current frame values (post-LLM)
-              const live: Array<{ node: FrameNode; pT: number; pR: number; pB: number; pL: number }> = [];
-              for (const g of group) {
-                const n = figma.getNodeById(g.id) as SceneNode | null;
-                if (!n || n.type !== "FRAME") continue;
-                const f = n as FrameNode;
-                live.push({ node: f, pT: f.paddingTop, pR: f.paddingRight, pB: f.paddingBottom, pL: f.paddingLeft });
-              }
-              if (live.length < 2) continue;
-              // Majority vote on current padding
-              const padCounts = new Map<string, number>();
-              for (const l of live) {
-                const pk = `${l.pT},${l.pR},${l.pB},${l.pL}`;
-                padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
-              }
-              let bestP = ""; let bestC = 0;
-              for (const [pk, cnt] of padCounts) {
-                if (cnt > bestC) { bestC = cnt; bestP = pk; }
-              }
-              const [tT, tR, tB, tL] = bestP.split(",").map(Number);
-              for (const l of live) {
-                if (l.pT === tT && l.pR === tR && l.pB === tB && l.pL === tL) continue;
-                const oldP = `[${l.pT},${l.pR},${l.pB},${l.pL}]`;
-                l.node.paddingTop = tT; l.node.paddingRight = tR;
-                l.node.paddingBottom = tB; l.node.paddingLeft = tL;
-                postFixCount++;
-                postFixChanges.push(`"${l.node.name}": pad ${oldP}->[${tT},${tR},${tB},${tL}] (post-LLM sibling fix)`);
-                console.log(`[Cleanup post-fix] "${l.node.name}": pad ${oldP}->[${tT},${tR},${tB},${tL}]`);
-              }
-            }
-            if (postFixCount > 0) {
-              console.log(`[Cleanup] Post-fixed ${postFixCount} frames for sibling consistency`);
-            }
-
-            const totalFixed = appliedCount + preFixCount + postFixCount + phase0Count;
+            // ── Final summary ──
+            const totalFixed = totalLLMApplied + preFixCount + totalPostFix + phase0Count;
             if (totalFixed > 0) {
-              const allChanges = [...phase0Changes, ...preFixChanges, ...changes, ...postFixChanges];
+              const allChanges = [...phase0Changes, ...preFixChanges, ...allLLMChanges, ...allPostFixChanges];
               const summary = `Cleaned up ${totalFixed} frame${totalFixed > 1 ? "s" : ""}: ${allChanges.slice(0, 3).join("; ")}${allChanges.length > 3 ? ` … +${allChanges.length - 3} more` : ""}`;
               figma.notify(summary, { timeout: 5000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary } as any);

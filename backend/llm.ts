@@ -272,14 +272,39 @@ export async function callLLMAnalyze(
   apiKey: string,
   provider: Provider = "anthropic",
   model?: string,
-  imageBase64?: string
+  imageBase64?: string,
+  mode: string = "fix"
 ): Promise<unknown> {
-  const systemPrompt =
-    "You are a design layout analyzer. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
-    "IMPORTANT: Always return a JSON object with a single key \"frames\" whose value is an array: {\"frames\": [...]}. " +
-    "Include ALL items that need changes in the array. Even if only one item needs changes, wrap it: {\"frames\": [{...}]}. " +
-    "Never return a bare array or a single unwrapped object." +
-    (imageBase64 ? " A screenshot of the frame is provided. Use it to identify visual layout problems like misaligned elements, inconsistent spacing, content flush against edges, or elements that look cramped." : "");
+  let systemPrompt: string;
+  let returnRaw = false;
+
+  if (mode === "visualReview") {
+    // Pure visual analysis — return plain text problem list, not JSON
+    systemPrompt =
+      "You are a senior UI/UX design reviewer. Examine the screenshot carefully and list every visual layout problem you can see. " +
+      "Be specific and concrete — describe exactly what is wrong and where. Focus on: text cropping/clipping, excessive whitespace, " +
+      "overflow/clipping, inconsistent spacing between similar items, inconsistent padding within similar items, misalignment, " +
+      "content jammed against edges, and elements that are obviously the wrong size. " +
+      "Return a numbered list. Be thorough — list EVERY problem, even minor ones. Do NOT suggest fixes, just describe what you see.";
+    returnRaw = true;
+  } else if (mode === "verify") {
+    // Verification pass — check if problems remain, return fixes or empty
+    systemPrompt =
+      "You are a design layout analyzer doing a quality check. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
+      "IMPORTANT: Always return a JSON object with a single key \"frames\" whose value is an array: {\"frames\": [...]}. " +
+      "If the layout looks correct with no remaining problems, return {\"frames\": []}. " +
+      "Only return fixes for problems that STILL exist — do not re-fix things that are already correct. " +
+      "A screenshot of the current state is provided. Trust what you see in the screenshot over the data.";
+  } else {
+    // Default fix mode — return JSON fixes
+    systemPrompt =
+      "You are a design layout analyzer. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
+      "IMPORTANT: Always return a JSON object with a single key \"frames\" whose value is an array: {\"frames\": [...]}. " +
+      "Include ALL items that need changes in the array. Even if only one item needs changes, wrap it: {\"frames\": [{...}]}. " +
+      "Never return a bare array or a single unwrapped object." +
+      (imageBase64 ? " A screenshot of the frame is provided. Use it to identify visual layout problems like misaligned elements, inconsistent spacing, content flush against edges, or elements that look cramped." : "");
+  }
+
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
@@ -294,6 +319,11 @@ export async function callLLMAnalyze(
     }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  // For visual review mode, return the raw text wrapped in an object
+  if (returnRaw) {
+    return { text: raw };
   }
 
   return parseJsonResponse(raw, "analyze");
