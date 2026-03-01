@@ -9807,6 +9807,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             // ── LOCAL PRE-FIX PASS: deterministic fixes — this is the PRIMARY fixer ──
             let preFixCount = 0;
             const preFixChanges: string[] = [];
+            const individuallyFixedIds = new Set<string>();
 
             // First pass: individual frame fixes
             for (const fi of allFrames) {
@@ -9960,12 +9961,14 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
               if (localFixes.length > 0) {
                 preFixCount++;
+                individuallyFixedIds.add(fi.id);
                 preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
                 console.log(`[Cleanup pre-fix] "${fi.name}": ${localFixes.join(", ")}`);
               }
             }
 
             // Second pass: same-name sibling consistency (after individual fixes)
+            // If any sibling was individually fixed, prefer its values as the target
             const siblingGroups = new Map<string, typeof allFrames>();
             for (const fi of allFrames) {
               const key = `${fi.parentId}::${fi.name}`;
@@ -9974,17 +9977,30 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             }
             for (const [_key, group] of siblingGroups) {
               if (group.length < 2) continue;
-              // Use the most common padding as the target
-              const padCounts = new Map<string, number>();
-              for (const g of group) {
-                const pk = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
-                padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
+              // Check if any group member was individually fixed — use its values as target
+              const fixedMembers = group.filter(g => individuallyFixedIds.has(g.id));
+              let bT: number, bR: number, bB: number, bL: number;
+              if (fixedMembers.length > 0) {
+                // Use the fixed member with the highest total padding as target
+                const best = fixedMembers.reduce((a, b) => {
+                  const aSum = a.paddingTop + a.paddingRight + a.paddingBottom + a.paddingLeft;
+                  const bSum = b.paddingTop + b.paddingRight + b.paddingBottom + b.paddingLeft;
+                  return bSum > aSum ? b : a;
+                });
+                bT = best.paddingTop; bR = best.paddingRight; bB = best.paddingBottom; bL = best.paddingLeft;
+              } else {
+                // No fixed members — use majority vote
+                const padCounts = new Map<string, number>();
+                for (const g of group) {
+                  const pk = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
+                  padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
+                }
+                let bestPad = ""; let bestCount = 0;
+                for (const [key, count] of padCounts) {
+                  if (count > bestCount) { bestCount = count; bestPad = key; }
+                }
+                [bT, bR, bB, bL] = bestPad.split(",").map(Number);
               }
-              let bestPad = ""; let bestCount = 0;
-              for (const [key, count] of padCounts) {
-                if (count > bestCount) { bestCount = count; bestPad = key; }
-              }
-              const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
               for (const fi of group) {
                 if (fi.paddingTop === bT && fi.paddingRight === bR && fi.paddingBottom === bB && fi.paddingLeft === bL) continue;
                 const node = figma.getNodeById(fi.id) as SceneNode | null;
@@ -10247,22 +10263,60 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             };
 
             function parseCleanupResponse(rawResult: any): CleanupSetting[] {
-              if (Array.isArray(rawResult)) return rawResult;
-              if (rawResult && typeof rawResult === "object") {
+              let result: CleanupSetting[] = [];
+              if (Array.isArray(rawResult)) { result = rawResult; }
+              else if (rawResult && typeof rawResult === "object") {
                 const wrapper = rawResult.frames || rawResult.result || rawResult.results || rawResult.content;
-                if (Array.isArray(wrapper)) return wrapper;
-                const keys = Object.keys(rawResult);
-                if (keys.length === 1 && Array.isArray(rawResult[keys[0]])) return rawResult[keys[0]];
-                if (rawResult.id) return [rawResult];
-                // Regex fallback
-                const rawStr = JSON.stringify(rawResult);
-                const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                if (arrMatch) {
-                  const parsed = JSON.parse(arrMatch[0]);
-                  if (Array.isArray(parsed)) return parsed;
+                if (Array.isArray(wrapper)) { result = wrapper; }
+                else {
+                  const keys = Object.keys(rawResult);
+                  if (keys.length === 1 && Array.isArray(rawResult[keys[0]])) { result = rawResult[keys[0]]; }
+                  else if (rawResult.id) { result = [rawResult]; }
+                  else {
+                    // Regex fallback
+                    const rawStr = JSON.stringify(rawResult);
+                    const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                    if (arrMatch) {
+                      const parsed = JSON.parse(arrMatch[0]);
+                      if (Array.isArray(parsed)) { result = parsed; }
+                    }
+                  }
                 }
               }
-              return [];
+
+              // Expand shorthand properties: "padding" → all 4 sides, etc.
+              for (const s of result) {
+                const raw = s as any;
+                if (raw.padding !== undefined) {
+                  const p = raw.padding;
+                  if (s.paddingTop === undefined) s.paddingTop = p;
+                  if (s.paddingRight === undefined) s.paddingRight = p;
+                  if (s.paddingBottom === undefined) s.paddingBottom = p;
+                  if (s.paddingLeft === undefined) s.paddingLeft = p;
+                  delete raw.padding;
+                }
+                // "paddingH"/"paddingX" → left + right
+                const hPad = raw.paddingH ?? raw.paddingX ?? raw.paddingHorizontal;
+                if (hPad !== undefined) {
+                  if (s.paddingLeft === undefined) s.paddingLeft = hPad;
+                  if (s.paddingRight === undefined) s.paddingRight = hPad;
+                  delete raw.paddingH; delete raw.paddingX; delete raw.paddingHorizontal;
+                }
+                // "paddingV"/"paddingY" → top + bottom
+                const vPad = raw.paddingV ?? raw.paddingY ?? raw.paddingVertical;
+                if (vPad !== undefined) {
+                  if (s.paddingTop === undefined) s.paddingTop = vPad;
+                  if (s.paddingBottom === undefined) s.paddingBottom = vPad;
+                  delete raw.paddingV; delete raw.paddingY; delete raw.paddingVertical;
+                }
+                // "spacing" → itemSpacing
+                if (raw.spacing !== undefined && s.itemSpacing === undefined) {
+                  s.itemSpacing = raw.spacing;
+                  delete raw.spacing;
+                }
+              }
+
+              return result;
             }
 
             // ── Helper: apply cleanup settings to frames (bottom-up, guarded) ──
@@ -10298,13 +10352,22 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 // Safety guard: parent layoutMode=NONE — strip sizing
                 const parentNode = node.parent;
                 if (parentNode && "layoutMode" in parentNode && (parentNode as any).layoutMode === "NONE") {
-                  if (s.sizingH) { console.log(`[${passLabel}] Skipping sizingH=${s.sizingH} on "${frame.name}" — parent NONE`); delete s.sizingH; }
-                  if (s.sizingV) { console.log(`[${passLabel}] Skipping sizingV=${s.sizingV} on "${frame.name}" — parent NONE`); delete s.sizingV; }
+                  if (s.sizingH) {
+                    console.log(`[${passLabel}] Skipping sizingH=${s.sizingH} on "${frame.name}" — parent NONE`);
+                    rejectedFixReasons.push(`"${frame.name}" (${s.id}): sizingH=${s.sizingH} rejected — parent has layoutMode=NONE`);
+                    delete s.sizingH;
+                  }
+                  if (s.sizingV) {
+                    console.log(`[${passLabel}] Skipping sizingV=${s.sizingV} on "${frame.name}" — parent NONE`);
+                    rejectedFixReasons.push(`"${frame.name}" (${s.id}): sizingV=${s.sizingV} rejected — parent has layoutMode=NONE`);
+                    delete s.sizingV;
+                  }
                 }
 
                 // Safety guard: NONE-layout frames — padding, spacing, alignment have no effect
                 if (frame.layoutMode === "NONE" || !frame.layoutMode) {
                   console.log(`[${passLabel}] Skipping "${frame.name}" — layoutMode=NONE (no effect)`);
+                  rejectedFixReasons.push(`"${frame.name}" (${s.id}): all changes rejected — frame has layoutMode=NONE`);
                   continue;
                 }
 
@@ -10321,23 +10384,39 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     clips: frame.clipsContent,
                   };
 
-                  // Anti-oscillation: if this frame was already modified, reject trivial padding tweaks
-                  const prevState = modifiedFrameStates.get(s.id);
-                  if (prevState && prevState.modCount >= 2) {
-                    // Frame has been modified 2+ times — only allow changes >6px or non-padding changes
-                    const hasBigPaddingDelta =
-                      (s.paddingTop !== undefined && Math.abs(s.paddingTop - before.pT) > 6) ||
-                      (s.paddingRight !== undefined && Math.abs(s.paddingRight - before.pR) > 6) ||
-                      (s.paddingBottom !== undefined && Math.abs(s.paddingBottom - before.pB) > 6) ||
-                      (s.paddingLeft !== undefined && Math.abs(s.paddingLeft - before.pL) > 6);
-                    const hasNonPaddingChange = s.itemSpacing !== undefined || s.sizingH !== undefined ||
-                      s.sizingV !== undefined || s.alignment !== undefined || s.counterAlignment !== undefined ||
-                      s.clipsContent !== undefined;
-                    if (!hasBigPaddingDelta && !hasNonPaddingChange) {
-                      console.log(`[${passLabel}] Skipping oscillating change on "${frame.name}" (modified ${prevState.modCount}x, delta ≤6px)`);
-                      continue;
-                    }
+                  // Record current values for oscillation detection
+                  recordFrameValues(s.id, {
+                    paddingTop: before.pT, paddingRight: before.pR,
+                    paddingBottom: before.pB, paddingLeft: before.pL,
+                    itemSpacing: before.iS
+                  });
+
+                  // Anti-oscillation: reject any property change that reverts to a previously-seen value
+                  let oscillatingProps: string[] = [];
+                  if (s.paddingTop !== undefined && isOscillating(s.id, 'paddingTop', s.paddingTop, before.pT)) {
+                    oscillatingProps.push(`padTop ${before.pT}→${s.paddingTop}`); delete s.paddingTop;
                   }
+                  if (s.paddingRight !== undefined && isOscillating(s.id, 'paddingRight', s.paddingRight, before.pR)) {
+                    oscillatingProps.push(`padRight ${before.pR}→${s.paddingRight}`); delete s.paddingRight;
+                  }
+                  if (s.paddingBottom !== undefined && isOscillating(s.id, 'paddingBottom', s.paddingBottom, before.pB)) {
+                    oscillatingProps.push(`padBot ${before.pB}→${s.paddingBottom}`); delete s.paddingBottom;
+                  }
+                  if (s.paddingLeft !== undefined && isOscillating(s.id, 'paddingLeft', s.paddingLeft, before.pL)) {
+                    oscillatingProps.push(`padLeft ${before.pL}→${s.paddingLeft}`); delete s.paddingLeft;
+                  }
+                  if (s.itemSpacing !== undefined && isOscillating(s.id, 'itemSpacing', s.itemSpacing, before.iS)) {
+                    oscillatingProps.push(`spacing ${before.iS}→${s.itemSpacing}`); delete s.itemSpacing;
+                  }
+                  if (oscillatingProps.length > 0) {
+                    console.log(`[${passLabel}] Blocked oscillation on "${frame.name}": ${oscillatingProps.join(', ')}`);
+                  }
+                  // If all proposed changes were oscillating, skip this frame entirely
+                  const hasRemainingChange = s.paddingTop !== undefined || s.paddingRight !== undefined ||
+                    s.paddingBottom !== undefined || s.paddingLeft !== undefined || s.itemSpacing !== undefined ||
+                    s.sizingH !== undefined || s.sizingV !== undefined || s.clipsContent !== undefined ||
+                    s.counterAxisSpacing !== undefined;
+                  if (!hasRemainingChange) continue;
 
                   if (s.paddingTop !== undefined) frame.paddingTop = s.paddingTop;
                   if (s.paddingRight !== undefined) frame.paddingRight = s.paddingRight;
@@ -10394,11 +10473,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     changes.push(`"${frame.name}": ${realChanges.join(", ")}`);
                     console.log(`[${passLabel}] Updated "${frame.name}": ${realChanges.join(", ")}`);
 
-                    // Track modification count for anti-oscillation
-                    const prev = modifiedFrameStates.get(s.id);
-                    modifiedFrameStates.set(s.id, {
-                      pT: after.pT, pR: after.pR, pB: after.pB, pL: after.pL,
-                      iS: after.iS, modCount: (prev?.modCount ?? 0) + 1,
+                    // Record new values for oscillation detection in future passes
+                    recordFrameValues(s.id, {
+                      paddingTop: after.pT, paddingRight: after.pR,
+                      paddingBottom: after.pB, paddingLeft: after.pL,
+                      itemSpacing: after.iS
                     });
                   }
 
@@ -10479,12 +10558,28 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             const allLLMChanges: string[] = [];
             const allPostFixChanges: string[] = [];
 
-            // ── Anti-oscillation: track which frames were modified and their last state ──
-            // Prevents verify passes from flip-flopping on padding by ±4px
-            const modifiedFrameStates = new Map<string, {
-              pT: number; pR: number; pB: number; pL: number;
-              iS: number; modCount: number;
-            }>();
+            // ── Anti-oscillation: track ALL historical values per frame+property ──
+            // Prevents verify passes from flip-flopping by rejecting reversion to any past value
+            const frameValueHistory = new Map<string, Map<string, Set<number>>>();
+            function recordFrameValues(frameId: string, props: Record<string, number>) {
+              if (!frameValueHistory.has(frameId)) frameValueHistory.set(frameId, new Map());
+              const propMap = frameValueHistory.get(frameId)!;
+              for (const [k, v] of Object.entries(props)) {
+                if (!propMap.has(k)) propMap.set(k, new Set());
+                propMap.get(k)!.add(v);
+              }
+            }
+            function isOscillating(frameId: string, prop: string, newVal: number, currentVal: number): boolean {
+              if (newVal === currentVal) return true; // no-op
+              const propMap = frameValueHistory.get(frameId);
+              if (!propMap) return false;
+              const history = propMap.get(prop);
+              if (!history || history.size < 2) return false; // Need at least 2 past values to detect oscillation
+              return history.has(newVal); // Trying to revert to a value it already was at
+            }
+
+            // ── Track rejected fixes to communicate to verify prompts ──
+            const rejectedFixReasons: string[] = [];
 
             // ═══════════════════════════════════════════
             // PASS 1: VISUAL ANALYSIS — LLM examines screenshot, returns problem list
@@ -10585,11 +10680,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 const result = applyCleanupSettings(settings, allFrames, "Cleanup Pass 2");
                 totalLLMApplied += result.applied;
                 allLLMChanges.push(...result.changes);
-
-                // Post-fix consistency
-                const postResult = enforcePostLLMConsistency(allFrames, "Cleanup Pass 2 post-fix");
-                totalPostFix += postResult.count;
-                allPostFixChanges.push(...postResult.changes);
               }
             } catch (err: any) {
               console.warn(`[Cleanup Pass 2] Fix mapping failed: ${err.message}`);
@@ -10611,6 +10701,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 `${rootContext}\n\n` +
                 `Current frame state:\n${frameDescriptions}\n\n` +
                 fixRulesText + `\n\n` +
+                (rejectedFixReasons.length > 0 ?
+                  `IMPORTANT — The following fixes were already attempted and CANNOT be applied (do NOT suggest them again):\n` +
+                  rejectedFixReasons.map(r => `- ${r}`).join('\n') + `\n\n` : "") +
                 `SYSTEMATICALLY CHECK each of the following. For each issue found, return the fix:\n` +
                 `1. TEXT OVERLAP: Any text clashing with or overlapping other text/elements?\n` +
                 `2. EDGE TOUCHING: Any element touching its container edge with <8px margin?\n` +
@@ -10662,16 +10755,16 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   break;
                 }
 
-                // Post-fix consistency after each pass
-                const postResult = enforcePostLLMConsistency(allFrames, `Cleanup Pass ${pass} post-fix`);
-                totalPostFix += postResult.count;
-                allPostFixChanges.push(...postResult.changes);
-
               } catch (err: any) {
                 console.warn(`[Cleanup Pass ${pass}] Verify failed: ${err.message}`);
                 break;
               }
             }
+
+            // ── Final consistency pass (only after all LLM passes complete) ──
+            const postResult = enforcePostLLMConsistency(allFrames, "Final post-fix");
+            totalPostFix += postResult.count;
+            allPostFixChanges.push(...postResult.changes);
 
             // ── Final summary ──
             const totalFixed = totalLLMApplied + preFixCount + totalPostFix + phase0Count;

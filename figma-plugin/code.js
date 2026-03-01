@@ -7711,23 +7711,66 @@ Respond with ONLY a JSON array, no markdown:
                   return desc;
                 }).join("\n");
               }, parseCleanupResponse2 = function(rawResult) {
-                if (Array.isArray(rawResult)) return rawResult;
-                if (rawResult && typeof rawResult === "object") {
+                var _a2, _b2, _c, _d;
+                let result = [];
+                if (Array.isArray(rawResult)) {
+                  result = rawResult;
+                } else if (rawResult && typeof rawResult === "object") {
                   const wrapper = rawResult.frames || rawResult.result || rawResult.results || rawResult.content;
-                  if (Array.isArray(wrapper)) return wrapper;
-                  const keys = Object.keys(rawResult);
-                  if (keys.length === 1 && Array.isArray(rawResult[keys[0]])) return rawResult[keys[0]];
-                  if (rawResult.id) return [rawResult];
-                  const rawStr = JSON.stringify(rawResult);
-                  const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                  if (arrMatch) {
-                    const parsed = JSON.parse(arrMatch[0]);
-                    if (Array.isArray(parsed)) return parsed;
+                  if (Array.isArray(wrapper)) {
+                    result = wrapper;
+                  } else {
+                    const keys = Object.keys(rawResult);
+                    if (keys.length === 1 && Array.isArray(rawResult[keys[0]])) {
+                      result = rawResult[keys[0]];
+                    } else if (rawResult.id) {
+                      result = [rawResult];
+                    } else {
+                      const rawStr = JSON.stringify(rawResult);
+                      const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                      if (arrMatch) {
+                        const parsed = JSON.parse(arrMatch[0]);
+                        if (Array.isArray(parsed)) {
+                          result = parsed;
+                        }
+                      }
+                    }
                   }
                 }
-                return [];
+                for (const s of result) {
+                  const raw = s;
+                  if (raw.padding !== void 0) {
+                    const p = raw.padding;
+                    if (s.paddingTop === void 0) s.paddingTop = p;
+                    if (s.paddingRight === void 0) s.paddingRight = p;
+                    if (s.paddingBottom === void 0) s.paddingBottom = p;
+                    if (s.paddingLeft === void 0) s.paddingLeft = p;
+                    delete raw.padding;
+                  }
+                  const hPad = (_b2 = (_a2 = raw.paddingH) != null ? _a2 : raw.paddingX) != null ? _b2 : raw.paddingHorizontal;
+                  if (hPad !== void 0) {
+                    if (s.paddingLeft === void 0) s.paddingLeft = hPad;
+                    if (s.paddingRight === void 0) s.paddingRight = hPad;
+                    delete raw.paddingH;
+                    delete raw.paddingX;
+                    delete raw.paddingHorizontal;
+                  }
+                  const vPad = (_d = (_c = raw.paddingV) != null ? _c : raw.paddingY) != null ? _d : raw.paddingVertical;
+                  if (vPad !== void 0) {
+                    if (s.paddingTop === void 0) s.paddingTop = vPad;
+                    if (s.paddingBottom === void 0) s.paddingBottom = vPad;
+                    delete raw.paddingV;
+                    delete raw.paddingY;
+                    delete raw.paddingVertical;
+                  }
+                  if (raw.spacing !== void 0 && s.itemSpacing === void 0) {
+                    s.itemSpacing = raw.spacing;
+                    delete raw.spacing;
+                  }
+                }
+                return result;
               }, applyCleanupSettings2 = function(settings, frames, passLabel) {
-                var _a2, _b2, _c, _d;
+                var _a2, _b2, _c;
                 const frameDepthMap = /* @__PURE__ */ new Map();
                 for (const f of frames) frameDepthMap.set(f.id, f.depth);
                 const sorted = [...settings].sort(
@@ -7756,15 +7799,18 @@ Respond with ONLY a JSON array, no markdown:
                   if (parentNode && "layoutMode" in parentNode && parentNode.layoutMode === "NONE") {
                     if (s.sizingH) {
                       console.log(`[${passLabel}] Skipping sizingH=${s.sizingH} on "${frame.name}" \u2014 parent NONE`);
+                      rejectedFixReasons.push(`"${frame.name}" (${s.id}): sizingH=${s.sizingH} rejected \u2014 parent has layoutMode=NONE`);
                       delete s.sizingH;
                     }
                     if (s.sizingV) {
                       console.log(`[${passLabel}] Skipping sizingV=${s.sizingV} on "${frame.name}" \u2014 parent NONE`);
+                      rejectedFixReasons.push(`"${frame.name}" (${s.id}): sizingV=${s.sizingV} rejected \u2014 parent has layoutMode=NONE`);
                       delete s.sizingV;
                     }
                   }
                   if (frame.layoutMode === "NONE" || !frame.layoutMode) {
                     console.log(`[${passLabel}] Skipping "${frame.name}" \u2014 layoutMode=NONE (no effect)`);
+                    rejectedFixReasons.push(`"${frame.name}" (${s.id}): all changes rejected \u2014 frame has layoutMode=NONE`);
                     continue;
                   }
                   if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
@@ -7781,15 +7827,39 @@ Respond with ONLY a JSON array, no markdown:
                       sizV: frame.layoutSizingVertical || "FIXED",
                       clips: frame.clipsContent
                     };
-                    const prevState = modifiedFrameStates.get(s.id);
-                    if (prevState && prevState.modCount >= 2) {
-                      const hasBigPaddingDelta = s.paddingTop !== void 0 && Math.abs(s.paddingTop - before.pT) > 6 || s.paddingRight !== void 0 && Math.abs(s.paddingRight - before.pR) > 6 || s.paddingBottom !== void 0 && Math.abs(s.paddingBottom - before.pB) > 6 || s.paddingLeft !== void 0 && Math.abs(s.paddingLeft - before.pL) > 6;
-                      const hasNonPaddingChange = s.itemSpacing !== void 0 || s.sizingH !== void 0 || s.sizingV !== void 0 || s.alignment !== void 0 || s.counterAlignment !== void 0 || s.clipsContent !== void 0;
-                      if (!hasBigPaddingDelta && !hasNonPaddingChange) {
-                        console.log(`[${passLabel}] Skipping oscillating change on "${frame.name}" (modified ${prevState.modCount}x, delta \u22646px)`);
-                        continue;
-                      }
+                    recordFrameValues2(s.id, {
+                      paddingTop: before.pT,
+                      paddingRight: before.pR,
+                      paddingBottom: before.pB,
+                      paddingLeft: before.pL,
+                      itemSpacing: before.iS
+                    });
+                    let oscillatingProps = [];
+                    if (s.paddingTop !== void 0 && isOscillating2(s.id, "paddingTop", s.paddingTop, before.pT)) {
+                      oscillatingProps.push(`padTop ${before.pT}\u2192${s.paddingTop}`);
+                      delete s.paddingTop;
                     }
+                    if (s.paddingRight !== void 0 && isOscillating2(s.id, "paddingRight", s.paddingRight, before.pR)) {
+                      oscillatingProps.push(`padRight ${before.pR}\u2192${s.paddingRight}`);
+                      delete s.paddingRight;
+                    }
+                    if (s.paddingBottom !== void 0 && isOscillating2(s.id, "paddingBottom", s.paddingBottom, before.pB)) {
+                      oscillatingProps.push(`padBot ${before.pB}\u2192${s.paddingBottom}`);
+                      delete s.paddingBottom;
+                    }
+                    if (s.paddingLeft !== void 0 && isOscillating2(s.id, "paddingLeft", s.paddingLeft, before.pL)) {
+                      oscillatingProps.push(`padLeft ${before.pL}\u2192${s.paddingLeft}`);
+                      delete s.paddingLeft;
+                    }
+                    if (s.itemSpacing !== void 0 && isOscillating2(s.id, "itemSpacing", s.itemSpacing, before.iS)) {
+                      oscillatingProps.push(`spacing ${before.iS}\u2192${s.itemSpacing}`);
+                      delete s.itemSpacing;
+                    }
+                    if (oscillatingProps.length > 0) {
+                      console.log(`[${passLabel}] Blocked oscillation on "${frame.name}": ${oscillatingProps.join(", ")}`);
+                    }
+                    const hasRemainingChange = s.paddingTop !== void 0 || s.paddingRight !== void 0 || s.paddingBottom !== void 0 || s.paddingLeft !== void 0 || s.itemSpacing !== void 0 || s.sizingH !== void 0 || s.sizingV !== void 0 || s.clipsContent !== void 0 || s.counterAxisSpacing !== void 0;
+                    if (!hasRemainingChange) continue;
                     if (s.paddingTop !== void 0) frame.paddingTop = s.paddingTop;
                     if (s.paddingRight !== void 0) frame.paddingRight = s.paddingRight;
                     if (s.paddingBottom !== void 0) frame.paddingBottom = s.paddingBottom;
@@ -7847,14 +7917,12 @@ Respond with ONLY a JSON array, no markdown:
                       applied++;
                       changes.push(`"${frame.name}": ${realChanges.join(", ")}`);
                       console.log(`[${passLabel}] Updated "${frame.name}": ${realChanges.join(", ")}`);
-                      const prev = modifiedFrameStates.get(s.id);
-                      modifiedFrameStates.set(s.id, {
-                        pT: after.pT,
-                        pR: after.pR,
-                        pB: after.pB,
-                        pL: after.pL,
-                        iS: after.iS,
-                        modCount: ((_d = prev == null ? void 0 : prev.modCount) != null ? _d : 0) + 1
+                      recordFrameValues2(s.id, {
+                        paddingTop: after.pT,
+                        paddingRight: after.pR,
+                        paddingBottom: after.pB,
+                        paddingLeft: after.pL,
+                        itemSpacing: after.iS
                       });
                     }
                     if (isRoot) {
@@ -7911,8 +7979,22 @@ Respond with ONLY a JSON array, no markdown:
                   }
                 }
                 return { count, changes };
+              }, recordFrameValues2 = function(frameId, props) {
+                if (!frameValueHistory.has(frameId)) frameValueHistory.set(frameId, /* @__PURE__ */ new Map());
+                const propMap = frameValueHistory.get(frameId);
+                for (const [k, v] of Object.entries(props)) {
+                  if (!propMap.has(k)) propMap.set(k, /* @__PURE__ */ new Set());
+                  propMap.get(k).add(v);
+                }
+              }, isOscillating2 = function(frameId, prop, newVal, currentVal) {
+                if (newVal === currentVal) return true;
+                const propMap = frameValueHistory.get(frameId);
+                if (!propMap) return false;
+                const history = propMap.get(prop);
+                if (!history || history.size < 2) return false;
+                return history.has(newVal);
               };
-              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2;
+              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2, recordFrameValues = recordFrameValues2, isOscillating = isOscillating2;
               const MAX_CU_DEPTH = 5;
               const allFrames = [];
               for (const node of [...selection]) {
@@ -7946,6 +8028,7 @@ Respond with ONLY a JSON array, no markdown:
               }
               let preFixCount = 0;
               const preFixChanges = [];
+              const individuallyFixedIds = /* @__PURE__ */ new Set();
               for (const fi of allFrames) {
                 const node = figma.getNodeById(fi.id);
                 if (!node || node.type !== "FRAME") continue;
@@ -8150,6 +8233,7 @@ Respond with ONLY a JSON array, no markdown:
                 }
                 if (localFixes.length > 0) {
                   preFixCount++;
+                  individuallyFixedIds.add(fi.id);
                   preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
                   console.log(`[Cleanup pre-fix] "${fi.name}": ${localFixes.join(", ")}`);
                 }
@@ -8162,20 +8246,34 @@ Respond with ONLY a JSON array, no markdown:
               }
               for (const [_key, group] of siblingGroups) {
                 if (group.length < 2) continue;
-                const padCounts = /* @__PURE__ */ new Map();
-                for (const g of group) {
-                  const pk = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
-                  padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
-                }
-                let bestPad = "";
-                let bestCount = 0;
-                for (const [key, count] of padCounts) {
-                  if (count > bestCount) {
-                    bestCount = count;
-                    bestPad = key;
+                const fixedMembers = group.filter((g) => individuallyFixedIds.has(g.id));
+                let bT, bR, bB, bL;
+                if (fixedMembers.length > 0) {
+                  const best = fixedMembers.reduce((a, b) => {
+                    const aSum = a.paddingTop + a.paddingRight + a.paddingBottom + a.paddingLeft;
+                    const bSum = b.paddingTop + b.paddingRight + b.paddingBottom + b.paddingLeft;
+                    return bSum > aSum ? b : a;
+                  });
+                  bT = best.paddingTop;
+                  bR = best.paddingRight;
+                  bB = best.paddingBottom;
+                  bL = best.paddingLeft;
+                } else {
+                  const padCounts = /* @__PURE__ */ new Map();
+                  for (const g of group) {
+                    const pk = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
+                    padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
                   }
+                  let bestPad = "";
+                  let bestCount = 0;
+                  for (const [key, count] of padCounts) {
+                    if (count > bestCount) {
+                      bestCount = count;
+                      bestPad = key;
+                    }
+                  }
+                  [bT, bR, bB, bL] = bestPad.split(",").map(Number);
                 }
-                const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
                 for (const fi of group) {
                   if (fi.paddingTop === bT && fi.paddingRight === bR && fi.paddingBottom === bB && fi.paddingLeft === bL) continue;
                   const node = figma.getNodeById(fi.id);
@@ -8277,7 +8375,8 @@ Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, item
               let totalPostFix = 0;
               const allLLMChanges = [];
               const allPostFixChanges = [];
-              const modifiedFrameStates = /* @__PURE__ */ new Map();
+              const frameValueHistory = /* @__PURE__ */ new Map();
+              const rejectedFixReasons = [];
               sendToUI({ type: "status", message: `Cleanup pass 1/${MAX_CLEANUP_PASSES}: analyzing layout...` });
               figma.notify(`Cleanup pass 1/${MAX_CLEANUP_PASSES}: analyzing layout...`, { timeout: 3e3 });
               let screenshotBase64 = await captureScreenshot();
@@ -8367,9 +8466,6 @@ IMPORTANT: Address EVERY problem from the visual review above. Do not skip any.`
                   const result = applyCleanupSettings2(settings, allFrames, "Cleanup Pass 2");
                   totalLLMApplied += result.applied;
                   allLLMChanges.push(...result.changes);
-                  const postResult = enforcePostLLMConsistency2(allFrames, "Cleanup Pass 2 post-fix");
-                  totalPostFix += postResult.count;
-                  allPostFixChanges.push(...postResult.changes);
                 }
               } catch (err) {
                 console.warn(`[Cleanup Pass 2] Fix mapping failed: ${err.message}`);
@@ -8388,7 +8484,10 @@ ${frameDescriptions}
 
 ` + fixRulesText + `
 
-SYSTEMATICALLY CHECK each of the following. For each issue found, return the fix:
+` + (rejectedFixReasons.length > 0 ? `IMPORTANT \u2014 The following fixes were already attempted and CANNOT be applied (do NOT suggest them again):
+` + rejectedFixReasons.map((r) => `- ${r}`).join("\n") + `
+
+` : "") + `SYSTEMATICALLY CHECK each of the following. For each issue found, return the fix:
 1. TEXT OVERLAP: Any text clashing with or overlapping other text/elements?
 2. EDGE TOUCHING: Any element touching its container edge with <8px margin?
 3. EXCESSIVE GAPS: Any gap >40px between sections that should be closer together?
@@ -8432,14 +8531,14 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
                     console.log(`[Cleanup Pass ${pass}] No actual changes applied \u2014 converged. Stopping.`);
                     break;
                   }
-                  const postResult = enforcePostLLMConsistency2(allFrames, `Cleanup Pass ${pass} post-fix`);
-                  totalPostFix += postResult.count;
-                  allPostFixChanges.push(...postResult.changes);
                 } catch (err) {
                   console.warn(`[Cleanup Pass ${pass}] Verify failed: ${err.message}`);
                   break;
                 }
               }
+              const postResult = enforcePostLLMConsistency2(allFrames, "Final post-fix");
+              totalPostFix += postResult.count;
+              allPostFixChanges.push(...postResult.changes);
               const totalFixed = totalLLMApplied + preFixCount + totalPostFix + phase0Count;
               if (totalFixed > 0) {
                 const allChanges = [...phase0Changes, ...preFixChanges, ...allLLMChanges, ...allPostFixChanges];
