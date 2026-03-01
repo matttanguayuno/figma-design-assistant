@@ -9860,12 +9860,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               // Calculate padding from edge distances
               const firstChild = sortedByY[0];
               const lastChild = sortedByY[sortedByY.length - 1];
-              const padTop = Math.max(0, Math.round(firstChild.y));
-              const padBottom = Math.max(0, fh - Math.round(lastChild.y + lastChild.h));
+              const rawPadTop = Math.max(0, Math.round(firstChild.y));
+              const rawPadBottom = Math.max(0, fh - Math.round(lastChild.y + lastChild.h));
               const minX = Math.min(...childInfos.map(c => c.x));
               const maxRight = Math.max(...childInfos.map(c => c.x + c.w));
-              const padLeft = Math.max(0, Math.round(minX));
-              const padRight = Math.max(0, fw - Math.round(maxRight));
+              const rawPadLeft = Math.max(0, Math.round(minX));
+              const rawPadRight = Math.max(0, fw - Math.round(maxRight));
+
+              // Cap padding: large inferred values are usually from mispositioned children, not intentional padding
+              const padTop = Math.min(rawPadTop, 24);
+              const padBottom = Math.min(rawPadBottom, 24);
+              const padLeft = Math.min(rawPadLeft, 16);
+              const padRight = Math.min(rawPadRight, 16);
 
               // Calculate item spacing (median of gaps between consecutive children)
               const gaps: number[] = [];
@@ -9888,7 +9894,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               try {
                 frame.layoutMode = "VERTICAL";
                 frame.paddingTop = padTop;
-                frame.paddingBottom = Math.min(padBottom, 32); // cap excessive bottom padding
+                frame.paddingBottom = padBottom;
                 frame.paddingLeft = padLeft;
                 frame.paddingRight = padRight;
                 frame.itemSpacing = itemSpacing;
@@ -9910,8 +9916,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
 
                 phase0cCount++;
-                phase0Changes.push(`"${frame.name}": NONE→VERTICAL (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
-                console.log(`[Cleanup Phase0c] "${frame.name}": NONE→VERTICAL auto-layout (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                phase0Changes.push(`"${frame.name}": NONE→VERTICAL (pad=[${padTop},${padRight},${padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                console.log(`[Cleanup Phase0c] "${frame.name}": NONE→VERTICAL auto-layout (pad=[${padTop},${padRight},${padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
               } catch (e) {
                 console.log(`[Cleanup Phase0c] Failed to convert "${frame.name}": ${e}`);
               }
@@ -10006,7 +10012,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               // Fix 5: Text content flush against edges — add 16px padding
               // BUT: first check if any ancestor already provides padding on that side.
               // If parent/grandparent has >=12px horizontal padding, child doesn't need its own.
-              if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80) {
+              // SKIP structural containers: if ALL children are frames (no direct text), this is a layout wrapper.
+              const allChildrenAreFrames = fi.childCount > 0 && !fi.childSummary.includes("(TEXT)");
+              const isStructuralContainer = allChildrenAreFrames && fi.childCount >= 2;
+              if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80 && !isStructuralContainer && fi.depth > 0) {
                 let ancestorHasPadLR = false;
                 let ancestorHasPadTB = false;
                 let walkNode: BaseNode | null = node.parent;
@@ -10037,22 +10046,28 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // Fix 6: One-sided asymmetric padding — make symmetric
-              if (!isSepFrame && !isCarouselFrame) {
+              // Cap the symmetric copy at 16px to avoid propagating huge padding values
+              // Skip structural containers (all-frame children) — their padding is positional, not design intent
+              if (!isSepFrame && !isCarouselFrame && !isStructuralContainer) {
                 // Vertical: one side 0, other > 4
                 if (fi.paddingTop === 0 && fi.paddingBottom > 4) {
-                  frame.paddingTop = fi.paddingBottom; fi.paddingTop = fi.paddingBottom;
-                  localFixes.push(`padTop 0->${fi.paddingBottom} (symmetric)`);
+                  const nv = Math.min(fi.paddingBottom, 16);
+                  frame.paddingTop = nv; fi.paddingTop = nv;
+                  localFixes.push(`padTop 0->${nv} (symmetric)`);
                 } else if (fi.paddingBottom === 0 && fi.paddingTop > 4) {
-                  frame.paddingBottom = fi.paddingTop; fi.paddingBottom = fi.paddingTop;
-                  localFixes.push(`padBot 0->${fi.paddingTop} (symmetric)`);
+                  const nv = Math.min(fi.paddingTop, 16);
+                  frame.paddingBottom = nv; fi.paddingBottom = nv;
+                  localFixes.push(`padBot 0->${nv} (symmetric)`);
                 }
                 // Horizontal: one side 0, other > 4
                 if (fi.paddingLeft === 0 && fi.paddingRight > 4) {
-                  frame.paddingLeft = fi.paddingRight; fi.paddingLeft = fi.paddingRight;
-                  localFixes.push(`padLeft 0->${fi.paddingRight} (symmetric)`);
+                  const nv = Math.min(fi.paddingRight, 16);
+                  frame.paddingLeft = nv; fi.paddingLeft = nv;
+                  localFixes.push(`padLeft 0->${nv} (symmetric)`);
                 } else if (fi.paddingRight === 0 && fi.paddingLeft > 4) {
-                  frame.paddingRight = fi.paddingLeft; fi.paddingRight = fi.paddingLeft;
-                  localFixes.push(`padRight 0->${fi.paddingLeft} (symmetric)`);
+                  const nv = Math.min(fi.paddingLeft, 16);
+                  frame.paddingRight = nv; fi.paddingRight = nv;
+                  localFixes.push(`padRight 0->${nv} (symmetric)`);
                 }
               }
 
@@ -10533,6 +10548,25 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     paddingBottom: before.pB, paddingLeft: before.pL,
                     itemSpacing: before.iS
                   });
+
+                  // Ancestor padding guard: strip padding additions when parent already provides padding
+                  // This prevents the "funnel effect" where nested frames each add 16px of padding
+                  if (parentFrame && "layoutMode" in parentFrame) {
+                    const pf = parentFrame as FrameNode;
+                    if (pf.layoutMode === "HORIZONTAL" || pf.layoutMode === "VERTICAL") {
+                      if (pf.paddingLeft >= 12 || pf.paddingRight >= 12) {
+                        // Parent already has horizontal padding — don't add MORE horizontal padding
+                        if (s.paddingLeft !== undefined && s.paddingLeft > before.pL && before.pL === 0) {
+                          console.log(`[${passLabel}] Stripping padLeft ${s.paddingLeft} on "${frame.name}" — parent "${pf.name}" already has padLeft=${pf.paddingLeft}`);
+                          delete s.paddingLeft;
+                        }
+                        if (s.paddingRight !== undefined && s.paddingRight > before.pR && before.pR === 0) {
+                          console.log(`[${passLabel}] Stripping padRight ${s.paddingRight} on "${frame.name}" — parent "${pf.name}" already has padRight=${pf.paddingRight}`);
+                          delete s.paddingRight;
+                        }
+                      }
+                    }
+                  }
 
                   // Anti-oscillation: reject any property change that reverts to a previously-seen value
                   // Also silently strip no-op changes (same value) without logging

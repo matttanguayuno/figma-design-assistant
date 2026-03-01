@@ -7623,12 +7623,16 @@ Respond with ONLY a JSON array, no markdown:
                 if (xRange > fw * 0.4) return;
                 const firstChild = sortedByY[0];
                 const lastChild = sortedByY[sortedByY.length - 1];
-                const padTop = Math.max(0, Math.round(firstChild.y));
-                const padBottom = Math.max(0, fh - Math.round(lastChild.y + lastChild.h));
+                const rawPadTop = Math.max(0, Math.round(firstChild.y));
+                const rawPadBottom = Math.max(0, fh - Math.round(lastChild.y + lastChild.h));
                 const minX = Math.min(...childInfos.map((c) => c.x));
                 const maxRight = Math.max(...childInfos.map((c) => c.x + c.w));
-                const padLeft = Math.max(0, Math.round(minX));
-                const padRight = Math.max(0, fw - Math.round(maxRight));
+                const rawPadLeft = Math.max(0, Math.round(minX));
+                const rawPadRight = Math.max(0, fw - Math.round(maxRight));
+                const padTop = Math.min(rawPadTop, 24);
+                const padBottom = Math.min(rawPadBottom, 24);
+                const padLeft = Math.min(rawPadLeft, 16);
+                const padRight = Math.min(rawPadRight, 16);
                 const gaps = [];
                 for (let i = 1; i < sortedByY.length; i++) {
                   const gap = sortedByY[i].y - (sortedByY[i - 1].y + sortedByY[i - 1].h);
@@ -7646,7 +7650,7 @@ Respond with ONLY a JSON array, no markdown:
                 try {
                   frame.layoutMode = "VERTICAL";
                   frame.paddingTop = padTop;
-                  frame.paddingBottom = Math.min(padBottom, 32);
+                  frame.paddingBottom = padBottom;
                   frame.paddingLeft = padLeft;
                   frame.paddingRight = padRight;
                   frame.itemSpacing = itemSpacing;
@@ -7664,8 +7668,8 @@ Respond with ONLY a JSON array, no markdown:
                     }
                   }
                   phase0cCount++;
-                  phase0Changes.push(`"${frame.name}": NONE\u2192VERTICAL (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
-                  console.log(`[Cleanup Phase0c] "${frame.name}": NONE\u2192VERTICAL auto-layout (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                  phase0Changes.push(`"${frame.name}": NONE\u2192VERTICAL (pad=[${padTop},${padRight},${padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                  console.log(`[Cleanup Phase0c] "${frame.name}": NONE\u2192VERTICAL auto-layout (pad=[${padTop},${padRight},${padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
                 } catch (e) {
                   console.log(`[Cleanup Phase0c] Failed to convert "${frame.name}": ${e}`);
                 }
@@ -7928,6 +7932,21 @@ Respond with ONLY a JSON array, no markdown:
                       paddingLeft: before.pL,
                       itemSpacing: before.iS
                     });
+                    if (parentFrame && "layoutMode" in parentFrame) {
+                      const pf = parentFrame;
+                      if (pf.layoutMode === "HORIZONTAL" || pf.layoutMode === "VERTICAL") {
+                        if (pf.paddingLeft >= 12 || pf.paddingRight >= 12) {
+                          if (s.paddingLeft !== void 0 && s.paddingLeft > before.pL && before.pL === 0) {
+                            console.log(`[${passLabel}] Stripping padLeft ${s.paddingLeft} on "${frame.name}" \u2014 parent "${pf.name}" already has padLeft=${pf.paddingLeft}`);
+                            delete s.paddingLeft;
+                          }
+                          if (s.paddingRight !== void 0 && s.paddingRight > before.pR && before.pR === 0) {
+                            console.log(`[${passLabel}] Stripping padRight ${s.paddingRight} on "${frame.name}" \u2014 parent "${pf.name}" already has padRight=${pf.paddingRight}`);
+                            delete s.paddingRight;
+                          }
+                        }
+                      }
+                    }
                     const oscillatingProps = [];
                     if (s.paddingTop !== void 0) {
                       if (s.paddingTop === before.pT) {
@@ -8221,7 +8240,9 @@ Respond with ONLY a JSON array, no markdown:
                   } catch (_e) {
                   }
                 }
-                if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80) {
+                const allChildrenAreFrames = fi.childCount > 0 && !fi.childSummary.includes("(TEXT)");
+                const isStructuralContainer = allChildrenAreFrames && fi.childCount >= 2;
+                if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80 && !isStructuralContainer && fi.depth > 0) {
                   let ancestorHasPadLR = false;
                   let ancestorHasPadTB = false;
                   let walkNode = node.parent;
@@ -8252,24 +8273,28 @@ Respond with ONLY a JSON array, no markdown:
                     localFixes.push("padTB 0->12 (text flush)");
                   }
                 }
-                if (!isSepFrame && !isCarouselFrame) {
+                if (!isSepFrame && !isCarouselFrame && !isStructuralContainer) {
                   if (fi.paddingTop === 0 && fi.paddingBottom > 4) {
-                    frame.paddingTop = fi.paddingBottom;
-                    fi.paddingTop = fi.paddingBottom;
-                    localFixes.push(`padTop 0->${fi.paddingBottom} (symmetric)`);
+                    const nv = Math.min(fi.paddingBottom, 16);
+                    frame.paddingTop = nv;
+                    fi.paddingTop = nv;
+                    localFixes.push(`padTop 0->${nv} (symmetric)`);
                   } else if (fi.paddingBottom === 0 && fi.paddingTop > 4) {
-                    frame.paddingBottom = fi.paddingTop;
-                    fi.paddingBottom = fi.paddingTop;
-                    localFixes.push(`padBot 0->${fi.paddingTop} (symmetric)`);
+                    const nv = Math.min(fi.paddingTop, 16);
+                    frame.paddingBottom = nv;
+                    fi.paddingBottom = nv;
+                    localFixes.push(`padBot 0->${nv} (symmetric)`);
                   }
                   if (fi.paddingLeft === 0 && fi.paddingRight > 4) {
-                    frame.paddingLeft = fi.paddingRight;
-                    fi.paddingLeft = fi.paddingRight;
-                    localFixes.push(`padLeft 0->${fi.paddingRight} (symmetric)`);
+                    const nv = Math.min(fi.paddingRight, 16);
+                    frame.paddingLeft = nv;
+                    fi.paddingLeft = nv;
+                    localFixes.push(`padLeft 0->${nv} (symmetric)`);
                   } else if (fi.paddingRight === 0 && fi.paddingLeft > 4) {
-                    frame.paddingRight = fi.paddingLeft;
-                    fi.paddingRight = fi.paddingLeft;
-                    localFixes.push(`padRight 0->${fi.paddingLeft} (symmetric)`);
+                    const nv = Math.min(fi.paddingLeft, 16);
+                    frame.paddingRight = nv;
+                    fi.paddingRight = nv;
+                    localFixes.push(`padRight 0->${nv} (symmetric)`);
                   }
                 }
                 if (!isVisualFrame && fi.sizingV === "FIXED" && fi.childCount <= 3 && fi.height > 100) {
