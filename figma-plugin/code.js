@@ -7432,9 +7432,12 @@ Common problems to fix:
 NEVER change or set "layoutMode". Do NOT include layoutMode in your response.
 PRESERVE content and layout direction.
 
-Respond with ONLY a JSON array. Every frame with [ISSUE] markers MUST be included. Include any other frames that need fixes too.
-[{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}]
-Optional: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").`;
+YOU MUST ANALYZE EVERY FRAME listed above. There are ${allFrames.length} frames. For EACH frame, decide if it needs fixes. Include ALL frames that need ANY change.
+Frames with [ISSUE] markers MUST be included. Also include any other frames that need improvement.
+
+Respond with a JSON object: {"frames": [{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}, ...]}
+Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").
+The "frames" array MUST contain entries for ALL frames that need changes. Do NOT return only one frame.`;
               const cleanupPayload = {
                 intent: cleanupPrompt,
                 selection: { nodes: [] },
@@ -7452,24 +7455,31 @@ Optional: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), 
                 if (Array.isArray(cleanupResult)) {
                   cleanupSettings = cleanupResult;
                 } else if (cleanupResult && typeof cleanupResult === "object") {
-                  const keys = Object.keys(cleanupResult);
-                  if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
-                    console.log(`[Cleanup] Unwrapped array from key "${keys[0]}"`);
-                    cleanupSettings = cleanupResult[keys[0]];
-                  } else if (cleanupResult.id) {
-                    console.log(`[Cleanup] LLM returned single object, wrapping in array`);
-                    cleanupSettings = [cleanupResult];
+                  const wrapper = cleanupResult.frames || cleanupResult.result || cleanupResult.results || cleanupResult.content;
+                  if (Array.isArray(wrapper)) {
+                    const wrapperKey = cleanupResult.frames ? "frames" : cleanupResult.result ? "result" : cleanupResult.results ? "results" : "content";
+                    console.log(`[Cleanup] Unwrapped array from key "${wrapperKey}" (${wrapper.length} items)`);
+                    cleanupSettings = wrapper;
                   } else {
-                    const rawStr = JSON.stringify(cleanupResult);
-                    const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                    if (arrMatch) {
-                      console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
-                      const parsed = JSON.parse(arrMatch[0]);
-                      if (Array.isArray(parsed)) {
-                        cleanupSettings = parsed;
-                      }
+                    const keys = Object.keys(cleanupResult);
+                    if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
+                      console.log(`[Cleanup] Unwrapped array from key "${keys[0]}" (${cleanupResult[keys[0]].length} items)`);
+                      cleanupSettings = cleanupResult[keys[0]];
+                    } else if (cleanupResult.id) {
+                      console.log(`[Cleanup] LLM returned single object, wrapping in array`);
+                      cleanupSettings = [cleanupResult];
                     } else {
-                      console.warn(`[Cleanup] Could not extract JSON array from response`);
+                      const rawStr = JSON.stringify(cleanupResult);
+                      const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                      if (arrMatch) {
+                        console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
+                        const parsed = JSON.parse(arrMatch[0]);
+                        if (Array.isArray(parsed)) {
+                          cleanupSettings = parsed;
+                        }
+                      } else {
+                        console.warn(`[Cleanup] Could not extract JSON array from response`);
+                      }
                     }
                   }
                 }

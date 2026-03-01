@@ -9589,9 +9589,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `- Very small padding (1-3px) on content frames -> increase to at least 8\n\n` +
               `NEVER change or set "layoutMode". Do NOT include layoutMode in your response.\n` +
               `PRESERVE content and layout direction.\n\n` +
-              `Respond with ONLY a JSON array. Every frame with [ISSUE] markers MUST be included. Include any other frames that need fixes too.\n` +
-              `[{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}]\n` +
-              `Optional: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").`;
+              `YOU MUST ANALYZE EVERY FRAME listed above. There are ${allFrames.length} frames. ` +
+              `For EACH frame, decide if it needs fixes. Include ALL frames that need ANY change.\n` +
+              `Frames with [ISSUE] markers MUST be included. Also include any other frames that need improvement.\n\n` +
+              `Respond with a JSON object: {"frames": [{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}, ...]}\n` +
+              `Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").\n` +
+              `The "frames" array MUST contain entries for ALL frames that need changes. Do NOT return only one frame.`;
 
             const cleanupPayload = {
               intent: cleanupPrompt,
@@ -9623,26 +9626,35 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               if (Array.isArray(cleanupResult)) {
                 cleanupSettings = cleanupResult;
               } else if (cleanupResult && typeof cleanupResult === "object") {
-                // Check for wrapper objects: {frames:[...]}, {content:[...]}, {results:[...]}, etc.
-                const keys = Object.keys(cleanupResult);
-                if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
-                  console.log(`[Cleanup] Unwrapped array from key "${keys[0]}"`);
-                  cleanupSettings = cleanupResult[keys[0]];
-                } else if (cleanupResult.id) {
-                  // LLM returned a single object instead of an array — wrap it
-                  console.log(`[Cleanup] LLM returned single object, wrapping in array`);
-                  cleanupSettings = [cleanupResult];
+                // Priority: check for known wrapper keys first
+                const wrapper = cleanupResult.frames || cleanupResult.result || cleanupResult.results || cleanupResult.content;
+                if (Array.isArray(wrapper)) {
+                  const wrapperKey = cleanupResult.frames ? "frames" : cleanupResult.result ? "result" : cleanupResult.results ? "results" : "content";
+                  console.log(`[Cleanup] Unwrapped array from key "${wrapperKey}" (${wrapper.length} items)`);
+                  cleanupSettings = wrapper;
                 } else {
-                  const rawStr = JSON.stringify(cleanupResult);
-                  const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                  if (arrMatch) {
-                    console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
-                    const parsed = JSON.parse(arrMatch[0]);
-                    if (Array.isArray(parsed)) {
-                      cleanupSettings = parsed;
-                    }
+                  // Fallback: check for any single key with array value
+                  const keys = Object.keys(cleanupResult);
+                  if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
+                    console.log(`[Cleanup] Unwrapped array from key "${keys[0]}" (${cleanupResult[keys[0]].length} items)`);
+                    cleanupSettings = cleanupResult[keys[0]];
+                  } else if (cleanupResult.id) {
+                    // LLM returned a single object instead of an array — wrap it
+                    console.log(`[Cleanup] LLM returned single object, wrapping in array`);
+                    cleanupSettings = [cleanupResult];
                   } else {
-                    console.warn(`[Cleanup] Could not extract JSON array from response`);
+                    // Last resort: regex extraction
+                    const rawStr = JSON.stringify(cleanupResult);
+                    const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                    if (arrMatch) {
+                      console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
+                      const parsed = JSON.parse(arrMatch[0]);
+                      if (Array.isArray(parsed)) {
+                        cleanupSettings = parsed;
+                      }
+                    } else {
+                      console.warn(`[Cleanup] Could not extract JSON array from response`);
+                    }
                   }
                 }
               }

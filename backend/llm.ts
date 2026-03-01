@@ -275,8 +275,9 @@ export async function callLLMAnalyze(
 ): Promise<unknown> {
   const systemPrompt =
     "You are a design layout analyzer. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
-    "When asked to analyze multiple items, ALWAYS respond with a JSON ARRAY (wrapped in square brackets [ ]). " +
-    "Never return a single object — always wrap it in an array, even if there is only one item.";
+    "IMPORTANT: Always return a JSON object with a single key \"result\" whose value is an array: {\"result\": [...]}. " +
+    "Include ALL items that need changes in the array. Even if only one item needs changes, wrap it: {\"result\": [{...}]}. " +
+    "Never return a bare array or a single unwrapped object.";
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
