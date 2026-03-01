@@ -9638,12 +9638,26 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             // ── PHASE 0b: NONE-layout margin enforcement & sibling consistency ──
             // After bounds are fixed, enforce consistent horizontal margins and
             // same-name sibling consistency within NONE-layout parents.
+            // IMPORTANT: Only apply margins at the root-edge level. If a parent is
+            // already narrower than root (already inset), skip margin enforcement to
+            // prevent cascading double/triple margins.
+            const rootWidth = (() => {
+              for (const n of [...selection]) {
+                if (n.type === "FRAME") return Math.round(n.width);
+              }
+              return 393; // fallback mobile width
+            })();
+
             function enforceNoneLayoutConsistency(node: SceneNode, depth: number): void {
               if (node.type !== "FRAME") return;
               if (depth > MAX_CU_DEPTH + 1) return;
               const parent = node as FrameNode;
               const parentW = Math.round(parent.width);
               const parentLM = parent.layoutMode || "NONE";
+
+              // Only apply margin enforcement if this parent is at root width (device edge).
+              // If parent is already narrower than root, it's already been inset — skip margins.
+              const isAtRootEdge = parentW >= rootWidth - 4;
 
               if (parentLM === "NONE" && parent.children.length >= 2) {
                 // Gather child positioning info
@@ -9670,60 +9684,62 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   });
                 }
 
-                // --- Horizontal margin enforcement ---
-                // Find the most common left margin among non-visual, non-full-width children
-                const leftMargins: number[] = [];
-                for (const ci of childInfos) {
-                  if (!ci.isVisual && ci.w < parentW - 4) {
-                    leftMargins.push(ci.x);
+                // --- Horizontal margin enforcement (only at root-edge level) ---
+                if (isAtRootEdge) {
+                  // Find the most common left margin among non-visual, non-full-width children
+                  const leftMargins: number[] = [];
+                  for (const ci of childInfos) {
+                    if (!ci.isVisual && ci.w < parentW - 4) {
+                      leftMargins.push(ci.x);
+                    }
                   }
-                }
-                // If we have siblings with proper margins, use majority-vote
-                let targetMargin = 0;
-                if (leftMargins.length > 0) {
-                  const marginCounts = new Map<number, number>();
-                  for (const m of leftMargins) {
-                    marginCounts.set(m, (marginCounts.get(m) || 0) + 1);
+                  // If we have siblings with proper margins, use majority-vote
+                  let targetMargin = 0;
+                  if (leftMargins.length > 0) {
+                    const marginCounts = new Map<number, number>();
+                    for (const m of leftMargins) {
+                      marginCounts.set(m, (marginCounts.get(m) || 0) + 1);
+                    }
+                    let bestCount = 0;
+                    for (const [m, count] of marginCounts) {
+                      if (count > bestCount) { bestCount = count; targetMargin = m; }
+                    }
                   }
-                  let bestCount = 0;
-                  for (const [m, count] of marginCounts) {
-                    if (count > bestCount) { bestCount = count; targetMargin = m; }
-                  }
-                }
-                // If no siblings have margins (all flush), use standard 20px mobile margin
-                if (targetMargin < 4) targetMargin = 20;
-                const targetWidth = parentW - (targetMargin * 2);
+                  // If no siblings have margins (all flush), use standard 20px mobile margin
+                  if (targetMargin < 4) targetMargin = 20;
+                  const targetWidth = parentW - (targetMargin * 2);
 
-                // Apply margin to non-visual children that are flush or inconsistent
-                for (const ci of childInfos) {
-                  if (ci.isVisual) continue;
-                  // Skip children that are already correctly positioned (within 4px tolerance)
-                  if (Math.abs(ci.x - targetMargin) <= 4 && Math.abs(ci.w - targetWidth) <= 4) continue;
-                  // Skip children that are much narrower than target (intentionally small elements)
-                  if (ci.w < targetWidth * 0.5) continue;
-                  // Only fix children that are flush (x=0 or x=1) or at wrong margin, AND near full-width
-                  if (ci.x <= 4 && ci.w >= parentW - 8) {
-                    // Full-width child needs inset
-                    ci.node.x = targetMargin;
-                    try {
-                      ci.node.resize(targetWidth, ci.h);
-                    } catch (_e) { /* ignore */ }
-                    phase0Count++;
-                    phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin)`);
-                    console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth}`);
-                    ci.x = targetMargin;
-                    ci.w = targetWidth;
-                  } else if (ci.w >= parentW - 8 && ci.x > 4) {
-                    // Positioned child that's too wide — resize to target
-                    ci.node.x = targetMargin;
-                    try {
-                      ci.node.resize(targetWidth, ci.h);
-                    } catch (_e) { /* ignore */ }
-                    phase0Count++;
-                    phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin adjust)`);
-                    console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": margin adjust`);
-                    ci.x = targetMargin;
-                    ci.w = targetWidth;
+                  // Apply margin to non-visual children that are flush or inconsistent
+                  for (const ci of childInfos) {
+                    if (ci.isVisual) continue;
+                    // Skip children that are already correctly positioned (within 4px tolerance)
+                    if (Math.abs(ci.x - targetMargin) <= 4 && Math.abs(ci.w - targetWidth) <= 4) continue;
+                    // Skip children that are much narrower than target (intentionally small elements)
+                    if (ci.w < targetWidth * 0.5) continue;
+                    // Only fix children that are flush (x=0 or x=1) or at wrong margin, AND near full-width
+                    if (ci.x <= 4 && ci.w >= parentW - 8) {
+                      // Full-width child needs inset
+                      ci.node.x = targetMargin;
+                      try {
+                        ci.node.resize(targetWidth, ci.h);
+                      } catch (_e) { /* ignore */ }
+                      phase0Count++;
+                      phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin)`);
+                      console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth}`);
+                      ci.x = targetMargin;
+                      ci.w = targetWidth;
+                    } else if (ci.w >= parentW - 8 && ci.x > 4) {
+                      // Positioned child that's too wide — resize to target
+                      ci.node.x = targetMargin;
+                      try {
+                        ci.node.resize(targetWidth, ci.h);
+                      } catch (_e) { /* ignore */ }
+                      phase0Count++;
+                      phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin adjust)`);
+                      console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": margin adjust`);
+                      ci.x = targetMargin;
+                      ci.w = targetWidth;
+                    }
                   }
                 }
 
