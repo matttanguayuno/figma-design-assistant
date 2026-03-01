@@ -9429,6 +9429,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               id: string;
               name: string;
               depth: number;
+              parentId: string | null;
+              parentName: string | null;
               width: number;
               height: number;
               layoutMode: string;       // HORIZONTAL | VERTICAL | NONE
@@ -9442,11 +9444,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               counterAxisAlign: string;
               sizingH: string;
               sizingV: string;
+              clipsContent: boolean;
               childCount: number;
               childSummary: string;
             }
 
-            function collectCleanupFrames(node: SceneNode, list: CleanupFrameInfo[], depth: number): void {
+            function collectCleanupFrames(node: SceneNode, list: CleanupFrameInfo[], depth: number, parentId: string | null, parentName: string | null): void {
               if (node.type !== "FRAME") return;
               if (depth > MAX_CU_DEPTH) return;
 
@@ -9461,12 +9464,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
               // Only include frames that already have auto layout — changing layoutMode
               // from NONE to VERTICAL/HORIZONTAL causes Figma to reorder children.
-              // Also skip NONE frames at depth=0 — can't set padding without auto layout.
               if (!hasAutoLayout) {
                 // Still recurse into children — they may have auto layout
                 for (const child of f.children) {
                   if (child.type === "FRAME") {
-                    collectCleanupFrames(child, list, depth + 1);
+                    collectCleanupFrames(child, list, depth + 1, f.id, f.name);
                   }
                 }
                 return;
@@ -9476,6 +9478,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 id: f.id,
                 name: f.name,
                 depth,
+                parentId,
+                parentName,
                 width: Math.round(f.width),
                 height: Math.round(f.height),
                 layoutMode: hasAutoLayout ? lm : "NONE",
@@ -9489,20 +9493,21 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 counterAxisAlign: (f as any).counterAxisAlignItems || "MIN",
                 sizingH: (f as any).layoutSizingHorizontal || "FIXED",
                 sizingV: (f as any).layoutSizingVertical || "FIXED",
+                clipsContent: f.clipsContent ?? false,
                 childCount: f.children.length,
                 childSummary: childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` … +${childNames.length - 10} more` : ""),
               });
 
               for (const child of f.children) {
                 if (child.type === "FRAME") {
-                  collectCleanupFrames(child, list, depth + 1);
+                  collectCleanupFrames(child, list, depth + 1, f.id, f.name);
                 }
               }
             }
 
             const allFrames: CleanupFrameInfo[] = [];
             for (const node of [...selection]) {
-              collectCleanupFrames(node, allFrames, 0);
+              collectCleanupFrames(node, allFrames, 0, null, null);
             }
 
             // Collect root frame context even if it has NONE layout
@@ -9523,15 +9528,26 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup…` });
 
             // ── Build a rich description of current layout state ──
-            // Flag obvious problems inline to help the LLM
+            // Group frames by parent to emphasize sibling consistency
             const frameDescriptions = allFrames.map(f => {
               const problems: string[] = [];
-              // Content frames with 0 horizontal padding = text/elements flush against edges
-              if (f.paddingLeft === 0 && f.paddingRight === 0 && f.childCount > 0 && f.width > 100) {
-                problems.push("[ISSUE] NO horizontal padding - content flush against edges");
-              }
-              if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
-                problems.push("[ISSUE] NO vertical padding");
+
+              // Detect semantic type from name
+              const nameLower = f.name.toLowerCase();
+              const isImage = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
+              const isSeparator = /separator|divider|line|rule/i.test(nameLower);
+              const isCarousel = /carousel|slider|swiper/i.test(nameLower);
+              const isButton = /button|btn|cta/i.test(nameLower);
+
+              // Only flag padding issues on content-bearing frames, not images/separators/carousels
+              if (!isImage && !isSeparator && !isCarousel) {
+                if (f.paddingLeft === 0 && f.paddingRight === 0 && f.childCount > 0 && f.width > 100) {
+                  // Check if children include text — those definitely need padding
+                  const hasText = f.childSummary.includes("(TEXT)");
+                  if (hasText) {
+                    problems.push("[ISSUE] text content flush against edges - needs horizontal padding");
+                  }
+                }
               }
               // Asymmetric padding (left!=right or top!=bottom)
               if (f.paddingLeft !== f.paddingRight && f.paddingLeft > 0 && f.paddingRight > 0) {
@@ -9548,18 +9564,33 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               if (f.itemSpacing < 0) {
                 problems.push(`[ISSUE] NEGATIVE spacing (${f.itemSpacing})`);
               }
-              // Very large spacing
-              if (f.itemSpacing > 48) {
-                problems.push(`[ISSUE] unusually large spacing (${f.itemSpacing})`);
+              // Content overflow: frame is clipped and children may be cut off
+              if (f.clipsContent && f.sizingH === "FIXED") {
+                problems.push("[ISSUE] clipsContent=true with FIXED width - content may overflow/be cut off. Consider sizingH=FILL");
+              }
+
+              // Find siblings (same parent) to flag inconsistency
+              const siblings = allFrames.filter(s => s.parentId === f.parentId && s.id !== f.id);
+              const sameName = siblings.filter(s => s.name === f.name);
+              if (sameName.length > 0) {
+                const ref = sameName[0];
+                if (ref.paddingTop !== f.paddingTop || ref.paddingRight !== f.paddingRight ||
+                    ref.paddingBottom !== f.paddingBottom || ref.paddingLeft !== f.paddingLeft ||
+                    ref.itemSpacing !== f.itemSpacing) {
+                  problems.push(`[ISSUE] inconsistent with sibling "${ref.name}" (id=${ref.id}) - same-named frames should match`);
+                }
               }
 
               let desc =
-                `• id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}×${f.height}` +
+                `• id="${f.id}" name="${f.name}" depth=${f.depth}` +
+                (f.parentName ? ` parent="${f.parentName}"` : "") +
+                ` size=${f.width}x${f.height}` +
                 ` layout=${f.layoutMode}` +
                 ` padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]` +
                 ` spacing=${f.itemSpacing}` +
                 ` align=${f.primaryAxisAlign}/${f.counterAxisAlign}` +
                 ` sizing=${f.sizingH}/${f.sizingV}` +
+                ` clips=${f.clipsContent}` +
                 ` children(${f.childCount}): [${f.childSummary}]`;
               if (problems.length > 0) {
                 desc += `\n  ISSUES: ${problems.join("; ")}`;
@@ -9589,34 +9620,29 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `The user said: "${intentText}"\n` +
               `They want to clean up / tidy a Figma design and make its layout properties consistent and professional.\n\n` +
               (screenshotBase64 ? `A SCREENSHOT of the frame is attached. LOOK AT IT CAREFULLY to identify:\n` +
-              `- Elements that appear too close to edges (need padding)\n` +
-              `- Inconsistent spacing between similar elements\n` +
+              `- Text or content that appears clipped, truncated, or overflowing its container\n` +
+              `- Inconsistent spacing between similar/sibling elements (e.g. cards, rows)\n` +
               `- Items that look misaligned or cramped\n` +
-              `- Any visual layout problems not captured in the property data below\n\n` : "") +
+              `Use the screenshot to validate which frames truly need changes.\n\n` : "") +
               `${rootContext}\n\n` +
-              `Here are the auto-layout frames inside it with their CURRENT layout properties.\n` +
-              `Frames marked with [ISSUE] have detected problems that MUST be fixed:\n${frameDescriptions}\n\n` +
-              `ANALYZE THOROUGHLY before responding. For each frame, consider:\n` +
-              `1. Does it have appropriate horizontal padding? Content frames (with text, buttons, cards) should have 16-24px horizontal padding so content isn't flush against edges.\n` +
-              `2. Does it have appropriate vertical padding? Sections should have 16-24px vertical padding for breathing room.\n` +
-              `3. Is spacing between items reasonable? Negative spacing is almost always wrong. Common values: 4, 8, 12, 16, 20, 24.\n` +
-              `4. Are fractional values present? Round 14.5 to 16, 10.5 to 12, etc.\n` +
-              `5. Are sibling frames (same depth) consistent with each other?\n` +
-              `6. Is the padding symmetric where it should be? Left should typically equal right; top should typically equal bottom.\n\n` +
-              `Common problems to fix:\n` +
-              `- padding=[0,0,0,0] on content frames -> should be [16,16,16,16] or [12,16,12,16]\n` +
-              `- Asymmetric padding like [0,0,20,0] -> should be [16,0,16,0] or [20,0,20,0]\n` +
-              `- Negative spacing like -43 -> should be 0 or 8\n` +
-              `- Fractional values like 14.5 -> round to 16\n` +
-              `- Inconsistent padding across sibling frames\n` +
-              `- Very small padding (1-3px) on content frames -> increase to at least 8\n\n` +
-              `NEVER change or set "layoutMode". Do NOT include layoutMode in your response.\n` +
-              `PRESERVE content and layout direction.\n\n` +
-              `YOU MUST ANALYZE EVERY FRAME listed above. There are ${allFrames.length} frames. ` +
-              `For EACH frame, decide if it needs fixes. Include ALL frames that need ANY change.\n` +
-              `Frames with [ISSUE] markers MUST be included. Also include any other frames that need improvement.\n\n` +
-              `Respond with a JSON object: {"frames": [{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}, ...]}\n` +
-              `Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").\n` +
+              `Here are the auto-layout frames with their CURRENT layout properties.\n` +
+              `Frames marked with [ISSUE] have detected problems that should be fixed:\n${frameDescriptions}\n\n` +
+              `RULES - READ CAREFULLY:\n` +
+              `1. SIBLING CONSISTENCY is the top priority. Frames with the SAME NAME and SAME PARENT must have IDENTICAL padding, spacing, and alignment. Look at the "parent" field.\n` +
+              `2. DO NOT add padding to image containers, carousels, sliders, separators, dividers, or icon wrappers. These frames intentionally have 0 padding so their content fills edge-to-edge. If a frame name contains "image", "photo", "carousel", "separator", "divider", "hero", "banner", "avatar", "icon", "thumbnail", or "slider" - leave its padding at 0.\n` +
+              `3. Only add horizontal padding to frames whose children include TEXT content (marked "(TEXT)" in the child summary). Raw visual containers (images, icons) don't need padding.\n` +
+              `4. Fix text overflow: if a frame clips content (clips=true) and uses FIXED sizing, consider changing sizingH or sizingV to "FILL" or "HUG" so content isn't cut off.\n` +
+              `5. Fix fractional values - round to nearest multiple of 4 (e.g. 14.5 -> 16, 10.5 -> 12).\n` +
+              `6. Fix negative spacing - change to 0 or a small positive value (4, 8, 12).\n` +
+              `7. Make padding symmetric when appropriate (left=right, top=bottom).\n` +
+              `8. Common padding values: 8, 12, 16, 20, 24. Common spacing values: 4, 8, 12, 16, 20, 24.\n` +
+              `9. NEVER change or set "layoutMode". Do NOT include layoutMode in your response.\n` +
+              `10. Be CONSERVATIVE - only change frames that genuinely have problems. Do not touch frames that already look correct.\n\n` +
+              `YOU MUST ANALYZE EVERY FRAME listed above (${allFrames.length} frames). ` +
+              `Include ALL frames that need ANY change. Frames with [ISSUE] markers should be included.\n\n` +
+              `Respond with a JSON object:\n` +
+              `{"frames": [{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}, ...]}\n` +
+              `Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).\n` +
               `The "frames" array MUST contain entries for ALL frames that need changes. Do NOT return only one frame.`;
 
             const cleanupPayload = {
@@ -9639,6 +9665,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               counterAxisSpacing?: number;
               alignment?: string;
               counterAlignment?: string;
+              sizingH?: string;
+              sizingV?: string;
+              clipsContent?: boolean;
             }> = [];
 
             try {
@@ -9728,6 +9757,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   cS: (frame as any).counterAxisSpacing ?? 0,
                   align: (frame as any).primaryAxisAlignItems || "MIN",
                   crossAlign: (frame as any).counterAxisAlignItems || "MIN",
+                  sizH: (frame as any).layoutSizingHorizontal || "FIXED",
+                  sizV: (frame as any).layoutSizingVertical || "FIXED",
+                  clips: frame.clipsContent,
                 };
 
                 if (settings.paddingTop !== undefined) { frame.paddingTop = settings.paddingTop; }
@@ -9746,6 +9778,19 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   frame.counterAxisAlignItems = settings.counterAlignment as any;
                 }
 
+                // Apply sizing mode changes (FILL / HUG / FIXED)
+                if (settings.sizingH && ["FILL", "HUG", "FIXED"].includes(settings.sizingH)) {
+                  try { (frame as any).layoutSizingHorizontal = settings.sizingH; } catch (_e) { /* ignore */ }
+                }
+                if (settings.sizingV && ["FILL", "HUG", "FIXED"].includes(settings.sizingV)) {
+                  try { (frame as any).layoutSizingVertical = settings.sizingV; } catch (_e) { /* ignore */ }
+                }
+
+                // Apply clipsContent
+                if (settings.clipsContent !== undefined) {
+                  frame.clipsContent = settings.clipsContent;
+                }
+
                 // Compare after values to detect actual changes
                 const after = {
                   pT: frame.paddingTop, pR: frame.paddingRight,
@@ -9754,6 +9799,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   cS: (frame as any).counterAxisSpacing ?? 0,
                   align: (frame as any).primaryAxisAlignItems || "MIN",
                   crossAlign: (frame as any).counterAxisAlignItems || "MIN",
+                  sizH: (frame as any).layoutSizingHorizontal || "FIXED",
+                  sizV: (frame as any).layoutSizingVertical || "FIXED",
+                  clips: frame.clipsContent,
                 };
 
                 const realChanges: string[] = [];
@@ -9771,6 +9819,15 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
                 if (before.crossAlign !== after.crossAlign) {
                   realChanges.push(`crossAlign ${before.crossAlign}→${after.crossAlign}`);
+                }
+                if (before.sizH !== after.sizH) {
+                  realChanges.push(`sizingH ${before.sizH}→${after.sizH}`);
+                }
+                if (before.sizV !== after.sizV) {
+                  realChanges.push(`sizingV ${before.sizV}→${after.sizV}`);
+                }
+                if (before.clips !== after.clips) {
+                  realChanges.push(`clipsContent ${before.clips}→${after.clips}`);
                 }
 
                 if (realChanges.length > 0) {
