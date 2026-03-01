@@ -7370,7 +7370,7 @@ Respond with ONLY a JSON array, no markdown:
               for (const node of [...selection]) {
                 if (node.type === "FRAME") {
                   const rf = node;
-                  rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}\xD7${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
+                  rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
                 }
               }
               if (allFrames.length === 0) {
@@ -7378,7 +7378,88 @@ Respond with ONLY a JSON array, no markdown:
                 sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No frames to clean up." });
                 break;
               }
-              sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup\u2026` });
+              let preFixCount = 0;
+              const preFixChanges = [];
+              for (const fi of allFrames) {
+                const node = figma.getNodeById(fi.id);
+                if (!node || node.type !== "FRAME") continue;
+                const frame = node;
+                const nameLower = fi.name.toLowerCase();
+                const isImageFrame = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
+                const isCarouselFrame = /carousel|slider|swiper/i.test(nameLower);
+                const isSepFrame = /separator|divider|line|rule/i.test(nameLower);
+                const isVisualFrame = isImageFrame || isCarouselFrame || isSepFrame;
+                const localFixes = [];
+                if (!isVisualFrame && fi.parentLayoutMode === "VERTICAL" && fi.sizingH === "FIXED" && fi.depth > 0) {
+                  try {
+                    frame.layoutSizingHorizontal = "FILL";
+                    fi.sizingH = "FILL";
+                    localFixes.push("sizingH FIXED->FILL");
+                  } catch (_e2) {
+                  }
+                }
+                if (!isVisualFrame && fi.parentLayoutMode === "HORIZONTAL" && fi.sizingV === "FIXED" && fi.depth > 0 && fi.height > 60) {
+                  try {
+                    frame.layoutSizingVertical = "FILL";
+                    fi.sizingV = "FILL";
+                    localFixes.push("sizingV FIXED->FILL");
+                  } catch (_e2) {
+                  }
+                }
+                const round4 = (v) => Math.round(v / 4) * 4;
+                if (frame.paddingTop % 1 !== 0) {
+                  const nv = round4(frame.paddingTop);
+                  localFixes.push(`padTop ${frame.paddingTop}->${nv}`);
+                  frame.paddingTop = nv;
+                  fi.paddingTop = nv;
+                }
+                if (frame.paddingRight % 1 !== 0) {
+                  const nv = round4(frame.paddingRight);
+                  localFixes.push(`padRight ${frame.paddingRight}->${nv}`);
+                  frame.paddingRight = nv;
+                  fi.paddingRight = nv;
+                }
+                if (frame.paddingBottom % 1 !== 0) {
+                  const nv = round4(frame.paddingBottom);
+                  localFixes.push(`padBot ${frame.paddingBottom}->${nv}`);
+                  frame.paddingBottom = nv;
+                  fi.paddingBottom = nv;
+                }
+                if (frame.paddingLeft % 1 !== 0) {
+                  const nv = round4(frame.paddingLeft);
+                  localFixes.push(`padLeft ${frame.paddingLeft}->${nv}`);
+                  frame.paddingLeft = nv;
+                  fi.paddingLeft = nv;
+                }
+                if (frame.itemSpacing % 1 !== 0) {
+                  const nv = round4(frame.itemSpacing);
+                  localFixes.push(`spacing ${frame.itemSpacing}->${nv}`);
+                  frame.itemSpacing = nv;
+                  fi.itemSpacing = nv;
+                }
+                if (frame.itemSpacing < 0) {
+                  localFixes.push(`spacing ${frame.itemSpacing}->0`);
+                  frame.itemSpacing = 0;
+                  fi.itemSpacing = 0;
+                }
+                if (/button|btn|cta/i.test(nameLower) && fi.sizingV === "FIXED" && frame.clipsContent) {
+                  try {
+                    frame.layoutSizingVertical = "HUG";
+                    fi.sizingV = "HUG";
+                    localFixes.push("sizingV FIXED->HUG (button)");
+                  } catch (_e2) {
+                  }
+                }
+                if (localFixes.length > 0) {
+                  preFixCount++;
+                  preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
+                  console.log(`[Cleanup pre-fix] "${fi.name}": ${localFixes.join(", ")}`);
+                }
+              }
+              if (preFixCount > 0) {
+                console.log(`[Cleanup] Pre-fixed ${preFixCount} frames locally before LLM analysis`);
+              }
+              sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup...` });
               const frameDescriptions = allFrames.map((f) => {
                 const problems = [];
                 const nameLower = f.name.toLowerCase();
@@ -7401,12 +7482,21 @@ Respond with ONLY a JSON array, no markdown:
                 if (!isImage && !isCarousel && f.clipsContent && f.sizingV === "FIXED") {
                   problems.push("[ISSUE] clipsContent=true with FIXED height -- content IS being clipped vertically. Consider sizingV=HUG");
                 }
-                if (!isImage && !isSeparator && !isCarousel && hasText) {
+                const hasDeepText = hasText || /labels|content|body|description|title|subtitle|text|paragraph|caption/i.test(f.childSummary);
+                if (!isImage && !isSeparator && !isCarousel && hasDeepText) {
                   if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
                     problems.push("[ISSUE] text content flush against L/R edges -- needs horizontal padding (16px)");
                   }
                   if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
                     problems.push("[ISSUE] text content with no vertical padding -- needs top/bottom padding");
+                  }
+                }
+                if (!isSeparator && !isCarousel) {
+                  if (f.paddingLeft === 0 !== (f.paddingRight === 0) && f.paddingLeft + f.paddingRight > 0) {
+                    problems.push(`[ISSUE] one-sided horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight}) -- should be symmetric`);
+                  }
+                  if (f.paddingTop === 0 !== (f.paddingBottom === 0) && f.paddingTop + f.paddingBottom > 4) {
+                    problems.push(`[ISSUE] one-sided vertical padding (T=${f.paddingTop}, B=${f.paddingBottom}) -- should be symmetric`);
                   }
                 }
                 if (isButton) {
@@ -7453,13 +7543,24 @@ Respond with ONLY a JSON array, no markdown:
                     problems.push(`[ISSUE] INCONSISTENT sizing with sibling -- should match (${ref.sizingH}/${ref.sizingV})`);
                   }
                 }
-                let desc = `- id="${f.id}" name="${f.name}" depth=${f.depth}` + (f.parentName ? ` parent="${f.parentName}"` : "") + (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") + ` size=${f.width}x${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} clips=${f.clipsContent} children(${f.childCount}): [${f.childSummary}]`;
+                if (f.sizingV === "FIXED" && f.childCount <= 3 && f.height > 100 && !isImage && !isCarousel) {
+                  const expectedH = f.paddingTop + f.paddingBottom + f.childCount * 30 + (f.childCount - 1) * f.itemSpacing;
+                  if (f.height > expectedH * 2) {
+                    problems.push(`[ISSUE] frame height (${f.height}px) seems excessive for ${f.childCount} children -- consider sizingV=HUG`);
+                  }
+                }
+                let desc = `- id="${f.id}" name="${f.name}" depth=${f.depth}` + (f.parentName ? ` parent="${f.parentName}"` : "") + (f.parentLayoutMode ? ` parentLayout=${f.parentLayoutMode}` : "") + (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") + ` size=${f.width}x${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} clips=${f.clipsContent} children(${f.childCount}): [${f.childSummary}]`;
                 if (problems.length > 0) {
                   desc += `
   ** ${problems.join("\n  ** ")}`;
                 }
                 return desc;
               }).join("\n");
+              console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+              console.log(`[Cleanup] FRAME ANALYSIS (${allFrames.length} frames):`);
+              console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+              console.log(frameDescriptions);
+              console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
               let screenshotBase64 = "";
               try {
                 const rootNode = selection[0];
@@ -7518,10 +7619,19 @@ Include ALL frames that need changes. Do NOT return only one frame.`;
               };
               let cleanupSettings = [];
               try {
-                console.log(`[Cleanup] Sending prompt (${cleanupPrompt.length} chars) with ${allFrames.length} frames`);
+                console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+                console.log(`[Cleanup] FULL PROMPT (${cleanupPrompt.length} chars):`);
+                console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+                console.log(cleanupPrompt);
+                console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+                console.log(`[Cleanup] Sending to LLM with ${allFrames.length} frames, screenshot=${screenshotBase64.length > 0 ? screenshotBase64.length + " bytes" : "none"}...`);
                 const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload);
+                console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+                console.log(`[Cleanup] FULL LLM RESPONSE:`);
+                console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
+                console.log(JSON.stringify(cleanupResult, null, 2));
+                console.log(`[Cleanup] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
                 console.log(`[Cleanup] Raw response type=${typeof cleanupResult}, isArray=${Array.isArray(cleanupResult)}, keys=${cleanupResult ? Object.keys(cleanupResult).join(",") : "null"}`);
-                console.log(`[Cleanup] Raw response preview: ${JSON.stringify(cleanupResult).slice(0, 500)}`);
                 if (Array.isArray(cleanupResult)) {
                   cleanupSettings = cleanupResult;
                 } else if (cleanupResult && typeof cleanupResult === "object") {

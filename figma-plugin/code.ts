@@ -9519,7 +9519,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             for (const node of [...selection]) {
               if (node.type === "FRAME") {
                 const rf = node as FrameNode;
-                rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}×${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
+                rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
               }
             }
 
@@ -9529,7 +9529,67 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               break;
             }
 
-            sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup…` });
+            // ── LOCAL PRE-FIX PASS: deterministic fixes that don't need LLM ──
+            let preFixCount = 0;
+            const preFixChanges: string[] = [];
+            for (const fi of allFrames) {
+              const node = figma.getNodeById(fi.id) as SceneNode | null;
+              if (!node || node.type !== "FRAME") continue;
+              const frame = node as FrameNode;
+              const nameLower = fi.name.toLowerCase();
+              const isImageFrame = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
+              const isCarouselFrame = /carousel|slider|swiper/i.test(nameLower);
+              const isSepFrame = /separator|divider|line|rule/i.test(nameLower);
+              const isVisualFrame = isImageFrame || isCarouselFrame || isSepFrame;
+              const localFixes: string[] = [];
+
+              // Fix 1: FIXED -> FILL for non-visual children in auto-layout parents
+              if (!isVisualFrame && fi.parentLayoutMode === "VERTICAL" && fi.sizingH === "FIXED" && fi.depth > 0) {
+                try {
+                  (frame as any).layoutSizingHorizontal = "FILL";
+                  fi.sizingH = "FILL";
+                  localFixes.push("sizingH FIXED->FILL");
+                } catch (_e) { /* ignore */ }
+              }
+              if (!isVisualFrame && fi.parentLayoutMode === "HORIZONTAL" && fi.sizingV === "FIXED" && fi.depth > 0 && fi.height > 60) {
+                try {
+                  (frame as any).layoutSizingVertical = "FILL";
+                  fi.sizingV = "FILL";
+                  localFixes.push("sizingV FIXED->FILL");
+                } catch (_e) { /* ignore */ }
+              }
+
+              // Fix 2: Round fractional padding/spacing to nearest 4
+              const round4 = (v: number) => Math.round(v / 4) * 4;
+              if (frame.paddingTop % 1 !== 0) { const nv = round4(frame.paddingTop); localFixes.push(`padTop ${frame.paddingTop}->${nv}`); frame.paddingTop = nv; fi.paddingTop = nv; }
+              if (frame.paddingRight % 1 !== 0) { const nv = round4(frame.paddingRight); localFixes.push(`padRight ${frame.paddingRight}->${nv}`); frame.paddingRight = nv; fi.paddingRight = nv; }
+              if (frame.paddingBottom % 1 !== 0) { const nv = round4(frame.paddingBottom); localFixes.push(`padBot ${frame.paddingBottom}->${nv}`); frame.paddingBottom = nv; fi.paddingBottom = nv; }
+              if (frame.paddingLeft % 1 !== 0) { const nv = round4(frame.paddingLeft); localFixes.push(`padLeft ${frame.paddingLeft}->${nv}`); frame.paddingLeft = nv; fi.paddingLeft = nv; }
+              if (frame.itemSpacing % 1 !== 0) { const nv = round4(frame.itemSpacing); localFixes.push(`spacing ${frame.itemSpacing}->${nv}`); frame.itemSpacing = nv; fi.itemSpacing = nv; }
+
+              // Fix 3: Negative spacing -> 0
+              if (frame.itemSpacing < 0) { localFixes.push(`spacing ${frame.itemSpacing}->0`); frame.itemSpacing = 0; fi.itemSpacing = 0; }
+
+              // Fix 4: Buttons with FIXED height and clipsContent should be HUG
+              if (/button|btn|cta/i.test(nameLower) && fi.sizingV === "FIXED" && frame.clipsContent) {
+                try {
+                  (frame as any).layoutSizingVertical = "HUG";
+                  fi.sizingV = "HUG";
+                  localFixes.push("sizingV FIXED->HUG (button)");
+                } catch (_e) { /* ignore */ }
+              }
+
+              if (localFixes.length > 0) {
+                preFixCount++;
+                preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
+                console.log(`[Cleanup pre-fix] "${fi.name}": ${localFixes.join(", ")}`);
+              }
+            }
+            if (preFixCount > 0) {
+              console.log(`[Cleanup] Pre-fixed ${preFixCount} frames locally before LLM analysis`);
+            }
+
+            sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup...` });
 
             // ── Build a rich description of current layout state ──
             // Group frames by parent to emphasize sibling consistency
@@ -9566,13 +9626,23 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // ── PADDING issues ──
-              // Text content flush against edges
-              if (!isImage && !isSeparator && !isCarousel && hasText) {
+              // Text content flush against edges — check both direct TEXT children and frame children with text-related names
+              const hasDeepText = hasText || /labels|content|body|description|title|subtitle|text|paragraph|caption/i.test(f.childSummary);
+              if (!isImage && !isSeparator && !isCarousel && hasDeepText) {
                 if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
                   problems.push("[ISSUE] text content flush against L/R edges -- needs horizontal padding (16px)");
                 }
                 if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
                   problems.push("[ISSUE] text content with no vertical padding -- needs top/bottom padding");
+                }
+              }
+              // Asymmetric padding where one side is 0 and the other isn't (not for separators/dividers)
+              if (!isSeparator && !isCarousel) {
+                if ((f.paddingLeft === 0) !== (f.paddingRight === 0) && (f.paddingLeft + f.paddingRight > 0)) {
+                  problems.push(`[ISSUE] one-sided horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight}) -- should be symmetric`);
+                }
+                if ((f.paddingTop === 0) !== (f.paddingBottom === 0) && (f.paddingTop + f.paddingBottom > 4)) {
+                  problems.push(`[ISSUE] one-sided vertical padding (T=${f.paddingTop}, B=${f.paddingBottom}) -- should be symmetric`);
                 }
               }
 
@@ -9636,9 +9706,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
               }
 
+              // Frame height way too large for a frame with few children (e.g. button at 154px)
+              if (f.sizingV === "FIXED" && f.childCount <= 3 && f.height > 100 && !isImage && !isCarousel) {
+                const expectedH = (f.paddingTop + f.paddingBottom) + (f.childCount * 30) + ((f.childCount - 1) * f.itemSpacing);
+                if (f.height > expectedH * 2) {
+                  problems.push(`[ISSUE] frame height (${f.height}px) seems excessive for ${f.childCount} children -- consider sizingV=HUG`);
+                }
+              }
+
               let desc =
                 `- id="${f.id}" name="${f.name}" depth=${f.depth}` +
                 (f.parentName ? ` parent="${f.parentName}"` : "") +
+                (f.parentLayoutMode ? ` parentLayout=${f.parentLayoutMode}` : "") +
                 (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") +
                 ` size=${f.width}x${f.height}` +
                 ` layout=${f.layoutMode}` +
@@ -9653,6 +9732,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
               return desc;
             }).join("\n");
+
+            // ── Debug: log detected issues per frame ──
+            console.log(`[Cleanup] ═══════════════════════════════════════════`);
+            console.log(`[Cleanup] FRAME ANALYSIS (${allFrames.length} frames):`);
+            console.log(`[Cleanup] ═══════════════════════════════════════════`);
+            console.log(frameDescriptions);
+            console.log(`[Cleanup] ═══════════════════════════════════════════`);
 
             // ── Export a screenshot of the selected frame for vision analysis ──
             let screenshotBase64 = "";
@@ -9729,10 +9815,19 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             }> = [];
 
             try {
-              console.log(`[Cleanup] Sending prompt (${cleanupPrompt.length} chars) with ${allFrames.length} frames`);
+              console.log(`[Cleanup] ═══════════════════════════════════════════`);
+              console.log(`[Cleanup] FULL PROMPT (${cleanupPrompt.length} chars):`);
+              console.log(`[Cleanup] ═══════════════════════════════════════════`);
+              console.log(cleanupPrompt);
+              console.log(`[Cleanup] ═══════════════════════════════════════════`);
+              console.log(`[Cleanup] Sending to LLM with ${allFrames.length} frames, screenshot=${screenshotBase64.length > 0 ? screenshotBase64.length + ' bytes' : 'none'}...`);
               const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload) as any;
+              console.log(`[Cleanup] ═══════════════════════════════════════════`);
+              console.log(`[Cleanup] FULL LLM RESPONSE:`);
+              console.log(`[Cleanup] ═══════════════════════════════════════════`);
+              console.log(JSON.stringify(cleanupResult, null, 2));
+              console.log(`[Cleanup] ═══════════════════════════════════════════`);
               console.log(`[Cleanup] Raw response type=${typeof cleanupResult}, isArray=${Array.isArray(cleanupResult)}, keys=${cleanupResult ? Object.keys(cleanupResult).join(",") : "null"}`);
-              console.log(`[Cleanup] Raw response preview: ${JSON.stringify(cleanupResult).slice(0, 500)}`);
               // analyze=true returns parsed JSON directly — may be array, single object, or wrapped
               if (Array.isArray(cleanupResult)) {
                 cleanupSettings = cleanupResult;
