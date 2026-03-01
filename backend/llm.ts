@@ -164,19 +164,23 @@ async function callOpenAI(
   model: string,
   maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  jsonMode: boolean = true
 ): Promise<string> {
   const client = getOpenAIClient(apiKey);
+  const params: any = {
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  };
+  if (jsonMode) {
+    params.response_format = { type: "json_object" };
+  }
   const completion = await client.chat.completions.create(
-    {
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      response_format: { type: "json_object" },
-    },
+    params,
     { signal: abort.signal as any }
   );
   const text = completion.choices[0]?.message?.content;
@@ -194,15 +198,18 @@ async function callGemini(
   model: string,
   _maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  jsonMode: boolean = true
 ): Promise<string> {
   const client = getGeminiClient(apiKey);
+  const genConfig: any = {};
+  if (jsonMode) {
+    genConfig.responseMimeType = "application/json";
+  }
   const genModel = client.getGenerativeModel({
     model,
     systemInstruction: systemPrompt,
-    generationConfig: {
-      responseMimeType: "application/json",
-    },
+    generationConfig: genConfig,
   });
   const result = await genModel.generateContent(
     { contents: [{ role: "user", parts: [{ text: userPrompt }] }] },
@@ -224,15 +231,16 @@ async function callProvider(
   model: string,
   maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  jsonMode: boolean = true
 ): Promise<string> {
   switch (provider) {
     case "anthropic":
       return callAnthropic(systemPrompt, userPrompt, model, maxTokens, apiKey, abort);
     case "openai":
-      return callOpenAI(systemPrompt, userPrompt, model, maxTokens, apiKey, abort);
+      return callOpenAI(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, jsonMode);
     case "gemini":
-      return callGemini(systemPrompt, userPrompt, model, maxTokens, apiKey, abort);
+      return callGemini(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, jsonMode);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
@@ -288,13 +296,23 @@ export async function callLLMAnalyze(
       "Return a numbered list. Be thorough — list EVERY problem, even minor ones. Do NOT suggest fixes, just describe what you see.";
     returnRaw = true;
   } else if (mode === "verify") {
-    // Verification pass — check if problems remain, return fixes or empty
+    // Verification pass — skeptically check if problems remain, return fixes or empty
     systemPrompt =
-      "You are a design layout analyzer doing a quality check. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
+      "You are a CRITICAL design QA inspector. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
       "IMPORTANT: Always return a JSON object with a single key \"frames\" whose value is an array: {\"frames\": [...]}. " +
-      "If the layout looks correct with no remaining problems, return {\"frames\": []}. " +
-      "Only return fixes for problems that STILL exist — do not re-fix things that are already correct. " +
-      "A screenshot of the current state is provided. Trust what you see in the screenshot over the data.";
+      "A screenshot of the current state is provided. CAREFULLY examine every pixel of the screenshot. " +
+      "Be SKEPTICAL — assume there ARE remaining problems until you have checked every item below. " +
+      "Check ALL of the following systematically: " +
+      "1) Text overlapping other text or elements. " +
+      "2) Elements touching or jammed against container edges with no margin. " +
+      "3) Excessive gaps (>40px) between sections that should be closer. " +
+      "4) Content clipped, cropped, or overflowing its container. " +
+      "5) Buttons that are too tall (>60px) or too wide (stretching full width when they shouldn't). " +
+      "6) Inconsistent padding — similar containers should have similar padding. " +
+      "7) Elements that are obviously misaligned with their siblings. " +
+      "8) Sections with clearly wrong proportions. " +
+      "Only return {\"frames\": []} if you have checked ALL 8 items above and found ZERO problems. " +
+      "If you find ANY problem, return the specific fixes needed. Trust the screenshot over the frame data.";
   } else {
     // Default fix mode — return JSON fixes
     systemPrompt =
@@ -310,12 +328,13 @@ export async function callLLMAnalyze(
   const abort = new AbortController();
   _activeAbort = abort;
 
+  const jsonMode = !returnRaw; // visualReview mode = no JSON format constraint
   let raw: string;
   try {
     if (imageBase64) {
-      raw = await callProviderWithImage(provider, systemPrompt, prompt, imageBase64, resolvedModel, 8192, apiKey, abort);
+      raw = await callProviderWithImage(provider, systemPrompt, prompt, imageBase64, resolvedModel, 8192, apiKey, abort, jsonMode);
     } else {
-      raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 8192, apiKey, abort);
+      raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 8192, apiKey, abort, jsonMode);
     }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
@@ -339,15 +358,16 @@ async function callProviderWithImage(
   model: string,
   maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  jsonMode: boolean = true
 ): Promise<string> {
   switch (provider) {
     case "anthropic":
       return callAnthropicWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort);
     case "openai":
-      return callOpenAIWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort);
+      return callOpenAIWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort, jsonMode);
     case "gemini":
-      return callGeminiWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort);
+      return callGeminiWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort, jsonMode);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
@@ -405,34 +425,38 @@ async function callOpenAIWithImage(
   model: string,
   maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  jsonMode: boolean = true
 ): Promise<string> {
   const client = getOpenAIClient(apiKey);
+  const params: any = {
+    model,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      {
+        role: "user",
+        content: [
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${imageBase64}`,
+              detail: "high",
+            },
+          },
+          {
+            type: "text",
+            text: userPrompt,
+          },
+        ],
+      },
+    ],
+  };
+  if (jsonMode) {
+    params.response_format = { type: "json_object" };
+  }
   const completion = await client.chat.completions.create(
-    {
-      model,
-      max_tokens: maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/png;base64,${imageBase64}`,
-                detail: "high",
-              },
-            },
-            {
-              type: "text",
-              text: userPrompt,
-            },
-          ],
-        },
-      ],
-      response_format: { type: "json_object" },
-    },
+    params,
     { signal: abort.signal as any }
   );
   const text = completion.choices[0]?.message?.content;
@@ -449,15 +473,18 @@ async function callGeminiWithImage(
   model: string,
   _maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  jsonMode: boolean = true
 ): Promise<string> {
   const client = getGeminiClient(apiKey);
+  const genConfig: any = {};
+  if (jsonMode) {
+    genConfig.responseMimeType = "application/json";
+  }
   const genModel = client.getGenerativeModel({
     model,
     systemInstruction: systemPrompt,
-    generationConfig: {
-      responseMimeType: "application/json",
-    },
+    generationConfig: genConfig,
   });
   const result = await genModel.generateContent(
     {

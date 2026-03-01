@@ -9422,8 +9422,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           sendToUI({ type: "job-started", jobId: nativeJobIdCU, prompt: intentText } as any);
 
           try {
-            // ── Collect all frames in the hierarchy (max 3 levels deep) ──
-            const MAX_CU_DEPTH = 3;
+            // ── Collect all frames in the hierarchy (max 5 levels deep) ──
+            const MAX_CU_DEPTH = 5;
 
             interface CleanupFrameInfo {
               id: string;
@@ -9558,17 +9558,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   }
 
                   // Fix B: child overflows parent right edge — resize to fit from current x
-                  // We preserve the child's x position (intentional inset/margin) and only
-                  // shrink width to fit. If the child fits but is just mispositioned, shift.
                   const curW = Math.round(child.width);
                   if (curX + curW > parentW + 2 && !isVisChild) {
                     if (curW <= parentW) {
-                      // Child width fits within parent — just shift left to eliminate overflow
                       const newX = parentW - curW;
                       child.x = newX;
                       fixes.push(`x ${curX}->${newX} (shift to fit)`);
                     } else {
-                      // Child is wider than parent — resize to available space from current position
                       const targetW = parentW - curX;
                       if (targetW > 0) {
                         try {
@@ -9579,8 +9575,22 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     }
                   }
 
+                  // Fix C: child touches right edge with no margin — add inset
+                  // For non-full-width elements that end exactly at parent right edge,
+                  // add a small margin so content doesn't feel jammed against the edge.
+                  const rightEdge = Math.round(child.x) + Math.round(child.width);
+                  if (!isVisChild && rightEdge >= parentW - 1 && Math.round(child.width) < parentW - 16) {
+                    // Element ends at right edge but isn't full-width — needs margin
+                    const margin = 16;
+                    const newX = parentW - Math.round(child.width) - margin;
+                    if (newX >= 0 && newX !== Math.round(child.x)) {
+                      child.x = newX;
+                      fixes.push(`x ${Math.round(child.x + (child.x - newX))}->${newX} (right margin)`);
+                    }
+                  }
+
                   // Fix D: child.y < 0 — shift to y=0
-                  if (childY < -2) { // allow tiny negative for anti-aliasing
+                  if (childY < -2) {
                     child.y = 0;
                     fixes.push(`y ${childY}->0`);
                   }
@@ -9617,6 +9627,32 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   for (const gc of (child as GroupNode).children) {
                     if (gc.type === "FRAME") {
                       fixPositionAndBounds(gc, depth + 1);
+                    }
+                  }
+                }
+              }
+
+              // Fix F: NONE-layout siblings overlapping vertically — shift down
+              // If two sibling elements overlap vertically, push the lower one down
+              if (parentLM === "NONE" && parent.children.length >= 2) {
+                const sortedKids = [...parent.children].sort((a, b) => a.y - b.y);
+                for (let i = 1; i < sortedKids.length; i++) {
+                  const prev = sortedKids[i - 1];
+                  const curr = sortedKids[i];
+                  const prevBottom = Math.round(prev.y + prev.height);
+                  const currTop = Math.round(curr.y);
+                  const isVisCurr = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test((curr.name || "").toLowerCase());
+                  const isVisPrev = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test((prev.name || "").toLowerCase());
+                  // Only fix overlaps, not just touching — overlap needs at least 3px
+                  if (currTop < prevBottom - 2 && !isVisCurr && !isVisPrev) {
+                    const gap = 8; // small gap between elements
+                    const newY = prevBottom + gap;
+                    if (newY !== currTop) {
+                      const oldY = curr.y;
+                      curr.y = newY;
+                      phase0Count++;
+                      phase0Changes.push(`"${curr.name}": y ${Math.round(oldY)}->${newY} (overlap fix)`);
+                      console.log(`[Cleanup Phase0] "${curr.name}" in "${parent.name}": y ${Math.round(oldY)}->${newY} (overlap with "${prev.name}")`);
                     }
                   }
                 }
@@ -10480,17 +10516,21 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               frameDescriptions = buildFrameDescriptions(allFrames);
 
               const verifyPrompt =
-                `The layout has been cleaned up. Check if any visual problems REMAIN.\n\n` +
+                `CRITICAL QA CHECK — Examine the screenshot carefully for ANY remaining layout problems.\n\n` +
                 `${rootContext}\n\n` +
                 `Current frame state:\n${frameDescriptions}\n\n` +
                 fixRulesText + `\n\n` +
-                `If the layout looks correct with no remaining problems, return: {"frames": []}\n` +
-                `Otherwise, return fixes ONLY for problems that STILL exist. Do not re-fix things that are already correct.\n` +
-                `Common remaining issues to check:\n` +
-                `- Buttons still oversized (should be ~50px tall, not 100+)\n` +
-                `- Cards with inconsistent padding\n` +
-                `- Elements still overflowing their parents\n` +
-                `- Excessive spacing between sections`;
+                `SYSTEMATICALLY CHECK each of the following. For each issue found, return the fix:\n` +
+                `1. TEXT OVERLAP: Any text clashing with or overlapping other text/elements?\n` +
+                `2. EDGE TOUCHING: Any element touching its container edge with <8px margin?\n` +
+                `3. EXCESSIVE GAPS: Any gap >40px between sections that should be closer together?\n` +
+                `4. CLIPPING/OVERFLOW: Any content cut off or overflowing its container?\n` +
+                `5. OVERSIZED ELEMENTS: Buttons/chips taller than 60px? Elements stretched too wide?\n` +
+                `6. PADDING INCONSISTENCY: Similar containers with very different padding values?\n` +
+                `7. MISALIGNMENT: Sibling elements that should be aligned but are offset?\n` +
+                `8. WRONG PROPORTIONS: Sections taking up too much or too little space?\n\n` +
+                `Return fixes for ALL problems found. Only return {"frames": []} if ALL 8 checks pass with ZERO issues.\n` +
+                `Do NOT re-fix things that are already correct — only fix remaining problems.`;
 
               console.log(`[Cleanup Pass ${pass}] ═══════════════════════════════════════════`);
               console.log(`[Cleanup Pass ${pass}] VERIFY PROMPT (${verifyPrompt.length} chars)`);

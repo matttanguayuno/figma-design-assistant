@@ -7398,6 +7398,15 @@ Respond with ONLY a JSON array, no markdown:
                         }
                       }
                     }
+                    const rightEdge = Math.round(child.x) + Math.round(child.width);
+                    if (!isVisChild && rightEdge >= parentW - 1 && Math.round(child.width) < parentW - 16) {
+                      const margin = 16;
+                      const newX = parentW - Math.round(child.width) - margin;
+                      if (newX >= 0 && newX !== Math.round(child.x)) {
+                        child.x = newX;
+                        fixes.push(`x ${Math.round(child.x + (child.x - newX))}->${newX} (right margin)`);
+                      }
+                    }
                     if (childY < -2) {
                       child.y = 0;
                       fixes.push(`y ${childY}->0`);
@@ -7431,6 +7440,28 @@ Respond with ONLY a JSON array, no markdown:
                     for (const gc of child.children) {
                       if (gc.type === "FRAME") {
                         fixPositionAndBounds2(gc, depth + 1);
+                      }
+                    }
+                  }
+                }
+                if (parentLM === "NONE" && parent.children.length >= 2) {
+                  const sortedKids = [...parent.children].sort((a, b) => a.y - b.y);
+                  for (let i = 1; i < sortedKids.length; i++) {
+                    const prev = sortedKids[i - 1];
+                    const curr = sortedKids[i];
+                    const prevBottom = Math.round(prev.y + prev.height);
+                    const currTop = Math.round(curr.y);
+                    const isVisCurr = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test((curr.name || "").toLowerCase());
+                    const isVisPrev = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test((prev.name || "").toLowerCase());
+                    if (currTop < prevBottom - 2 && !isVisCurr && !isVisPrev) {
+                      const gap = 8;
+                      const newY = prevBottom + gap;
+                      if (newY !== currTop) {
+                        const oldY = curr.y;
+                        curr.y = newY;
+                        phase0Count++;
+                        phase0Changes.push(`"${curr.name}": y ${Math.round(oldY)}->${newY} (overlap fix)`);
+                        console.log(`[Cleanup Phase0] "${curr.name}" in "${parent.name}": y ${Math.round(oldY)}->${newY} (overlap with "${prev.name}")`);
                       }
                     }
                   }
@@ -7836,7 +7867,7 @@ Respond with ONLY a JSON array, no markdown:
                 return { count, changes };
               };
               var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2;
-              const MAX_CU_DEPTH = 3;
+              const MAX_CU_DEPTH = 5;
               const allFrames = [];
               for (const node of [...selection]) {
                 collectCleanupFrames2(node, allFrames, 0, null, null, null, null);
@@ -8284,7 +8315,7 @@ IMPORTANT: Address EVERY problem from the visual review above. Do not skip any.`
                 figma.notify(`Cleanup pass ${pass}/${MAX_CLEANUP_PASSES}: verifying layout...`, { timeout: 3e3 });
                 screenshotBase64 = await captureScreenshot();
                 frameDescriptions = buildFrameDescriptions2(allFrames);
-                const verifyPrompt = `The layout has been cleaned up. Check if any visual problems REMAIN.
+                const verifyPrompt = `CRITICAL QA CHECK \u2014 Examine the screenshot carefully for ANY remaining layout problems.
 
 ${rootContext}
 
@@ -8293,13 +8324,18 @@ ${frameDescriptions}
 
 ` + fixRulesText + `
 
-If the layout looks correct with no remaining problems, return: {"frames": []}
-Otherwise, return fixes ONLY for problems that STILL exist. Do not re-fix things that are already correct.
-Common remaining issues to check:
-- Buttons still oversized (should be ~50px tall, not 100+)
-- Cards with inconsistent padding
-- Elements still overflowing their parents
-- Excessive spacing between sections`;
+SYSTEMATICALLY CHECK each of the following. For each issue found, return the fix:
+1. TEXT OVERLAP: Any text clashing with or overlapping other text/elements?
+2. EDGE TOUCHING: Any element touching its container edge with <8px margin?
+3. EXCESSIVE GAPS: Any gap >40px between sections that should be closer together?
+4. CLIPPING/OVERFLOW: Any content cut off or overflowing its container?
+5. OVERSIZED ELEMENTS: Buttons/chips taller than 60px? Elements stretched too wide?
+6. PADDING INCONSISTENCY: Similar containers with very different padding values?
+7. MISALIGNMENT: Sibling elements that should be aligned but are offset?
+8. WRONG PROPORTIONS: Sections taking up too much or too little space?
+
+Return fixes for ALL problems found. Only return {"frames": []} if ALL 8 checks pass with ZERO issues.
+Do NOT re-fix things that are already correct \u2014 only fix remaining problems.`;
                 console.log(`[Cleanup Pass ${pass}] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
                 console.log(`[Cleanup Pass ${pass}] VERIFY PROMPT (${verifyPrompt.length} chars)`);
                 console.log(`[Cleanup Pass ${pass}] \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550`);
