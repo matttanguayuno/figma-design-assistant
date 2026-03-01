@@ -9579,6 +9579,45 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 } catch (_e) { /* ignore */ }
               }
 
+              // Fix 5: Sibling padding normalization — similar-named siblings should match
+              const preFSiblings = allFrames.filter(s => s.parentId === fi.parentId && s.id !== fi.id);
+              const preFPrefix = fi.name.split(" ").slice(0, 2).join(" ");
+              const preFSimilar = preFSiblings.filter(s => preFPrefix.length > 3 && s.name.startsWith(preFPrefix));
+              if (preFSimilar.length > 0 && !isVisualFrame) {
+                // Use the most common padding among similar siblings (including self)
+                const group = [fi, ...preFSimilar];
+                const padCounts = new Map<string, number>();
+                for (const g of group) {
+                  const key = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
+                  padCounts.set(key, (padCounts.get(key) || 0) + 1);
+                }
+                let bestPad = `${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}`;
+                let bestCount = 0;
+                for (const [key, count] of padCounts) {
+                  if (count > bestCount) { bestCount = count; bestPad = key; }
+                }
+                const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
+                if (fi.paddingTop !== bT || fi.paddingRight !== bR || fi.paddingBottom !== bB || fi.paddingLeft !== bL) {
+                  const oldPad = `[${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}]`;
+                  frame.paddingTop = bT; fi.paddingTop = bT;
+                  frame.paddingRight = bR; fi.paddingRight = bR;
+                  frame.paddingBottom = bB; fi.paddingBottom = bB;
+                  frame.paddingLeft = bL; fi.paddingLeft = bL;
+                  localFixes.push(`pad ${oldPad}->[${bT},${bR},${bB},${bL}] (sibling match)`);
+                }
+              }
+
+              // Fix 6: Child wider than parent -> FILL (if in auto-layout parent)
+              if (!isVisualFrame && fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
+                try {
+                  if (fi.parentLayoutMode === "VERTICAL") {
+                    (frame as any).layoutSizingHorizontal = "FILL";
+                    fi.sizingH = "FILL";
+                    localFixes.push(`sizingH->FILL (${fi.width}>${fi.parentWidth})`);
+                  }
+                } catch (_e) { /* ignore */ }
+              }
+
               if (localFixes.length > 0) {
                 preFixCount++;
                 preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
@@ -9691,6 +9730,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 problems.push(`[ISSUE] very large spacing (${f.itemSpacing}) -- consider reducing to 16-24px`);
               }
 
+              // ── CHILD WIDER/TALLER THAN PARENT ──
+              if (f.parentWidth && f.width > f.parentWidth && !isCarousel) {
+                problems.push(`[ISSUE] frame width (${f.width}) exceeds parent width (${f.parentWidth}) -- overflowing. Set sizingH=FILL`);
+              }
+
               // ── SIBLING CONSISTENCY ──
               const siblings = allFrames.filter(s => s.parentId === f.parentId && s.id !== f.id);
               const sameName = siblings.filter(s => s.name === f.name);
@@ -9703,6 +9747,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
                 if (ref.sizingH !== f.sizingH || ref.sizingV !== f.sizingV) {
                   problems.push(`[ISSUE] INCONSISTENT sizing with sibling -- should match (${ref.sizingH}/${ref.sizingV})`);
+                }
+              }
+              // Also check siblings with similar names (e.g. "Button Large Primary" vs "Button Large Secondary")
+              const samePrefix = siblings.filter(s => {
+                const prefix = f.name.split(" ").slice(0, 2).join(" ");
+                return prefix.length > 3 && s.name.startsWith(prefix) && s.name !== f.name;
+              });
+              if (samePrefix.length > 0) {
+                const ref = samePrefix[0];
+                if (ref.paddingTop !== f.paddingTop || ref.paddingBottom !== f.paddingBottom ||
+                    ref.paddingLeft !== f.paddingLeft || ref.paddingRight !== f.paddingRight) {
+                  problems.push(`[ISSUE] padding differs from similar sibling "${ref.name}" (pad=[${ref.paddingTop},${ref.paddingRight},${ref.paddingBottom},${ref.paddingLeft}] vs [${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]) -- should match`);
                 }
               }
 
@@ -9781,7 +9837,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `6. FIX NEGATIVE SPACING: Change to 0 or a small positive value (4, 8, 12, 16).\n` +
               `7. MAKE PADDING SYMMETRIC: left should equal right, top should equal bottom.\n` +
               `8. NEVER change or set "layoutMode".\n\n` +
-              `YOU MUST FIX EVERY FRAME that has ** markers. There are ${allFrames.length} frames total.\n` +
+              `YOU MUST FIX EVERY FRAME that has ** markers. Also fix any OTHER frame that looks wrong in the screenshot, even if not flagged.\n` +
+              `There are ${allFrames.length} frames total. Return fixes for as many as needed -- typically 8-15 frames need changes.\n` +
               `Be AGGRESSIVE -- fix everything that has an issue. Do not leave problems unfixed.\n\n` +
               `Respond with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}\n` +
               `Properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, ` +
@@ -9906,6 +9963,20 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 // Strip sizing changes — these frames should keep their original sizing
                 delete settings.sizingH;
                 delete settings.sizingV;
+              }
+
+              // Safety guard: skip sizing changes for frames whose parent has layoutMode=NONE
+              // (Figma ignores layoutSizingHorizontal/Vertical when parent isn't auto-layout)
+              const parentNode = node.parent;
+              if (parentNode && "layoutMode" in parentNode && (parentNode as any).layoutMode === "NONE") {
+                if (settings.sizingH) {
+                  console.log(`[Cleanup] Skipping sizingH=${settings.sizingH} on "${frame.name}" — parent has layoutMode=NONE`);
+                  delete settings.sizingH;
+                }
+                if (settings.sizingV) {
+                  console.log(`[Cleanup] Skipping sizingV=${settings.sizingV} on "${frame.name}" — parent has layoutMode=NONE`);
+                  delete settings.sizingV;
+                }
               }
 
               // Safety: never change layoutMode — it reorders children

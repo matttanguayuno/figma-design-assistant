@@ -7450,6 +7450,48 @@ Respond with ONLY a JSON array, no markdown:
                   } catch (_e2) {
                   }
                 }
+                const preFSiblings = allFrames.filter((s) => s.parentId === fi.parentId && s.id !== fi.id);
+                const preFPrefix = fi.name.split(" ").slice(0, 2).join(" ");
+                const preFSimilar = preFSiblings.filter((s) => preFPrefix.length > 3 && s.name.startsWith(preFPrefix));
+                if (preFSimilar.length > 0 && !isVisualFrame) {
+                  const group = [fi, ...preFSimilar];
+                  const padCounts = /* @__PURE__ */ new Map();
+                  for (const g of group) {
+                    const key = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
+                    padCounts.set(key, (padCounts.get(key) || 0) + 1);
+                  }
+                  let bestPad = `${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}`;
+                  let bestCount = 0;
+                  for (const [key, count] of padCounts) {
+                    if (count > bestCount) {
+                      bestCount = count;
+                      bestPad = key;
+                    }
+                  }
+                  const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
+                  if (fi.paddingTop !== bT || fi.paddingRight !== bR || fi.paddingBottom !== bB || fi.paddingLeft !== bL) {
+                    const oldPad = `[${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}]`;
+                    frame.paddingTop = bT;
+                    fi.paddingTop = bT;
+                    frame.paddingRight = bR;
+                    fi.paddingRight = bR;
+                    frame.paddingBottom = bB;
+                    fi.paddingBottom = bB;
+                    frame.paddingLeft = bL;
+                    fi.paddingLeft = bL;
+                    localFixes.push(`pad ${oldPad}->[${bT},${bR},${bB},${bL}] (sibling match)`);
+                  }
+                }
+                if (!isVisualFrame && fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
+                  try {
+                    if (fi.parentLayoutMode === "VERTICAL") {
+                      frame.layoutSizingHorizontal = "FILL";
+                      fi.sizingH = "FILL";
+                      localFixes.push(`sizingH->FILL (${fi.width}>${fi.parentWidth})`);
+                    }
+                  } catch (_e2) {
+                  }
+                }
                 if (localFixes.length > 0) {
                   preFixCount++;
                   preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
@@ -7532,6 +7574,9 @@ Respond with ONLY a JSON array, no markdown:
                 if (f.itemSpacing > 48 && !isCarousel) {
                   problems.push(`[ISSUE] very large spacing (${f.itemSpacing}) -- consider reducing to 16-24px`);
                 }
+                if (f.parentWidth && f.width > f.parentWidth && !isCarousel) {
+                  problems.push(`[ISSUE] frame width (${f.width}) exceeds parent width (${f.parentWidth}) -- overflowing. Set sizingH=FILL`);
+                }
                 const siblings = allFrames.filter((s) => s.parentId === f.parentId && s.id !== f.id);
                 const sameName = siblings.filter((s) => s.name === f.name);
                 if (sameName.length > 0) {
@@ -7541,6 +7586,16 @@ Respond with ONLY a JSON array, no markdown:
                   }
                   if (ref.sizingH !== f.sizingH || ref.sizingV !== f.sizingV) {
                     problems.push(`[ISSUE] INCONSISTENT sizing with sibling -- should match (${ref.sizingH}/${ref.sizingV})`);
+                  }
+                }
+                const samePrefix = siblings.filter((s) => {
+                  const prefix = f.name.split(" ").slice(0, 2).join(" ");
+                  return prefix.length > 3 && s.name.startsWith(prefix) && s.name !== f.name;
+                });
+                if (samePrefix.length > 0) {
+                  const ref = samePrefix[0];
+                  if (ref.paddingTop !== f.paddingTop || ref.paddingBottom !== f.paddingBottom || ref.paddingLeft !== f.paddingLeft || ref.paddingRight !== f.paddingRight) {
+                    problems.push(`[ISSUE] padding differs from similar sibling "${ref.name}" (pad=[${ref.paddingTop},${ref.paddingRight},${ref.paddingBottom},${ref.paddingLeft}] vs [${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]) -- should match`);
                   }
                 }
                 if (f.sizingV === "FIXED" && f.childCount <= 3 && f.height > 100 && !isImage && !isCarousel) {
@@ -7602,7 +7657,8 @@ CRITICAL RULES:
 7. MAKE PADDING SYMMETRIC: left should equal right, top should equal bottom.
 8. NEVER change or set "layoutMode".
 
-YOU MUST FIX EVERY FRAME that has ** markers. There are ${allFrames.length} frames total.
+YOU MUST FIX EVERY FRAME that has ** markers. Also fix any OTHER frame that looks wrong in the screenshot, even if not flagged.
+There are ${allFrames.length} frames total. Return fixes for as many as needed -- typically 8-15 frames need changes.
 Be AGGRESSIVE -- fix everything that has an issue. Do not leave problems unfixed.
 
 Respond with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}
@@ -7696,6 +7752,17 @@ Include ALL frames that need changes. Do NOT return only one frame.`;
                 if (isVisualGuard) {
                   delete settings.sizingH;
                   delete settings.sizingV;
+                }
+                const parentNode = node.parent;
+                if (parentNode && "layoutMode" in parentNode && parentNode.layoutMode === "NONE") {
+                  if (settings.sizingH) {
+                    console.log(`[Cleanup] Skipping sizingH=${settings.sizingH} on "${frame.name}" \u2014 parent has layoutMode=NONE`);
+                    delete settings.sizingH;
+                  }
+                  if (settings.sizingV) {
+                    console.log(`[Cleanup] Skipping sizingV=${settings.sizingV} on "${frame.name}" \u2014 parent has layoutMode=NONE`);
+                    delete settings.sizingV;
+                  }
                 }
                 if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
                   const before = {
