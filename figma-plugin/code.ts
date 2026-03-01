@@ -9545,8 +9545,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const hasText = f.childSummary.includes("(TEXT)");
 
               // ── SIZING issues (most critical for text overflow) ──
-              // Child frames inside auto-layout parents should almost always be FILL, not FIXED
-              if (f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
+              // Only flag sizing issues on content frames, NOT images/separators/carousels
+              if (!isImage && !isSeparator && !isCarousel && f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
                 // In a VERTICAL parent: child width should be FILL (stretch to parent width)
                 if (f.parentLayoutMode === "VERTICAL" && f.sizingH === "FIXED") {
                   problems.push("[ISSUE] FIXED width inside VERTICAL auto-layout parent -- should be sizingH=FILL to stretch to parent width and prevent horizontal overflow");
@@ -9557,11 +9557,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
               }
 
-              // ClipsContent with FIXED = content cut off
-              if (f.clipsContent && f.sizingH === "FIXED") {
+              // ClipsContent with FIXED = content cut off (but not for images)
+              if (!isImage && !isCarousel && f.clipsContent && f.sizingH === "FIXED") {
                 problems.push("[ISSUE] clipsContent=true with FIXED width -- content IS being clipped. Set sizingH=FILL");
               }
-              if (f.clipsContent && f.sizingV === "FIXED") {
+              if (!isImage && !isCarousel && f.clipsContent && f.sizingV === "FIXED") {
                 problems.push("[ISSUE] clipsContent=true with FIXED height -- content IS being clipped vertically. Consider sizingV=HUG");
               }
 
@@ -9804,6 +9804,15 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const origWidth = frame.width;
               const changeDetails: string[] = [];
 
+              // Safety guard: block sizing changes on image/carousel/separator frames
+              const fnLower = frame.name.toLowerCase();
+              const isVisualGuard = /image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider/i.test(fnLower);
+              if (isVisualGuard) {
+                // Strip sizing changes — these frames should keep their original sizing
+                delete settings.sizingH;
+                delete settings.sizingV;
+              }
+
               // Safety: never change layoutMode — it reorders children
               // Only adjust padding/spacing on frames that already have auto layout
               if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
@@ -9911,8 +9920,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
             }
 
-            if (appliedCount > 0) {
-              const summary = `Cleaned up ${appliedCount} frame${appliedCount > 1 ? "s" : ""}: ${changes.slice(0, 3).join("; ")}${changes.length > 3 ? ` … +${changes.length - 3} more` : ""}`;
+            if (appliedCount > 0 || preFixCount > 0) {
+              const totalFixed = appliedCount + preFixCount;
+              const allChanges = [...preFixChanges, ...changes];
+              const summary = `Cleaned up ${totalFixed} frame${totalFixed > 1 ? "s" : ""}: ${allChanges.slice(0, 3).join("; ")}${allChanges.length > 3 ? ` … +${allChanges.length - 3} more` : ""}`;
               figma.notify(summary, { timeout: 5000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary } as any);
             } else {

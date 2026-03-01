@@ -7387,7 +7387,7 @@ Respond with ONLY a JSON array, no markdown:
                 const isCarousel = /carousel|slider|swiper/i.test(nameLower);
                 const isButton = /button|btn|cta/i.test(nameLower);
                 const hasText = f.childSummary.includes("(TEXT)");
-                if (f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
+                if (!isImage && !isSeparator && !isCarousel && f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
                   if (f.parentLayoutMode === "VERTICAL" && f.sizingH === "FIXED") {
                     problems.push("[ISSUE] FIXED width inside VERTICAL auto-layout parent -- should be sizingH=FILL to stretch to parent width and prevent horizontal overflow");
                   }
@@ -7395,10 +7395,10 @@ Respond with ONLY a JSON array, no markdown:
                     problems.push("[ISSUE] FIXED height inside HORIZONTAL parent -- consider sizingV=FILL or HUG");
                   }
                 }
-                if (f.clipsContent && f.sizingH === "FIXED") {
+                if (!isImage && !isCarousel && f.clipsContent && f.sizingH === "FIXED") {
                   problems.push("[ISSUE] clipsContent=true with FIXED width -- content IS being clipped. Set sizingH=FILL");
                 }
-                if (f.clipsContent && f.sizingV === "FIXED") {
+                if (!isImage && !isCarousel && f.clipsContent && f.sizingV === "FIXED") {
                   problems.push("[ISSUE] clipsContent=true with FIXED height -- content IS being clipped vertically. Consider sizingV=HUG");
                 }
                 if (!isImage && !isSeparator && !isCarousel && hasText) {
@@ -7581,6 +7581,12 @@ Include ALL frames that need changes. Do NOT return only one frame.`;
                 const isRoot = ((_c = frameDepthMap.get(settings.id)) != null ? _c : 0) === 0;
                 const origWidth = frame.width;
                 const changeDetails = [];
+                const fnLower = frame.name.toLowerCase();
+                const isVisualGuard = /image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider/i.test(fnLower);
+                if (isVisualGuard) {
+                  delete settings.sizingH;
+                  delete settings.sizingV;
+                }
                 if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
                   const before = {
                     pT: frame.paddingTop,
@@ -7691,8 +7697,10 @@ Include ALL frames that need changes. Do NOT return only one frame.`;
                   console.log(`[Cleanup] Skipped "${frame.name}" \u2014 no auto layout (${frame.layoutMode})`);
                 }
               }
-              if (appliedCount > 0) {
-                const summary = `Cleaned up ${appliedCount} frame${appliedCount > 1 ? "s" : ""}: ${changes.slice(0, 3).join("; ")}${changes.length > 3 ? ` \u2026 +${changes.length - 3} more` : ""}`;
+              if (appliedCount > 0 || preFixCount > 0) {
+                const totalFixed = appliedCount + preFixCount;
+                const allChanges = [...preFixChanges, ...changes];
+                const summary = `Cleaned up ${totalFixed} frame${totalFixed > 1 ? "s" : ""}: ${allChanges.slice(0, 3).join("; ")}${allChanges.length > 3 ? ` \u2026 +${allChanges.length - 3} more` : ""}`;
                 figma.notify(summary, { timeout: 5e3 });
                 sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary });
               } else {
