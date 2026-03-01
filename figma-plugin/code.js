@@ -7310,7 +7310,7 @@ Respond with ONLY a JSON array, no markdown:
             const nativeJobIdCU = ++_nextJobId;
             sendToUI({ type: "job-started", jobId: nativeJobIdCU, prompt: intentText });
             try {
-              let collectCleanupFrames2 = function(node, list, depth, parentId, parentName) {
+              let collectCleanupFrames2 = function(node, list, depth, parentId, parentName, parentWidth, parentLayoutMode) {
                 var _a2, _b2, _c2, _d2, _e2, _f, _g;
                 if (node.type !== "FRAME") return;
                 if (depth > MAX_CU_DEPTH) return;
@@ -7324,7 +7324,7 @@ Respond with ONLY a JSON array, no markdown:
                 if (!hasAutoLayout) {
                   for (const child of f.children) {
                     if (child.type === "FRAME") {
-                      collectCleanupFrames2(child, list, depth + 1, f.id, f.name);
+                      collectCleanupFrames2(child, list, depth + 1, f.id, f.name, Math.round(f.width), f.layoutMode || "NONE");
                     }
                   }
                   return;
@@ -7335,6 +7335,8 @@ Respond with ONLY a JSON array, no markdown:
                   depth,
                   parentId,
                   parentName,
+                  parentWidth,
+                  parentLayoutMode,
                   width: Math.round(f.width),
                   height: Math.round(f.height),
                   layoutMode: hasAutoLayout ? lm : "NONE",
@@ -7354,7 +7356,7 @@ Respond with ONLY a JSON array, no markdown:
                 });
                 for (const child of f.children) {
                   if (child.type === "FRAME") {
-                    collectCleanupFrames2(child, list, depth + 1, f.id, f.name);
+                    collectCleanupFrames2(child, list, depth + 1, f.id, f.name, Math.round(f.width), lm);
                   }
                 }
               };
@@ -7362,7 +7364,7 @@ Respond with ONLY a JSON array, no markdown:
               const MAX_CU_DEPTH = 3;
               const allFrames = [];
               for (const node of [...selection]) {
-                collectCleanupFrames2(node, allFrames, 0, null, null);
+                collectCleanupFrames2(node, allFrames, 0, null, null, null, null);
               }
               let rootContext = "";
               for (const node of [...selection]) {
@@ -7384,12 +7386,45 @@ Respond with ONLY a JSON array, no markdown:
                 const isSeparator = /separator|divider|line|rule/i.test(nameLower);
                 const isCarousel = /carousel|slider|swiper/i.test(nameLower);
                 const isButton = /button|btn|cta/i.test(nameLower);
-                if (!isImage && !isSeparator && !isCarousel) {
-                  if (f.paddingLeft === 0 && f.paddingRight === 0 && f.childCount > 0 && f.width > 100) {
-                    const hasText = f.childSummary.includes("(TEXT)");
-                    if (hasText) {
-                      problems.push("[ISSUE] text content flush against edges - needs horizontal padding");
-                    }
+                const hasText = f.childSummary.includes("(TEXT)");
+                if (f.parentLayoutMode && f.parentLayoutMode !== "NONE" && f.depth > 0) {
+                  if (f.parentLayoutMode === "VERTICAL" && f.sizingH === "FIXED") {
+                    problems.push("[ISSUE] FIXED width inside VERTICAL auto-layout parent -- should be sizingH=FILL to stretch to parent width and prevent horizontal overflow");
+                  }
+                  if (f.parentLayoutMode === "HORIZONTAL" && f.sizingV === "FIXED" && f.height > 60) {
+                    problems.push("[ISSUE] FIXED height inside HORIZONTAL parent -- consider sizingV=FILL or HUG");
+                  }
+                }
+                if (f.clipsContent && f.sizingH === "FIXED") {
+                  problems.push("[ISSUE] clipsContent=true with FIXED width -- content IS being clipped. Set sizingH=FILL");
+                }
+                if (f.clipsContent && f.sizingV === "FIXED") {
+                  problems.push("[ISSUE] clipsContent=true with FIXED height -- content IS being clipped vertically. Consider sizingV=HUG");
+                }
+                if (!isImage && !isSeparator && !isCarousel && hasText) {
+                  if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
+                    problems.push("[ISSUE] text content flush against L/R edges -- needs horizontal padding (16px)");
+                  }
+                  if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
+                    problems.push("[ISSUE] text content with no vertical padding -- needs top/bottom padding");
+                  }
+                }
+                if (isButton) {
+                  const vPad = f.paddingTop + f.paddingBottom;
+                  const hPad = f.paddingLeft + f.paddingRight;
+                  if (vPad > 40) {
+                    problems.push(`[ISSUE] button has excessive vertical padding (${f.paddingTop}+${f.paddingBottom}=${vPad}) -- buttons should have 8-16px vertical padding`);
+                  }
+                  if (hPad > 64) {
+                    problems.push(`[ISSUE] button has excessive horizontal padding (${f.paddingLeft}+${f.paddingRight}=${hPad}) -- should be 16-32px horizontal`);
+                  }
+                }
+                if (!isButton && f.depth > 0) {
+                  if (f.paddingTop > 48 || f.paddingBottom > 48) {
+                    problems.push(`[ISSUE] excessive vertical padding (T=${f.paddingTop}, B=${f.paddingBottom}) -- reduce to 16-24px`);
+                  }
+                  if (f.paddingLeft > 48 || f.paddingRight > 48) {
+                    problems.push(`[ISSUE] excessive horizontal padding (L=${f.paddingLeft}, R=${f.paddingRight}) -- reduce to 16-24px`);
                   }
                 }
                 if (f.paddingLeft !== f.paddingRight && f.paddingLeft > 0 && f.paddingRight > 0) {
@@ -7399,26 +7434,29 @@ Respond with ONLY a JSON array, no markdown:
                   problems.push(`[ISSUE] asymmetric TB padding (${f.paddingTop} vs ${f.paddingBottom})`);
                 }
                 if ([f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft, f.itemSpacing].some((v) => v % 1 !== 0)) {
-                  problems.push("[ISSUE] fractional values (should be whole numbers)");
+                  problems.push("[ISSUE] fractional values (should be whole numbers on 4px grid)");
                 }
                 if (f.itemSpacing < 0) {
-                  problems.push(`[ISSUE] NEGATIVE spacing (${f.itemSpacing})`);
+                  problems.push(`[ISSUE] NEGATIVE spacing (${f.itemSpacing}) -- must be 0 or positive`);
                 }
-                if (f.clipsContent && f.sizingH === "FIXED") {
-                  problems.push("[ISSUE] clipsContent=true with FIXED width - content may overflow/be cut off. Consider sizingH=FILL");
+                if (f.itemSpacing > 48 && !isCarousel) {
+                  problems.push(`[ISSUE] very large spacing (${f.itemSpacing}) -- consider reducing to 16-24px`);
                 }
                 const siblings = allFrames.filter((s) => s.parentId === f.parentId && s.id !== f.id);
                 const sameName = siblings.filter((s) => s.name === f.name);
                 if (sameName.length > 0) {
                   const ref = sameName[0];
                   if (ref.paddingTop !== f.paddingTop || ref.paddingRight !== f.paddingRight || ref.paddingBottom !== f.paddingBottom || ref.paddingLeft !== f.paddingLeft || ref.itemSpacing !== f.itemSpacing) {
-                    problems.push(`[ISSUE] inconsistent with sibling "${ref.name}" (id=${ref.id}) - same-named frames should match`);
+                    problems.push(`[ISSUE] INCONSISTENT with sibling "${ref.name}" (id=${ref.id}) -- same-named frames MUST have identical padding/spacing`);
+                  }
+                  if (ref.sizingH !== f.sizingH || ref.sizingV !== f.sizingV) {
+                    problems.push(`[ISSUE] INCONSISTENT sizing with sibling -- should match (${ref.sizingH}/${ref.sizingV})`);
                   }
                 }
-                let desc = `\u2022 id="${f.id}" name="${f.name}" depth=${f.depth}` + (f.parentName ? ` parent="${f.parentName}"` : "") + ` size=${f.width}x${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} clips=${f.clipsContent} children(${f.childCount}): [${f.childSummary}]`;
+                let desc = `- id="${f.id}" name="${f.name}" depth=${f.depth}` + (f.parentName ? ` parent="${f.parentName}"` : "") + (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") + ` size=${f.width}x${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} clips=${f.clipsContent} children(${f.childCount}): [${f.childSummary}]`;
                 if (problems.length > 0) {
                   desc += `
-  ISSUES: ${problems.join("; ")}`;
+  ** ${problems.join("\n  ** ")}`;
                 }
                 return desc;
               }).join("\n");
@@ -7438,38 +7476,37 @@ Respond with ONLY a JSON array, no markdown:
                 console.warn(`[Cleanup] Screenshot export failed: ${e.message}`);
               }
               const cleanupPrompt = `The user said: "${intentText}"
-They want to clean up / tidy a Figma design and make its layout properties consistent and professional.
+They want to clean up / tidy a Figma design. Fix ALL layout problems to make it look polished and professional.
 
-` + (screenshotBase64 ? `A SCREENSHOT of the frame is attached. LOOK AT IT CAREFULLY to identify:
-- Text or content that appears clipped, truncated, or overflowing its container
-- Inconsistent spacing between similar/sibling elements (e.g. cards, rows)
-- Items that look misaligned or cramped
-Use the screenshot to validate which frames truly need changes.
+` + (screenshotBase64 ? `A SCREENSHOT of the frame is attached. LOOK AT IT CAREFULLY:
+- Identify text that is clipped, cut off, or overflowing (this means the parent frame needs sizingH=FILL instead of FIXED)
+- Identify oversized buttons or sections with way too much padding
+- Identify inconsistent spacing between similar items (cards, reviews, rows)
+- Identify items that look misaligned
+The screenshot is the TRUTH -- if something looks wrong visually, fix it.
 
 ` : "") + `${rootContext}
 
 Here are the auto-layout frames with their CURRENT layout properties.
-Frames marked with [ISSUE] have detected problems that should be fixed:
+Frames marked with ** have detected problems that MUST be fixed:
 ${frameDescriptions}
 
-RULES - READ CAREFULLY:
-1. SIBLING CONSISTENCY is the top priority. Frames with the SAME NAME and SAME PARENT must have IDENTICAL padding, spacing, and alignment. Look at the "parent" field.
-2. DO NOT add padding to image containers, carousels, sliders, separators, dividers, or icon wrappers. These frames intentionally have 0 padding so their content fills edge-to-edge. If a frame name contains "image", "photo", "carousel", "separator", "divider", "hero", "banner", "avatar", "icon", "thumbnail", or "slider" - leave its padding at 0.
-3. Only add horizontal padding to frames whose children include TEXT content (marked "(TEXT)" in the child summary). Raw visual containers (images, icons) don't need padding.
-4. Fix text overflow: if a frame clips content (clips=true) and uses FIXED sizing, consider changing sizingH or sizingV to "FILL" or "HUG" so content isn't cut off.
-5. Fix fractional values - round to nearest multiple of 4 (e.g. 14.5 -> 16, 10.5 -> 12).
-6. Fix negative spacing - change to 0 or a small positive value (4, 8, 12).
-7. Make padding symmetric when appropriate (left=right, top=bottom).
-8. Common padding values: 8, 12, 16, 20, 24. Common spacing values: 4, 8, 12, 16, 20, 24.
-9. NEVER change or set "layoutMode". Do NOT include layoutMode in your response.
-10. Be CONSERVATIVE - only change frames that genuinely have problems. Do not touch frames that already look correct.
+CRITICAL RULES:
+1. SIZING IS THE #1 FIX: Child frames inside auto-layout parents should almost always use sizingH="FILL" (not "FIXED"). FIXED width children inside VERTICAL parents cause text to overflow and get cropped. Change them to FILL.
+2. SIBLING CONSISTENCY: Frames with the SAME NAME under the SAME PARENT must have IDENTICAL padding, spacing, alignment, and sizing.
+3. DO NOT add padding to image/photo/carousel/separator/divider/icon frames. They should stay at 0 padding.
+4. FIX EXCESSIVE PADDING: Buttons should have ~12-16px vertical padding and ~16-24px horizontal. Sections should have ~16-24px padding. Anything larger is excessive and must be reduced.
+5. FIX FRACTIONAL VALUES: Round to nearest multiple of 4 (14.5->16, 10.5->12).
+6. FIX NEGATIVE SPACING: Change to 0 or a small positive value (4, 8, 12, 16).
+7. MAKE PADDING SYMMETRIC: left should equal right, top should equal bottom.
+8. NEVER change or set "layoutMode".
 
-YOU MUST ANALYZE EVERY FRAME listed above (${allFrames.length} frames). Include ALL frames that need ANY change. Frames with [ISSUE] markers should be included.
+YOU MUST FIX EVERY FRAME that has ** markers. There are ${allFrames.length} frames total.
+Be AGGRESSIVE -- fix everything that has an issue. Do not leave problems unfixed.
 
-Respond with a JSON object:
-{"frames": [{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}, ...]}
-Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).
-The "frames" array MUST contain entries for ALL frames that need changes. Do NOT return only one frame.`;
+Respond with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}
+Properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).
+Include ALL frames that need changes. Do NOT return only one frame.`;
               const cleanupPayload = {
                 intent: cleanupPrompt,
                 selection: { nodes: [] },
