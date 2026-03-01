@@ -9321,9 +9321,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
             try {
               const layoutResult = await fetchViaUI("/plan?lenient=true&analyze=true", layoutPayload) as any;
-              // analyze=true returns parsed JSON directly — may be array or object
+              // analyze=true returns parsed JSON directly — may be array or single object
               if (Array.isArray(layoutResult)) {
                 layoutSettings = layoutResult;
+              } else if (layoutResult && typeof layoutResult === "object" && layoutResult.id) {
+                // LLM returned a single object instead of an array — wrap it
+                console.log(`[AutoLayout] LLM returned single object, wrapping in array`);
+                layoutSettings = [layoutResult];
               } else {
                 const rawStr = JSON.stringify(layoutResult);
                 const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
@@ -9453,13 +9457,28 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               });
 
               const lm = f.layoutMode || "NONE";
+              const hasAutoLayout = lm === "HORIZONTAL" || lm === "VERTICAL";
+
+              // Only include frames that already have auto layout — changing layoutMode
+              // from NONE to VERTICAL/HORIZONTAL causes Figma to reorder children.
+              // Also skip NONE frames at depth=0 — can't set padding without auto layout.
+              if (!hasAutoLayout) {
+                // Still recurse into children — they may have auto layout
+                for (const child of f.children) {
+                  if (child.type === "FRAME") {
+                    collectCleanupFrames(child, list, depth + 1);
+                  }
+                }
+                return;
+              }
+
               list.push({
                 id: f.id,
                 name: f.name,
                 depth,
                 width: Math.round(f.width),
                 height: Math.round(f.height),
-                layoutMode: lm === "HORIZONTAL" || lm === "VERTICAL" ? lm : "NONE",
+                layoutMode: hasAutoLayout ? lm : "NONE",
                 paddingTop: f.paddingTop ?? 0,
                 paddingRight: f.paddingRight ?? 0,
                 paddingBottom: f.paddingBottom ?? 0,
@@ -9508,21 +9527,28 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             const cleanupPrompt =
               `The user said: "${intentText}"\n` +
               `They want to clean up / tidy a Figma frame and make its layout properties consistent.\n\n` +
-              `Here are ALL the frames in the hierarchy with their CURRENT layout properties:\n${frameDescriptions}\n\n` +
-              `Your task: analyze the current padding, spacing, and alignment values and make them CONSISTENT.\n\n` +
+              `Here are the auto-layout frames in the hierarchy with their CURRENT layout properties:\n${frameDescriptions}\n\n` +
+              `Your task: analyze the current padding, spacing, and alignment values and make them CONSISTENT.\n` +
+              `Return cleanup suggestions for EVERY frame that has inconsistent or messy values.\n\n` +
               `Rules:\n` +
               `- Look for inconsistencies: e.g., padding [16,24,16,8] should probably be [16,16,16,16] or [16,24,16,24].\n` +
               `- Sibling frames at the same depth should generally share the same padding and spacing values.\n` +
               `- Use common UI spacing scales: 0, 4, 8, 12, 16, 20, 24, 32, 40, 48.\n` +
               `- Root frame (depth=0): typically needs more padding (16-32px) and spacing (16-24px).\n` +
               `- Inner frames (depth>0): typically less padding (0-16px) with appropriate spacing.\n` +
-              `- If a frame has layoutMode=NONE and has children, consider enabling auto layout (set "layoutMode").\n` +
-              `- PRESERVE existing layout direction — don't change HORIZONTAL to VERTICAL or vice versa unless clearly wrong.\n` +
-              `- PRESERVE content — only adjust layout properties, never suggest content changes.\n\n` +
-              `For EACH frame that needs changes, return its updated values.\n` +
-              `Only include frames where you're actually changing something.\n\n` +
-              `Respond with ONLY a JSON array, no markdown:\n` +
-              `[{"id": "...", "layoutMode": "VERTICAL"|"HORIZONTAL" (optional — only to enable auto layout on NONE frames), "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "counterAxisSpacing": N (optional), "alignment": "MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN" (optional), "counterAlignment": "MIN"|"CENTER"|"MAX" (optional)}]`;
+              `- NEVER change or set "layoutMode". Do NOT include layoutMode in your response. Only adjust padding, spacing, and alignment.\n` +
+              `- PRESERVE existing layout direction — do not reorganize or reorder content.\n` +
+              `- PRESERVE content — only adjust layout properties, never suggest content changes.\n` +
+              `- Be thorough — include ALL frames that need fixes, not just one.\n\n` +
+              `CRITICAL: You MUST respond with a JSON ARRAY (wrapped in [ ]), even if there is only one frame to fix.\n` +
+              `Do NOT return a single object. Always return an array of objects.\n\n` +
+              `Response format — a JSON array, no markdown, no prose:\n` +
+              `[\n` +
+              `  {"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N},\n` +
+              `  {"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "alignment": "CENTER"}\n` +
+              `]\n` +
+              `Optional fields per object: counterAxisSpacing (number), alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").\n` +
+              `Do NOT include "layoutMode" in your response.`;
 
             const cleanupPayload = {
               intent: cleanupPrompt,
@@ -9535,7 +9561,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
             let cleanupSettings: Array<{
               id: string;
-              layoutMode?: string;
               paddingTop?: number;
               paddingRight?: number;
               paddingBottom?: number;
@@ -9547,17 +9572,34 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             }> = [];
 
             try {
+              console.log(`[Cleanup] Sending prompt (${cleanupPrompt.length} chars) with ${allFrames.length} frames`);
               const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload) as any;
-              // analyze=true returns parsed JSON directly — may be array or object
+              console.log(`[Cleanup] Raw response type=${typeof cleanupResult}, isArray=${Array.isArray(cleanupResult)}, keys=${cleanupResult ? Object.keys(cleanupResult).join(",") : "null"}`);
+              console.log(`[Cleanup] Raw response preview: ${JSON.stringify(cleanupResult).slice(0, 500)}`);
+              // analyze=true returns parsed JSON directly — may be array, single object, or wrapped
               if (Array.isArray(cleanupResult)) {
                 cleanupSettings = cleanupResult;
-              } else {
-                const rawStr = JSON.stringify(cleanupResult);
-                const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                if (arrMatch) {
-                  const parsed = JSON.parse(arrMatch[0]);
-                  if (Array.isArray(parsed)) {
-                    cleanupSettings = parsed;
+              } else if (cleanupResult && typeof cleanupResult === "object") {
+                // Check for wrapper objects: {frames:[...]}, {content:[...]}, {results:[...]}, etc.
+                const keys = Object.keys(cleanupResult);
+                if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
+                  console.log(`[Cleanup] Unwrapped array from key "${keys[0]}"`);
+                  cleanupSettings = cleanupResult[keys[0]];
+                } else if (cleanupResult.id) {
+                  // LLM returned a single object instead of an array — wrap it
+                  console.log(`[Cleanup] LLM returned single object, wrapping in array`);
+                  cleanupSettings = [cleanupResult];
+                } else {
+                  const rawStr = JSON.stringify(cleanupResult);
+                  const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                  if (arrMatch) {
+                    console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
+                    const parsed = JSON.parse(arrMatch[0]);
+                    if (Array.isArray(parsed)) {
+                      cleanupSettings = parsed;
+                    }
+                  } else {
+                    console.warn(`[Cleanup] Could not extract JSON array from response`);
                   }
                 }
               }
@@ -9596,17 +9638,19 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const origWidth = frame.width;
               const changeDetails: string[] = [];
 
-              // Enable auto layout if frame has NONE and LLM suggests a mode
-              if (settings.layoutMode && (settings.layoutMode === "HORIZONTAL" || settings.layoutMode === "VERTICAL")) {
-                const currentMode = frame.layoutMode;
-                if (currentMode !== "HORIZONTAL" && currentMode !== "VERTICAL") {
-                  frame.layoutMode = settings.layoutMode as "HORIZONTAL" | "VERTICAL";
-                  changeDetails.push(`layout=${settings.layoutMode}`);
-                }
-              }
-
-              // Only adjust padding/spacing on auto-layout frames
+              // Safety: never change layoutMode — it reorders children
+              // Only adjust padding/spacing on frames that already have auto layout
               if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
+                // Track before values to detect actual changes
+                const before = {
+                  pT: frame.paddingTop, pR: frame.paddingRight,
+                  pB: frame.paddingBottom, pL: frame.paddingLeft,
+                  iS: frame.itemSpacing,
+                  cS: (frame as any).counterAxisSpacing ?? 0,
+                  align: (frame as any).primaryAxisAlignItems || "MIN",
+                  crossAlign: (frame as any).counterAxisAlignItems || "MIN",
+                };
+
                 if (settings.paddingTop !== undefined) { frame.paddingTop = settings.paddingTop; }
                 if (settings.paddingRight !== undefined) { frame.paddingRight = settings.paddingRight; }
                 if (settings.paddingBottom !== undefined) { frame.paddingBottom = settings.paddingBottom; }
@@ -9616,18 +9660,44 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   (frame as any).counterAxisSpacing = settings.counterAxisSpacing;
                 }
 
-                const p = [settings.paddingTop, settings.paddingRight, settings.paddingBottom, settings.paddingLeft]
-                  .filter(v => v !== undefined);
-                if (p.length > 0) changeDetails.push(`padding=[${frame.paddingTop},${frame.paddingRight},${frame.paddingBottom},${frame.paddingLeft}]`);
-                if (settings.itemSpacing !== undefined) changeDetails.push(`spacing=${settings.itemSpacing}`);
-
                 if (settings.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(settings.alignment)) {
                   frame.primaryAxisAlignItems = settings.alignment as any;
-                  changeDetails.push(`align=${settings.alignment}`);
                 }
                 if (settings.counterAlignment && ["MIN", "CENTER", "MAX"].includes(settings.counterAlignment)) {
                   frame.counterAxisAlignItems = settings.counterAlignment as any;
-                  changeDetails.push(`crossAlign=${settings.counterAlignment}`);
+                }
+
+                // Compare after values to detect actual changes
+                const after = {
+                  pT: frame.paddingTop, pR: frame.paddingRight,
+                  pB: frame.paddingBottom, pL: frame.paddingLeft,
+                  iS: frame.itemSpacing,
+                  cS: (frame as any).counterAxisSpacing ?? 0,
+                  align: (frame as any).primaryAxisAlignItems || "MIN",
+                  crossAlign: (frame as any).counterAxisAlignItems || "MIN",
+                };
+
+                const realChanges: string[] = [];
+                if (before.pT !== after.pT || before.pR !== after.pR || before.pB !== after.pB || before.pL !== after.pL) {
+                  realChanges.push(`padding [${before.pT},${before.pR},${before.pB},${before.pL}]→[${after.pT},${after.pR},${after.pB},${after.pL}]`);
+                }
+                if (before.iS !== after.iS) {
+                  realChanges.push(`spacing ${before.iS}→${after.iS}`);
+                }
+                if (before.cS !== after.cS) {
+                  realChanges.push(`counterSpacing ${before.cS}→${after.cS}`);
+                }
+                if (before.align !== after.align) {
+                  realChanges.push(`align ${before.align}→${after.align}`);
+                }
+                if (before.crossAlign !== after.crossAlign) {
+                  realChanges.push(`crossAlign ${before.crossAlign}→${after.crossAlign}`);
+                }
+
+                if (realChanges.length > 0) {
+                  changeDetails.push(...realChanges);
+                } else {
+                  console.log(`[Cleanup] Skipped "${frame.name}" — no actual change`);
                 }
 
                 // Root frame: preserve fixed width
@@ -9642,6 +9712,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 appliedCount++;
                 changes.push(`"${frame.name}": ${changeDetails.join(", ")}`);
                 console.log(`[Cleanup] Updated "${frame.name}" (depth ${frameDepthMap.get(settings.id)}): ${changeDetails.join(", ")}`);
+              } else if (frame.layoutMode !== "HORIZONTAL" && frame.layoutMode !== "VERTICAL") {
+                console.log(`[Cleanup] Skipped "${frame.name}" — no auto layout (${frame.layoutMode})`);
               }
             }
 

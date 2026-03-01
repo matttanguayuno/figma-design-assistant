@@ -274,7 +274,9 @@ export async function callLLMAnalyze(
   model?: string
 ): Promise<unknown> {
   const systemPrompt =
-    "You are a design layout analyzer. Return ONLY valid JSON — no markdown fences, no prose, no explanation.";
+    "You are a design layout analyzer. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
+    "When asked to analyze multiple items, ALWAYS respond with a JSON ARRAY (wrapped in square brackets [ ]). " +
+    "Never return a single object — always wrap it in an array, even if there is only one item.";
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();

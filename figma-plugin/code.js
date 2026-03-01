@@ -6082,7 +6082,7 @@ RULES:
     }
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b, _c;
+    var _a, _b, _c, _d, _e;
     try {
       switch (msg.type) {
         // ── UI ready handshake ────────────────────────────────
@@ -7230,6 +7230,9 @@ Respond with ONLY a JSON array, no markdown:
                 const layoutResult = await fetchViaUI("/plan?lenient=true&analyze=true", layoutPayload);
                 if (Array.isArray(layoutResult)) {
                   layoutSettings = layoutResult;
+                } else if (layoutResult && typeof layoutResult === "object" && layoutResult.id) {
+                  console.log(`[AutoLayout] LLM returned single object, wrapping in array`);
+                  layoutSettings = [layoutResult];
                 } else {
                   const rawStr = JSON.stringify(layoutResult);
                   const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
@@ -7308,7 +7311,7 @@ Respond with ONLY a JSON array, no markdown:
             sendToUI({ type: "job-started", jobId: nativeJobIdCU, prompt: intentText });
             try {
               let collectCleanupFrames2 = function(node, list, depth) {
-                var _a2, _b2, _c2, _d, _e, _f;
+                var _a2, _b2, _c2, _d2, _e2, _f;
                 if (node.type !== "FRAME") return;
                 if (depth > MAX_CU_DEPTH) return;
                 const f = node;
@@ -7317,18 +7320,27 @@ Respond with ONLY a JSON array, no markdown:
                   return `"${c.name}" (${c.type}, ${Math.round(c.width)}\xD7${Math.round(c.height)})`;
                 });
                 const lm = f.layoutMode || "NONE";
+                const hasAutoLayout = lm === "HORIZONTAL" || lm === "VERTICAL";
+                if (!hasAutoLayout) {
+                  for (const child of f.children) {
+                    if (child.type === "FRAME") {
+                      collectCleanupFrames2(child, list, depth + 1);
+                    }
+                  }
+                  return;
+                }
                 list.push({
                   id: f.id,
                   name: f.name,
                   depth,
                   width: Math.round(f.width),
                   height: Math.round(f.height),
-                  layoutMode: lm === "HORIZONTAL" || lm === "VERTICAL" ? lm : "NONE",
+                  layoutMode: hasAutoLayout ? lm : "NONE",
                   paddingTop: (_a2 = f.paddingTop) != null ? _a2 : 0,
                   paddingRight: (_b2 = f.paddingRight) != null ? _b2 : 0,
                   paddingBottom: (_c2 = f.paddingBottom) != null ? _c2 : 0,
-                  paddingLeft: (_d = f.paddingLeft) != null ? _d : 0,
-                  itemSpacing: (_e = f.itemSpacing) != null ? _e : 0,
+                  paddingLeft: (_d2 = f.paddingLeft) != null ? _d2 : 0,
+                  itemSpacing: (_e2 = f.itemSpacing) != null ? _e2 : 0,
                   counterAxisSpacing: (_f = f.counterAxisSpacing) != null ? _f : 0,
                   primaryAxisAlign: f.primaryAxisAlignItems || "MIN",
                   counterAxisAlign: f.counterAxisAlignItems || "MIN",
@@ -7361,10 +7373,11 @@ Respond with ONLY a JSON array, no markdown:
               const cleanupPrompt = `The user said: "${intentText}"
 They want to clean up / tidy a Figma frame and make its layout properties consistent.
 
-Here are ALL the frames in the hierarchy with their CURRENT layout properties:
+Here are the auto-layout frames in the hierarchy with their CURRENT layout properties:
 ${frameDescriptions}
 
 Your task: analyze the current padding, spacing, and alignment values and make them CONSISTENT.
+Return cleanup suggestions for EVERY frame that has inconsistent or messy values.
 
 Rules:
 - Look for inconsistencies: e.g., padding [16,24,16,8] should probably be [16,16,16,16] or [16,24,16,24].
@@ -7372,15 +7385,21 @@ Rules:
 - Use common UI spacing scales: 0, 4, 8, 12, 16, 20, 24, 32, 40, 48.
 - Root frame (depth=0): typically needs more padding (16-32px) and spacing (16-24px).
 - Inner frames (depth>0): typically less padding (0-16px) with appropriate spacing.
-- If a frame has layoutMode=NONE and has children, consider enabling auto layout (set "layoutMode").
-- PRESERVE existing layout direction \u2014 don't change HORIZONTAL to VERTICAL or vice versa unless clearly wrong.
+- NEVER change or set "layoutMode". Do NOT include layoutMode in your response. Only adjust padding, spacing, and alignment.
+- PRESERVE existing layout direction \u2014 do not reorganize or reorder content.
 - PRESERVE content \u2014 only adjust layout properties, never suggest content changes.
+- Be thorough \u2014 include ALL frames that need fixes, not just one.
 
-For EACH frame that needs changes, return its updated values.
-Only include frames where you're actually changing something.
+CRITICAL: You MUST respond with a JSON ARRAY (wrapped in [ ]), even if there is only one frame to fix.
+Do NOT return a single object. Always return an array of objects.
 
-Respond with ONLY a JSON array, no markdown:
-[{"id": "...", "layoutMode": "VERTICAL"|"HORIZONTAL" (optional \u2014 only to enable auto layout on NONE frames), "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "counterAxisSpacing": N (optional), "alignment": "MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN" (optional), "counterAlignment": "MIN"|"CENTER"|"MAX" (optional)}]`;
+Response format \u2014 a JSON array, no markdown, no prose:
+[
+  {"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N},
+  {"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "alignment": "CENTER"}
+]
+Optional fields per object: counterAxisSpacing (number), alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").
+Do NOT include "layoutMode" in your response.`;
               const cleanupPayload = {
                 intent: cleanupPrompt,
                 selection: { nodes: [] },
@@ -7391,16 +7410,31 @@ Respond with ONLY a JSON array, no markdown:
               };
               let cleanupSettings = [];
               try {
+                console.log(`[Cleanup] Sending prompt (${cleanupPrompt.length} chars) with ${allFrames.length} frames`);
                 const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload);
+                console.log(`[Cleanup] Raw response type=${typeof cleanupResult}, isArray=${Array.isArray(cleanupResult)}, keys=${cleanupResult ? Object.keys(cleanupResult).join(",") : "null"}`);
+                console.log(`[Cleanup] Raw response preview: ${JSON.stringify(cleanupResult).slice(0, 500)}`);
                 if (Array.isArray(cleanupResult)) {
                   cleanupSettings = cleanupResult;
-                } else {
-                  const rawStr = JSON.stringify(cleanupResult);
-                  const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
-                  if (arrMatch) {
-                    const parsed = JSON.parse(arrMatch[0]);
-                    if (Array.isArray(parsed)) {
-                      cleanupSettings = parsed;
+                } else if (cleanupResult && typeof cleanupResult === "object") {
+                  const keys = Object.keys(cleanupResult);
+                  if (keys.length === 1 && Array.isArray(cleanupResult[keys[0]])) {
+                    console.log(`[Cleanup] Unwrapped array from key "${keys[0]}"`);
+                    cleanupSettings = cleanupResult[keys[0]];
+                  } else if (cleanupResult.id) {
+                    console.log(`[Cleanup] LLM returned single object, wrapping in array`);
+                    cleanupSettings = [cleanupResult];
+                  } else {
+                    const rawStr = JSON.stringify(cleanupResult);
+                    const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                    if (arrMatch) {
+                      console.log(`[Cleanup] Regex extracted array: ${arrMatch[0].slice(0, 300)}`);
+                      const parsed = JSON.parse(arrMatch[0]);
+                      if (Array.isArray(parsed)) {
+                        cleanupSettings = parsed;
+                      }
+                    } else {
+                      console.warn(`[Cleanup] Could not extract JSON array from response`);
                     }
                   }
                 }
@@ -7432,14 +7466,17 @@ Respond with ONLY a JSON array, no markdown:
                 const isRoot = ((_c = frameDepthMap.get(settings.id)) != null ? _c : 0) === 0;
                 const origWidth = frame.width;
                 const changeDetails = [];
-                if (settings.layoutMode && (settings.layoutMode === "HORIZONTAL" || settings.layoutMode === "VERTICAL")) {
-                  const currentMode = frame.layoutMode;
-                  if (currentMode !== "HORIZONTAL" && currentMode !== "VERTICAL") {
-                    frame.layoutMode = settings.layoutMode;
-                    changeDetails.push(`layout=${settings.layoutMode}`);
-                  }
-                }
                 if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
+                  const before = {
+                    pT: frame.paddingTop,
+                    pR: frame.paddingRight,
+                    pB: frame.paddingBottom,
+                    pL: frame.paddingLeft,
+                    iS: frame.itemSpacing,
+                    cS: (_d = frame.counterAxisSpacing) != null ? _d : 0,
+                    align: frame.primaryAxisAlignItems || "MIN",
+                    crossAlign: frame.counterAxisAlignItems || "MIN"
+                  };
                   if (settings.paddingTop !== void 0) {
                     frame.paddingTop = settings.paddingTop;
                   }
@@ -7458,16 +7495,42 @@ Respond with ONLY a JSON array, no markdown:
                   if (settings.counterAxisSpacing !== void 0) {
                     frame.counterAxisSpacing = settings.counterAxisSpacing;
                   }
-                  const p = [settings.paddingTop, settings.paddingRight, settings.paddingBottom, settings.paddingLeft].filter((v) => v !== void 0);
-                  if (p.length > 0) changeDetails.push(`padding=[${frame.paddingTop},${frame.paddingRight},${frame.paddingBottom},${frame.paddingLeft}]`);
-                  if (settings.itemSpacing !== void 0) changeDetails.push(`spacing=${settings.itemSpacing}`);
                   if (settings.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(settings.alignment)) {
                     frame.primaryAxisAlignItems = settings.alignment;
-                    changeDetails.push(`align=${settings.alignment}`);
                   }
                   if (settings.counterAlignment && ["MIN", "CENTER", "MAX"].includes(settings.counterAlignment)) {
                     frame.counterAxisAlignItems = settings.counterAlignment;
-                    changeDetails.push(`crossAlign=${settings.counterAlignment}`);
+                  }
+                  const after = {
+                    pT: frame.paddingTop,
+                    pR: frame.paddingRight,
+                    pB: frame.paddingBottom,
+                    pL: frame.paddingLeft,
+                    iS: frame.itemSpacing,
+                    cS: (_e = frame.counterAxisSpacing) != null ? _e : 0,
+                    align: frame.primaryAxisAlignItems || "MIN",
+                    crossAlign: frame.counterAxisAlignItems || "MIN"
+                  };
+                  const realChanges = [];
+                  if (before.pT !== after.pT || before.pR !== after.pR || before.pB !== after.pB || before.pL !== after.pL) {
+                    realChanges.push(`padding [${before.pT},${before.pR},${before.pB},${before.pL}]\u2192[${after.pT},${after.pR},${after.pB},${after.pL}]`);
+                  }
+                  if (before.iS !== after.iS) {
+                    realChanges.push(`spacing ${before.iS}\u2192${after.iS}`);
+                  }
+                  if (before.cS !== after.cS) {
+                    realChanges.push(`counterSpacing ${before.cS}\u2192${after.cS}`);
+                  }
+                  if (before.align !== after.align) {
+                    realChanges.push(`align ${before.align}\u2192${after.align}`);
+                  }
+                  if (before.crossAlign !== after.crossAlign) {
+                    realChanges.push(`crossAlign ${before.crossAlign}\u2192${after.crossAlign}`);
+                  }
+                  if (realChanges.length > 0) {
+                    changeDetails.push(...realChanges);
+                  } else {
+                    console.log(`[Cleanup] Skipped "${frame.name}" \u2014 no actual change`);
                   }
                   if (isRoot) {
                     frame.counterAxisSizingMode = "FIXED";
@@ -7479,6 +7542,8 @@ Respond with ONLY a JSON array, no markdown:
                   appliedCount++;
                   changes.push(`"${frame.name}": ${changeDetails.join(", ")}`);
                   console.log(`[Cleanup] Updated "${frame.name}" (depth ${frameDepthMap.get(settings.id)}): ${changeDetails.join(", ")}`);
+                } else if (frame.layoutMode !== "HORIZONTAL" && frame.layoutMode !== "VERTICAL") {
+                  console.log(`[Cleanup] Skipped "${frame.name}" \u2014 no auto layout (${frame.layoutMode})`);
                 }
               }
               if (appliedCount > 0) {
