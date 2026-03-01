@@ -267,7 +267,11 @@ app.post("/plan", async (req: Request, res: Response) => {
     const analyzeMode = req.query.analyze === "true";
     if (analyzeMode) {
       // Free-form analysis mode: skip operations system prompt and validation
-      const result = await callLLMAnalyze(intent, apiKey, resolvedProvider, model);
+      const imageBase64 = req.body.imageBase64 || undefined;
+      if (imageBase64) {
+        console.log(`[plan/analyze] Including screenshot (${imageBase64.length} chars base64)`);
+      }
+      const result = await callLLMAnalyze(intent, apiKey, resolvedProvider, model, imageBase64);
       console.log(`[plan/analyze] LLM returned:`, JSON.stringify(result).slice(0, 300));
       res.json(result);
       return;

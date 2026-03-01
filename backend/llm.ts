@@ -271,13 +271,15 @@ export async function callLLMAnalyze(
   prompt: string,
   apiKey: string,
   provider: Provider = "anthropic",
-  model?: string
+  model?: string,
+  imageBase64?: string
 ): Promise<unknown> {
   const systemPrompt =
     "You are a design layout analyzer. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
-    "IMPORTANT: Always return a JSON object with a single key \"result\" whose value is an array: {\"result\": [...]}. " +
-    "Include ALL items that need changes in the array. Even if only one item needs changes, wrap it: {\"result\": [{...}]}. " +
-    "Never return a bare array or a single unwrapped object.";
+    "IMPORTANT: Always return a JSON object with a single key \"frames\" whose value is an array: {\"frames\": [...]}. " +
+    "Include ALL items that need changes in the array. Even if only one item needs changes, wrap it: {\"frames\": [{...}]}. " +
+    "Never return a bare array or a single unwrapped object." +
+    (imageBase64 ? " A screenshot of the frame is provided. Use it to identify visual layout problems like misaligned elements, inconsistent spacing, content flush against edges, or elements that look cramped." : "");
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
@@ -285,12 +287,172 @@ export async function callLLMAnalyze(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 8192, apiKey, abort);
+    if (imageBase64) {
+      raw = await callProviderWithImage(provider, systemPrompt, prompt, imageBase64, resolvedModel, 8192, apiKey, abort);
+    } else {
+      raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 8192, apiKey, abort);
+    }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }
 
   return parseJsonResponse(raw, "analyze");
+}
+
+// ── Vision-capable provider calls ───────────────────────────────────
+
+async function callProviderWithImage(
+  provider: Provider,
+  systemPrompt: string,
+  userPrompt: string,
+  imageBase64: string,
+  model: string,
+  maxTokens: number,
+  apiKey: string,
+  abort: AbortController
+): Promise<string> {
+  switch (provider) {
+    case "anthropic":
+      return callAnthropicWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort);
+    case "openai":
+      return callOpenAIWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort);
+    case "gemini":
+      return callGeminiWithImage(systemPrompt, userPrompt, imageBase64, model, maxTokens, apiKey, abort);
+    default:
+      throw new Error(`Unknown provider: ${provider}`);
+  }
+}
+
+async function callAnthropicWithImage(
+  systemPrompt: string,
+  userPrompt: string,
+  imageBase64: string,
+  model: string,
+  maxTokens: number,
+  apiKey: string,
+  abort: AbortController
+): Promise<string> {
+  const client = getAnthropicClient(apiKey);
+  const stream = client.messages.stream(
+    {
+      model,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: imageBase64,
+              },
+            },
+            {
+              type: "text",
+              text: userPrompt,
+            },
+          ],
+        },
+      ],
+    },
+    { signal: abort.signal as any }
+  );
+  const message = await stream.finalMessage();
+  const textBlock = message.content.find((b) => b.type === "text");
+  if (!textBlock || textBlock.type !== "text") {
+    throw new Error("Anthropic returned no text content");
+  }
+  return textBlock.text.trim();
+}
+
+async function callOpenAIWithImage(
+  systemPrompt: string,
+  userPrompt: string,
+  imageBase64: string,
+  model: string,
+  maxTokens: number,
+  apiKey: string,
+  abort: AbortController
+): Promise<string> {
+  const client = getOpenAIClient(apiKey);
+  const completion = await client.chat.completions.create(
+    {
+      model,
+      max_tokens: maxTokens,
+      messages: [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${imageBase64}`,
+                detail: "high",
+              },
+            },
+            {
+              type: "text",
+              text: userPrompt,
+            },
+          ],
+        },
+      ],
+      response_format: { type: "json_object" },
+    },
+    { signal: abort.signal as any }
+  );
+  const text = completion.choices[0]?.message?.content;
+  if (!text) {
+    throw new Error("OpenAI returned no text content");
+  }
+  return text.trim();
+}
+
+async function callGeminiWithImage(
+  systemPrompt: string,
+  userPrompt: string,
+  imageBase64: string,
+  model: string,
+  _maxTokens: number,
+  apiKey: string,
+  abort: AbortController
+): Promise<string> {
+  const client = getGeminiClient(apiKey);
+  const genModel = client.getGenerativeModel({
+    model,
+    systemInstruction: systemPrompt,
+    generationConfig: {
+      responseMimeType: "application/json",
+    },
+  });
+  const result = await genModel.generateContent(
+    {
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                mimeType: "image/png",
+                data: imageBase64,
+              },
+            },
+            { text: userPrompt },
+          ],
+        },
+      ],
+    },
+    { signal: abort.signal as any }
+  );
+  const text = result.response.text();
+  if (!text) {
+    throw new Error("Gemini returned no text content");
+  }
+  return text.trim();
 }
 
 // ── Call LLM for Frame Generation ───────────────────────────────────

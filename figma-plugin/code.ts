@@ -9570,6 +9570,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             const cleanupPrompt =
               `The user said: "${intentText}"\n` +
               `They want to clean up / tidy a Figma design and make its layout properties consistent and professional.\n\n` +
+              (screenshotBase64 ? `A SCREENSHOT of the frame is attached. LOOK AT IT CAREFULLY to identify:\n` +
+              `- Elements that appear too close to edges (need padding)\n` +
+              `- Inconsistent spacing between similar elements\n` +
+              `- Items that look misaligned or cramped\n` +
+              `- Any visual layout problems not captured in the property data below\n\n` : "") +
               `${rootContext}\n\n` +
               `Here are the auto-layout frames inside it with their CURRENT layout properties.\n` +
               `Frames marked with [ISSUE] have detected problems that MUST be fixed:\n${frameDescriptions}\n\n` +
@@ -9596,6 +9601,24 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").\n` +
               `The "frames" array MUST contain entries for ALL frames that need changes. Do NOT return only one frame.`;
 
+            // ── Export a screenshot of the selected frame for vision analysis ──
+            let screenshotBase64 = "";
+            try {
+              const rootNode = selection[0];
+              if (rootNode && "exportAsync" in rootNode) {
+                // Scale to max ~1200px wide for reasonable token cost
+                const scale = Math.min(2, 1200 / Math.max(rootNode.width, 1));
+                const pngBytes = await (rootNode as ExportMixin).exportAsync({
+                  format: "PNG",
+                  constraint: { type: "SCALE", value: Math.max(0.5, scale) },
+                });
+                screenshotBase64 = uint8ToBase64(pngBytes);
+                console.log(`[Cleanup] Captured screenshot (${pngBytes.length} bytes, scale=${scale.toFixed(2)})`);
+              }
+            } catch (e: any) {
+              console.warn(`[Cleanup] Screenshot export failed: ${e.message}`);
+            }
+
             const cleanupPayload = {
               intent: cleanupPrompt,
               selection: { nodes: [] },
@@ -9603,6 +9626,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               apiKey: _userApiKey,
               provider: _selectedProvider,
               model: _selectedModel,
+              imageBase64: screenshotBase64 || undefined,
             };
 
             let cleanupSettings: Array<{

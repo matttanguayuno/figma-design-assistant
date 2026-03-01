@@ -7407,7 +7407,13 @@ Respond with ONLY a JSON array, no markdown:
               const cleanupPrompt = `The user said: "${intentText}"
 They want to clean up / tidy a Figma design and make its layout properties consistent and professional.
 
-${rootContext}
+` + (screenshotBase64 ? `A SCREENSHOT of the frame is attached. LOOK AT IT CAREFULLY to identify:
+- Elements that appear too close to edges (need padding)
+- Inconsistent spacing between similar elements
+- Items that look misaligned or cramped
+- Any visual layout problems not captured in the property data below
+
+` : "") + `${rootContext}
 
 Here are the auto-layout frames inside it with their CURRENT layout properties.
 Frames marked with [ISSUE] have detected problems that MUST be fixed:
@@ -7438,13 +7444,29 @@ Frames with [ISSUE] markers MUST be included. Also include any other frames that
 Respond with a JSON object: {"frames": [{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}, ...]}
 Optional per frame: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").
 The "frames" array MUST contain entries for ALL frames that need changes. Do NOT return only one frame.`;
+              let screenshotBase64 = "";
+              try {
+                const rootNode = selection[0];
+                if (rootNode && "exportAsync" in rootNode) {
+                  const scale = Math.min(2, 1200 / Math.max(rootNode.width, 1));
+                  const pngBytes = await rootNode.exportAsync({
+                    format: "PNG",
+                    constraint: { type: "SCALE", value: Math.max(0.5, scale) }
+                  });
+                  screenshotBase64 = uint8ToBase64(pngBytes);
+                  console.log(`[Cleanup] Captured screenshot (${pngBytes.length} bytes, scale=${scale.toFixed(2)})`);
+                }
+              } catch (e) {
+                console.warn(`[Cleanup] Screenshot export failed: ${e.message}`);
+              }
               const cleanupPayload = {
                 intent: cleanupPrompt,
                 selection: { nodes: [] },
                 designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
                 apiKey: _userApiKey,
                 provider: _selectedProvider,
-                model: _selectedModel
+                model: _selectedModel,
+                imageBase64: screenshotBase64 || void 0
               };
               let cleanupSettings = [];
               try {
