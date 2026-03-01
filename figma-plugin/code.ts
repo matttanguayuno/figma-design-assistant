@@ -3069,9 +3069,38 @@ function buildDSSummary(ds: FullDesignSystem): any {
 // ── Per-file DS cache helpers ──────────────────────────────────────
 const DS_CACHE_MAX_FILES = 5;
 
+/** Generate a simple pseudo-UUID (no crypto needed, just uniqueness). */
+function generateFileUUID(): string {
+  const hex = "0123456789abcdef";
+  let uuid = "";
+  for (let i = 0; i < 16; i++) uuid += hex[Math.floor(Math.random() * 16)];
+  return uuid;
+}
+
+/**
+ * Get a stable file identifier that persists with the document.
+ * Uses pluginData on the root node — survives structure changes,
+ * cloud/local transitions, and plugin rebuilds.
+ */
+function getStableFileId(): string {
+  let id = figma.root.getPluginData("designops_fileId");
+  if (!id) {
+    // First time: generate and persist a stable ID
+    id = generateFileUUID();
+    figma.root.setPluginData("designops_fileId", id);
+    console.log(`[DS Cache] Generated new stable file ID: ${id}`);
+  }
+  return id;
+}
+
 /** Get a stable storage key for the current file's DS cache. */
 function getDSCacheKey(): string {
-  // figma.fileKey is the unique file identifier (may be undefined for local drafts)
+  const fileId = getStableFileId();
+  return "fullDS_" + fileId;
+}
+
+/** Get the OLD cache key (for migration from legacy keys). */
+function getLegacyCacheKey(): string {
   const fileId = (figma as any).fileKey || computeDocumentHash();
   return "fullDS_" + fileId.replace(/[^a-zA-Z0-9_|-]/g, "_");
 }
@@ -3111,33 +3140,75 @@ async function saveDSToCache(ds: FullDesignSystem): Promise<void> {
 async function loadCachedFullDesignSystem(): Promise<void> {
   try {
     const cacheKey = getDSCacheKey();
-    const cached = await figma.clientStorage.getAsync(cacheKey);
-    // Fallback: try the legacy single-file key for migration
-    const data = cached || await figma.clientStorage.getAsync("fullDesignSystem");
-    if (data) {
-      const parsed = JSON.parse(data) as FullDesignSystem;
-      const currentHash = computeDocumentHash();
-      const isStale = parsed.documentHash !== currentHash;
-      console.log(`[extractFullDS] Loaded cached DS from ${cached ? cacheKey : "legacy key"} (${parsed.colorPalette.length} colors, stale=${isStale})`);
-      // Always load the cached data — paint styles/typography rarely change
-      // when frames are added/removed. The stale flag just means the page
-      // structure changed, not necessarily the design system itself.
-      _fullDesignSystem = parsed;
-      // If loaded from legacy key, migrate to per-file key
-      if (!cached && data) {
-        await saveDSToCache(parsed);
-        await figma.clientStorage.deleteAsync("fullDesignSystem").catch(() => {});
-        console.log("[extractFullDS] Migrated legacy cache to per-file key");
-      }
-      sendToUI({
-        type: "extract-ds-cached",
-        summary: buildDSSummary(parsed),
-        extractedAt: parsed.extractedAt,
-        stale: isStale,
-      } as any);
+    console.log(`[DS Cache] Looking up cache key: ${cacheKey}`);
+    let cached = await figma.clientStorage.getAsync(cacheKey);
+    let source = cacheKey;
+
+    // Fallback 1: try legacy per-file key (old format before stable IDs)
+    if (!cached) {
+      const legacyKey = getLegacyCacheKey();
+      console.log(`[DS Cache] Primary miss, trying legacy key: ${legacyKey}`);
+      cached = await figma.clientStorage.getAsync(legacyKey);
+      if (cached) source = legacyKey;
     }
-  } catch (_) {
-    console.warn("[extractFullDS] No cached design system found");
+
+    // Fallback 2: try the original single-file key
+    if (!cached) {
+      console.log(`[DS Cache] Legacy miss, trying single-file key: fullDesignSystem`);
+      cached = await figma.clientStorage.getAsync("fullDesignSystem");
+      if (cached) source = "fullDesignSystem";
+    }
+
+    // Fallback 3: try all keys in the index (brute force for drafts whose hash changed)
+    if (!cached) {
+      try {
+        const rawIdx = await figma.clientStorage.getAsync("fullDS_index");
+        if (rawIdx) {
+          const index: string[] = JSON.parse(rawIdx);
+          console.log(`[DS Cache] Trying ${index.length} indexed keys: ${index.join(", ")}`);
+          for (const key of index) {
+            const candidate = await figma.clientStorage.getAsync(key);
+            if (candidate) {
+              cached = candidate;
+              source = key;
+              console.log(`[DS Cache] Found cached DS under indexed key: ${key}`);
+              break;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    if (!cached) {
+      console.log(`[DS Cache] No cached design system found for this file`);
+      return;
+    }
+
+    const parsed = JSON.parse(cached) as FullDesignSystem;
+    const currentHash = computeDocumentHash();
+    const isStale = parsed.documentHash !== currentHash;
+    console.log(`[DS Cache] Loaded DS from "${source}" (${parsed.colorPalette.length} colors, stale=${isStale})`);
+
+    _fullDesignSystem = parsed;
+
+    // Migrate to new stable key if loaded from a legacy/different key
+    if (source !== cacheKey) {
+      await saveDSToCache(parsed);
+      // Clean up old key
+      if (source === "fullDesignSystem") {
+        await figma.clientStorage.deleteAsync("fullDesignSystem").catch(() => {});
+      }
+      console.log(`[DS Cache] Migrated from "${source}" to "${cacheKey}"`);
+    }
+
+    sendToUI({
+      type: "extract-ds-cached",
+      summary: buildDSSummary(parsed),
+      extractedAt: parsed.extractedAt,
+      stale: isStale,
+    } as any);
+  } catch (e) {
+    console.warn("[DS Cache] Error loading cached design system:", e);
   }
 }
 
@@ -8274,6 +8345,1322 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       // ── Run (plan + apply in one step) ─────────────────────
       case "run": {
         const intentText = ((msg as any).intent || "");
+        const intentLower = intentText.toLowerCase();
+
+        // ── Native Actions (no LLM needed) ──────────────────
+        // Detect common Figma operations that should be handled directly
+        // by the plugin without going through the LLM.
+
+        // Detect variant intent: explicit keywords OR adding states to an existing ComponentSet
+        const hasVariantKeyword =
+          /\bvariants?\b/i.test(intentText) ||
+          /\bstates?\b/i.test(intentText);
+        const hasCreateKeyword =
+          /\b(create|make|add|generate|missing)\b/i.test(intentText);
+        const selectionIsComponentSet =
+          figma.currentPage.selection.length > 0 &&
+          figma.currentPage.selection[0].type === "COMPONENT_SET";
+        const isCreateVariantsIntent =
+          (hasVariantKeyword && hasCreateKeyword) ||
+          (selectionIsComponentSet && hasCreateKeyword && hasVariantKeyword);
+
+        const isCreateComponentIntent =
+          /\b(create|make|convert|turn)\b.+\bcomponent\b/i.test(intentText) &&
+          !/\bcomponent\s*set\b/i.test(intentText) &&
+          !isCreateVariantsIntent;
+
+        const isDetachInstanceIntent =
+          /\b(detach|unlink|disconnect)\b.+\b(instance|component)\b/i.test(intentText) ||
+          /\binstance\b.+\b(detach|unlink)\b/i.test(intentText);
+
+        const isGroupIntent =
+          /\b(group)\b.+\b(selection|selected|these|nodes?|layers?|elements?)\b/i.test(intentText) ||
+          /\b(selection|selected|these)\b.+\bgroup\b/i.test(intentText);
+
+        const isUngroupIntent =
+          /\b(ungroup|un-group)\b/i.test(intentText);
+
+        const isFlattenIntent =
+          /\b(flatten)\b.+\b(selection|selected|these|nodes?|layers?|elements?)\b/i.test(intentText) ||
+          /\bflatten\s+(this|it)\b/i.test(intentText);
+
+        const isAutoLayoutIntent =
+          /\bauto[\s-]?layout\b/i.test(intentText) ||
+          (/\b(add|apply|set|enable|convert|turn\s+on)\b/i.test(intentText) && /\b(layout|auto[\s-]?layout)\b/i.test(intentText));
+
+        const isCleanupIntent =
+          /\b(clean\s*up|cleanup|tidy\s*(up)?|neaten|straighten)\b/i.test(intentText) ||
+          (/\b(consistent|normalize|standardize|even\s*out|fix|align|regularize)\b/i.test(intentText) &&
+           /\b(padding|margins?|spacing|gaps?|layout|alignment|indentation)\b/i.test(intentText));
+
+        if (isCreateComponentIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select a frame or element first.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobId = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobId, prompt: intentText } as any);
+
+          // Extract a custom component name from the intent if provided
+          // e.g. "Create component called Form2", "make component named MyCard"
+          let customName: string | null = null;
+          const nameMatch = intentText.match(
+            /\b(?:called|named|name(?:d)?|as)\s+["']?([A-Za-z0-9_\-/ ]+?)["']?\s*$/i
+          ) || intentText.match(
+            /\bcomponent\s+["']([A-Za-z0-9_\-/ ]+?)["']/i
+          ) || intentText.match(
+            /["']([A-Za-z0-9_\-/ ]+?)["']/i
+          );
+          if (nameMatch) customName = nameMatch[1].trim();
+
+          try {
+            const created: SceneNode[] = [];
+            for (let ni = 0; ni < selection.length; ni++) {
+              const node = selection[ni];
+
+              // Determine if node is inside an instance (children can't be moved out)
+              const isInsideInstance = (() => {
+                let cur: BaseNode | null = node.parent;
+                while (cur) {
+                  if (cur.type === "INSTANCE") return true;
+                  cur = "parent" in cur ? (cur as any).parent : null;
+                }
+                return false;
+              })();
+
+              // Use Figma's native clone to get an independent copy of the subtree.
+              // This avoids "Cannot move node" errors when the source is inside an
+              // instance or another component, and faithfully preserves ALL visual
+              // properties (fills, strokes, effects, auto-layout, images, text styles, etc.)
+              let clone = node.clone() as SceneNode;
+
+              // If the clone (or original) is an INSTANCE, detach it so children
+              // become plain nodes that can be moved freely.
+              if (clone.type === "INSTANCE") {
+                clone = (clone as InstanceNode).detachInstance() as unknown as SceneNode;
+              }
+
+              // Also recursively detach any nested instances inside the clone
+              function detachNestedInstances(n: SceneNode): void {
+                if (!("children" in n)) return;
+                const container = n as FrameNode;
+                for (let ci = 0; ci < container.children.length; ci++) {
+                  const child = container.children[ci];
+                  if (child.type === "INSTANCE") {
+                    const detached = (child as InstanceNode).detachInstance();
+                    detachNestedInstances(detached as unknown as SceneNode);
+                  } else {
+                    detachNestedInstances(child);
+                  }
+                }
+              }
+              detachNestedInstances(clone);
+
+              // Create a fresh component and steal the clone's children into it
+              const comp = figma.createComponent();
+
+              // Copy frame-level visual properties from the clone to the component
+              comp.resize(clone.width, clone.height);
+
+              if ("fills" in clone) {
+                try { comp.fills = JSON.parse(JSON.stringify((clone as GeometryMixin).fills)); } catch (_) {}
+              }
+              if ("strokes" in clone) {
+                try {
+                  comp.strokes = JSON.parse(JSON.stringify((clone as GeometryMixin).strokes));
+                  comp.strokeWeight = (clone as GeometryMixin).strokeWeight as number;
+                  comp.strokeAlign = (clone as GeometryMixin).strokeAlign;
+                  if ("strokeTopWeight" in clone) {
+                    (comp as any).strokeTopWeight = (clone as any).strokeTopWeight;
+                    (comp as any).strokeRightWeight = (clone as any).strokeRightWeight;
+                    (comp as any).strokeBottomWeight = (clone as any).strokeBottomWeight;
+                    (comp as any).strokeLeftWeight = (clone as any).strokeLeftWeight;
+                  }
+                } catch (_) {}
+              }
+              if ("cornerRadius" in clone) {
+                try { comp.cornerRadius = (clone as any).cornerRadius; } catch (_) {}
+              }
+              if ("topLeftRadius" in clone) {
+                try {
+                  (comp as any).topLeftRadius = (clone as any).topLeftRadius;
+                  (comp as any).topRightRadius = (clone as any).topRightRadius;
+                  (comp as any).bottomLeftRadius = (clone as any).bottomLeftRadius;
+                  (comp as any).bottomRightRadius = (clone as any).bottomRightRadius;
+                } catch (_) {}
+              }
+              if ("clipsContent" in clone) {
+                comp.clipsContent = (clone as FrameNode).clipsContent;
+              }
+              if ("opacity" in clone) {
+                comp.opacity = (clone as SceneNode & { opacity: number }).opacity;
+              }
+              if ("effects" in clone) {
+                try { comp.effects = JSON.parse(JSON.stringify((clone as any).effects)); } catch (_) {}
+              }
+              if ("blendMode" in clone) {
+                try { comp.blendMode = (clone as any).blendMode; } catch (_) {}
+              }
+
+              // Copy auto-layout properties
+              if ("layoutMode" in clone && (clone as any).layoutMode !== "NONE") {
+                const f = clone as FrameNode;
+                comp.layoutMode = f.layoutMode;
+                comp.primaryAxisSizingMode = f.primaryAxisSizingMode;
+                comp.counterAxisSizingMode = f.counterAxisSizingMode;
+                comp.primaryAxisAlignItems = f.primaryAxisAlignItems;
+                comp.counterAxisAlignItems = f.counterAxisAlignItems;
+                comp.paddingTop = f.paddingTop;
+                comp.paddingRight = f.paddingRight;
+                comp.paddingBottom = f.paddingBottom;
+                comp.paddingLeft = f.paddingLeft;
+                comp.itemSpacing = f.itemSpacing;
+                if ("counterAxisSpacing" in f) (comp as any).counterAxisSpacing = (f as any).counterAxisSpacing;
+                if ("layoutWrap" in f) (comp as any).layoutWrap = (f as any).layoutWrap;
+              }
+
+              // Move children from the CLONE (not original) into the component
+              if ("children" in clone) {
+                const children = [...(clone as FrameNode).children];
+                for (const child of children) {
+                  comp.appendChild(child);
+                }
+              }
+
+              // Name: custom name > original node name
+              comp.name = (customName && selection.length === 1) ? customName : (customName ? `${customName} ${ni + 1}` : node.name);
+
+              // Place the component where the original node was
+              comp.x = node.x;
+              comp.y = node.y;
+
+              // Insert comp in the same parent at the same index
+              const parent = node.parent;
+              if (parent && "children" in parent && !isInsideInstance) {
+                const idx = (parent.children as readonly SceneNode[]).indexOf(node as SceneNode);
+                if (idx >= 0) {
+                  parent.insertChild(idx, comp);
+                } else {
+                  (parent as FrameNode).appendChild(comp);
+                }
+                // Remove the original node (only when not inside an instance)
+                node.remove();
+              } else {
+                // Node is inside an instance or has no suitable parent — place on the page
+                figma.currentPage.appendChild(comp);
+              }
+
+              // Clean up the leftover clone shell (children were already moved)
+              clone.remove();
+
+              created.push(comp);
+            }
+
+            if (created.length > 0) {
+              figma.currentPage.selection = created;
+              const summary = `Created component${created.length > 1 ? "s" : ""}: ${created.map(c => c.name).join(", ")}`;
+              figma.notify(summary, { timeout: 4000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobId, summary } as any);
+            } else {
+              sendToUI({ type: "job-complete", jobId: nativeJobId, summary: "No components created." } as any);
+            }
+          } catch (err: any) {
+            figma.notify(`Failed to create component: ${err.message}`, { timeout: 4000 });
+            sendToUI({ type: "job-error", jobId: nativeJobId, error: `Failed: ${err.message}` } as any);
+          }
+          break;
+        }
+
+        if (isCreateVariantsIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select a frame or element first.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobIdV = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobIdV, prompt: intentText } as any);
+
+          try {
+            // ── Use the LLM to understand the user's intent ──
+            // Instead of brittle regex, ask the LLM to extract variant names
+            // and the property name from whatever the user said.
+            sendToUI({ type: "status", message: "Understanding your request…" });
+
+            // Gather existing variant names from ALL selected component sets
+            // so the LLM knows which states already exist.
+            let existingVariantInfo = "";
+            const componentSetNodes = [...selection].filter(n => n.type === "COMPONENT_SET");
+            if (componentSetNodes.length > 0) {
+              const allExisting: string[] = [];
+              for (const csNode of componentSetNodes) {
+                const children = (csNode as ComponentSetNode).children as ComponentNode[];
+                for (const c of children) {
+                  const eqIndex = c.name.indexOf("=");
+                  allExisting.push(eqIndex >= 0 ? c.name.substring(eqIndex + 1).trim() : c.name);
+                }
+              }
+              if (allExisting.length > 0) {
+                existingVariantInfo = `\nSome component sets already have these variants: [${[...new Set(allExisting)].join(", ")}]. Do NOT include variants that already exist.`;
+              }
+            }
+
+            const parsePrompt =
+              `The user said: "${intentText}"\n` +
+              `They are working with ${selection.length > 1 ? selection.length + " UI components" : "a UI component"} and want to create variant states.${existingVariantInfo}\n\n` +
+              `Extract the following from the user's message:\n` +
+              `1. "variantNames": An array of state/variant names to create (e.g., ["Hover", "Active", "Disabled"]).\n` +
+              `   - Capitalize each name (e.g., "hover" → "Hover").\n` +
+              `   - If the user says "missing" or "all" without specifying names, infer common UI states: Default, Hover, Active, Disabled — but exclude any that already exist.\n` +
+              `   - If the user asks for a single state, return just that one.\n` +
+              `   - Only include actual UI state names, not filler words.\n` +
+              `2. "propertyName": The Figma variant property name (e.g., "State", "Size", "Type"). Default to "State" if not specified.\n\n` +
+              `Respond with ONLY valid JSON, no markdown:\n` +
+              `{"variantNames": ["..."], "propertyName": "..."}`;
+
+            let variantNames: string[] = [];
+            let propName = "State";
+
+            try {
+              const parsePayload = {
+                intent: parsePrompt,
+                selection: { nodes: [] },
+                designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                apiKey: _userApiKey,
+                provider: _selectedProvider,
+                model: _selectedModel,
+              };
+              const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true", parsePayload) as any;
+
+              // Try to extract variantNames from the LLM response.
+              let parsed: any = null;
+
+              // Check if the response itself has variantNames
+              if (parseResult.variantNames) {
+                parsed = parseResult;
+              }
+              // Fallback: try extracting from stringified response
+              if (!parsed) {
+                const rawStr = JSON.stringify(parseResult);
+                const jsonMatch = rawStr.match(/\{"variantNames"\s*:\s*\[.*?\]\s*,\s*"propertyName"\s*:\s*"[^"]*"\s*\}/);
+                if (jsonMatch) {
+                  parsed = JSON.parse(jsonMatch[0]);
+                }
+              }
+              // Try extracting from raw response text if available
+              if (!parsed && parseResult._raw) {
+                const jsonMatch = parseResult._raw.match(/\{"variantNames"\s*:\s*\[.*?\]\s*,\s*"propertyName"\s*:\s*"[^"]*"\s*\}/);
+                if (jsonMatch) {
+                  parsed = JSON.parse(jsonMatch[0]);
+                }
+              }
+
+              if (parsed && Array.isArray(parsed.variantNames) && parsed.variantNames.length > 0) {
+                variantNames = parsed.variantNames.map((n: string) => String(n).charAt(0).toUpperCase() + String(n).slice(1));
+                if (parsed.propertyName && typeof parsed.propertyName === "string") {
+                  propName = parsed.propertyName;
+                }
+                console.log(`[Variants] LLM parsed intent: names=[${variantNames.join(", ")}], property="${propName}"`);
+              } else {
+                console.warn(`[Variants] LLM intent parsing returned no variant names, using fallback`);
+              }
+            } catch (parseErr: any) {
+              console.warn(`[Variants] LLM intent parsing failed: ${parseErr.message}, using fallback`);
+            }
+
+            // Fallback: if LLM parsing failed, use basic extraction
+            if (variantNames.length === 0) {
+              // Quick local fallback: check for known state names in the text
+              const knownStates = ["default", "hover", "active", "pressed", "disabled", "focused", "focus", "selected", "error", "loading"];
+              const foundStates = knownStates.filter(s => new RegExp(`\\b${s}\\b`, "i").test(intentText));
+              if (foundStates.length > 0) {
+                variantNames = foundStates.map(s => s.charAt(0).toUpperCase() + s.slice(1));
+              } else {
+                variantNames = ["Default", "Hover", "Active", "Disabled"];
+              }
+              console.log(`[Variants] Fallback parsed: [${variantNames.join(", ")}]`);
+            }
+
+            // Helper: clone a node and convert it to a ComponentNode
+            function cloneAsComponent(src: SceneNode, varName: string, pName: string): ComponentNode {
+              let clone = src.clone() as SceneNode;
+
+              // Detach instance if needed
+              if (clone.type === "INSTANCE") {
+                clone = (clone as InstanceNode).detachInstance() as unknown as SceneNode;
+              }
+              // Recursively detach nested instances
+              function detachNested(n: SceneNode): void {
+                if (!("children" in n)) return;
+                const container = n as FrameNode;
+                for (let ci = 0; ci < container.children.length; ci++) {
+                  const child = container.children[ci];
+                  if (child.type === "INSTANCE") {
+                    const det = (child as InstanceNode).detachInstance();
+                    detachNested(det as unknown as SceneNode);
+                  } else {
+                    detachNested(child);
+                  }
+                }
+              }
+              detachNested(clone);
+
+              // If source is already a ComponentNode, clone is also a ComponentNode
+              if (clone.type === "COMPONENT") {
+                (clone as ComponentNode).name = `${pName}=${varName}`;
+                console.log(`[Variants] cloneAsComponent: COMPONENT path — ${(clone as any).children?.length || 0} children preserved`);
+                return clone as ComponentNode;
+              }
+
+              // For FRAME / INSTANCE / other types: wrap the entire clone
+              // inside a new component. This preserves the complete original
+              // structure (fills, auto-layout, children, text, etc.) without
+              // manually copying properties one by one.
+              const comp = figma.createComponent();
+              comp.name = `${pName}=${varName}`;
+              comp.resize(clone.width, clone.height);
+              comp.fills = [];          // transparent — clone provides all visuals
+              comp.clipsContent = false; // don't clip children
+
+              // Place clone at origin inside the component
+              clone.x = 0;
+              clone.y = 0;
+              comp.appendChild(clone);
+
+              // Use auto-layout so the component hugs the clone exactly
+              comp.layoutMode = "VERTICAL";
+              comp.primaryAxisSizingMode = "AUTO";
+              comp.counterAxisSizingMode = "AUTO";
+              comp.paddingTop = 0;
+              comp.paddingRight = 0;
+              comp.paddingBottom = 0;
+              comp.paddingLeft = 0;
+
+              // Make the inner clone fill the component width so it stretches naturally
+              if ("layoutSizingHorizontal" in clone) {
+                try { (clone as any).layoutSizingHorizontal = "FILL"; } catch (_) {}
+              }
+
+              console.log(`[Variants] cloneAsComponent: FRAME-wrap path — clone type=${clone.type}, inner children=${("children" in clone ? (clone as any).children.length : 0)}`);
+              return comp;
+            }
+
+            // ── LLM-driven variant styling ──
+            // For each variant, snapshot it and send to the LLM with a targeted
+            // prompt so the model can intelligently style each state using the
+            // design system context rather than hardcoded adjustments.
+
+            // Helper: extract a concise visual summary listing each node's ID,
+            // type, current fill color, opacity, etc. so the LLM prompt contains
+            // clear, actionable information instead of relying on raw JSON alone.
+            function describeNodeVisuals(snap: NodeSnapshot, indent: string = ""): string {
+              const lines: string[] = [];
+              let desc = `${indent}• "${snap.name}" (${snap.type}, id="${snap.id}")`;
+              if (snap.fillColor) desc += ` fill=${snap.fillColor}`;
+              if (snap.opacity !== undefined && snap.opacity < 1) desc += ` opacity=${snap.opacity}`;
+              if (snap.strokeColor) desc += ` stroke=${snap.strokeColor}`;
+              if (snap.cornerRadius) desc += ` radius=${snap.cornerRadius}`;
+              if (snap.characters) desc += ` text="${snap.characters}"`;
+              if (snap.effects && snap.effects.length > 0) desc += ` effects=[${snap.effects.map((e: any) => e.type).join(",")}]`;
+              lines.push(desc);
+              if (snap.children) {
+                for (const child of snap.children) {
+                  lines.push(...describeNodeVisuals(child, indent + "  ").split("\n"));
+                }
+              }
+              return lines.join("\n");
+            }
+
+            // Helper: collect all node IDs that have a solid fill (the main
+            // targets for color changes).
+            function collectFillNodes(snap: NodeSnapshot): Array<{id: string, name: string, fillColor: string}> {
+              const result: Array<{id: string, name: string, fillColor: string}> = [];
+              if (snap.fillColor) {
+                result.push({ id: snap.id, name: snap.name, fillColor: snap.fillColor });
+              }
+              if (snap.children) {
+                for (const child of snap.children) {
+                  result.push(...collectFillNodes(child));
+                }
+              }
+              return result;
+            }
+
+            // Helper: basic hex color manipulation for fallback styling
+            function adjustHexColor(hex: string, factor: number): string {
+              // factor > 1 = lighten, factor < 1 = darken
+              const r = parseInt(hex.slice(1, 3), 16);
+              const g = parseInt(hex.slice(3, 5), 16);
+              const b = parseInt(hex.slice(5, 7), 16);
+              const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+              if (factor > 1) {
+                // Lighten: blend toward white
+                const t = factor - 1; // 0..1 range
+                return `#${clamp(r + (255 - r) * t).toString(16).padStart(2, "0")}${clamp(g + (255 - g) * t).toString(16).padStart(2, "0")}${clamp(b + (255 - b) * t).toString(16).padStart(2, "0")}`.toUpperCase();
+              } else {
+                // Darken: multiply toward black
+                return `#${clamp(r * factor).toString(16).padStart(2, "0")}${clamp(g * factor).toString(16).padStart(2, "0")}${clamp(b * factor).toString(16).padStart(2, "0")}`.toUpperCase();
+              }
+            }
+
+            // Fallback: apply basic styling directly when LLM fails or returns nothing
+            function applyFallbackVariantStyle(comp: ComponentNode, varName: string): void {
+              const state = varName.toLowerCase();
+              console.log(`[Variants] Applying fallback styling for "${varName}"`);
+
+              // Find all nodes with fills in the component
+              const compSnap = snapshotNode(comp, 0);
+              const fillNodes = collectFillNodes(compSnap);
+              if (fillNodes.length === 0) return;
+
+              for (const fNode of fillNodes) {
+                const node = figma.getNodeById(fNode.id) as SceneNode | null;
+                if (!node || !("fills" in node)) continue;
+                const fills = (node as GeometryMixin).fills;
+                if (!Array.isArray(fills) || fills.length === 0) continue;
+
+                const newFills = fills.map((f: Paint) => {
+                  if (f.type !== "SOLID") return f;
+                  const solid = f as SolidPaint;
+                  const hexR = Math.round(solid.color.r * 255).toString(16).padStart(2, "0");
+                  const hexG = Math.round(solid.color.g * 255).toString(16).padStart(2, "0");
+                  const hexB = Math.round(solid.color.b * 255).toString(16).padStart(2, "0");
+                  const origHex = `#${hexR}${hexG}${hexB}`;
+                  let newHex = origHex;
+
+                  if (state === "hover") {
+                    newHex = adjustHexColor(origHex, 1.25); // lighten 25%
+                  } else if (state === "active" || state === "pressed") {
+                    newHex = adjustHexColor(origHex, 0.65); // darken 35%
+                  } else if (state === "disabled") {
+                    newHex = adjustHexColor(origHex, 1.4); // lighten significantly
+                  } else if (state === "focused" || state === "focus") {
+                    newHex = adjustHexColor(origHex, 1.1); // slightly lighten
+                  } else if (state === "error" || state === "danger") {
+                    newHex = "#D32F2F"; // red
+                  } else {
+                    newHex = adjustHexColor(origHex, 0.85); // generic: slightly darken
+                  }
+
+                  const nr = parseInt(newHex.slice(1, 3), 16) / 255;
+                  const ng = parseInt(newHex.slice(3, 5), 16) / 255;
+                  const nb = parseInt(newHex.slice(5, 7), 16) / 255;
+                  return { ...solid, color: { r: nr, g: ng, b: nb } };
+                });
+
+                (node as GeometryMixin).fills = newFills;
+              }
+
+              // Opacity for disabled state
+              if (state === "disabled") {
+                comp.opacity = 0.5;
+              }
+
+              // Add effects for certain states
+              if (state === "hover") {
+                comp.effects = [
+                  { type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.15 }, offset: { x: 0, y: 2 }, radius: 6, spread: 0, visible: true, blendMode: "NORMAL" }
+                ];
+              } else if (state === "active" || state === "pressed") {
+                comp.effects = [
+                  { type: "INNER_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.25 }, offset: { x: 0, y: 2 }, radius: 4, spread: 0, visible: true, blendMode: "NORMAL" }
+                ];
+              } else if (state === "focused" || state === "focus") {
+                comp.effects = [
+                  { type: "DROP_SHADOW", color: { r: 0.25, g: 0.4, b: 1, a: 0.5 }, offset: { x: 0, y: 0 }, radius: 0, spread: 3, visible: true, blendMode: "NORMAL" }
+                ];
+              }
+
+              figma.notify(`Applied fallback styling for "${varName}"`, { timeout: 2000 });
+            }
+
+            async function applyVariantStyleViaLLM(comp: ComponentNode, varName: string): Promise<void> {
+              const state = varName.toLowerCase();
+
+              // Default/Rest variants need no styling changes
+              if (state === "default" || state === "normal" || state === "rest" || state === "base") {
+                console.log(`[Variants] Skipping LLM for "${varName}" (default state)`);
+                return;
+              }
+
+              try {
+                // Snapshot the component so the LLM can see its structure
+                const compSnapshot = snapshotNode(comp, 0);
+                const compSelection: SelectionSnapshot = { nodes: [compSnapshot] };
+                const designSystem = await extractDesignSystemSnapshot();
+
+                // Extract concise visual summary & actionable node list
+                const visualSummary = describeNodeVisuals(compSnapshot);
+                const fillNodes = collectFillNodes(compSnapshot);
+                const fillNodeList = fillNodes.map(n => `  - id="${n.id}" name="${n.name}" currentFill=${n.fillColor}`).join("\n");
+
+                // Build a targeted prompt for this specific variant state
+                const variantPrompt =
+                  `Apply "${varName}" state styling to this UI component.\n\n` +
+                  `COMPONENT STRUCTURE (node tree with current visual properties):\n${visualSummary}\n\n` +
+                  `NODES WITH FILLS (these are the main targets for color changes):\n${fillNodeList}\n\n` +
+                  `CRITICAL RULES:\n` +
+                  `1. ONLY use the node IDs listed above — do NOT invent new IDs.\n` +
+                  `2. Do NOT change text content, font family, or font size.\n` +
+                  `3. Do NOT use DUPLICATE_FRAME, INSERT_COMPONENT, or RESIZE_NODE.\n` +
+                  `4. You MUST return at least one SET_FILL_COLOR operation to visually differentiate this state.\n` +
+                  `5. Use design system colors/tokens when available.\n\n` +
+                  `REQUIRED CHANGES for "${varName}" state:\n` +
+                  `• The component MUST look visibly different from the default state.\n` +
+                  `• Use SET_FILL_COLOR on the nodes listed above to change their fill colors.\n` +
+                  (state === "hover" ?
+                    `• HOVER state: lighten the primary fill color by 15-25%. Add a subtle DROP_SHADOW for elevation.\n` :
+                  state === "active" || state === "pressed" ?
+                    `• ACTIVE/PRESSED state: darken the primary fill color by 25-35%. Add an INNER_SHADOW for depth. The color should be noticeably darker than the default.\n` :
+                  state === "disabled" ?
+                    `• DISABLED state: desaturate/grey out all fill colors. Set opacity to 0.4-0.5 using SET_OPACITY.\n` :
+                  state === "focused" || state === "focus" ?
+                    `• FOCUSED state: add a visible focus ring (DROP_SHADOW with spread:3, no offset, blue/accent color). Slightly lighten the fill.\n` :
+                  state === "error" || state === "danger" ?
+                    `• ERROR state: change the primary fill to a red/danger color (e.g., #D32F2F or design system error color).\n` :
+                  state === "selected" ?
+                    `• SELECTED state: use accent/selection color for the fill. Consider adding a subtle border or highlight.\n` :
+                    `• For "${varName}": apply appropriate visual changes based on common UI patterns for this state.\n`) +
+                  `\nReturn ONLY the operations array. Every operation must target a real node ID from the list above.`;
+
+                const payload = {
+                  intent: variantPrompt,
+                  selection: compSelection,
+                  designSystem,
+                  ..._fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {},
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel,
+                };
+
+                sendToUI({ type: "status", message: `Styling "${varName}" variant via AI…` });
+                console.log(`[Variants] Sending "${varName}" to LLM for styling...`);
+                console.log(`[Variants] Fill targets: ${fillNodes.map(n => `${n.name}(${n.fillColor})`).join(", ")}`);
+
+                const batch = await fetchViaUI("/plan?lenient=true", payload) as OperationBatch;
+
+                if (batch.operations && batch.operations.length > 0) {
+                  // Filter out dangerous ops that could break the variant flow
+                  const safeOps = batch.operations.filter(o =>
+                    o.type !== "DUPLICATE_FRAME" &&
+                    o.type !== "INSERT_COMPONENT" &&
+                    o.type !== "RESIZE_NODE"
+                  );
+                  console.log(`[Variants] Applying ${safeOps.length} LLM operations for "${varName}" (filtered ${batch.operations.length - safeOps.length} unsafe ops)`);
+                  let appliedCount = 0;
+                  for (const op of safeOps) {
+                    try {
+                      await applyOperation(op);
+                      appliedCount++;
+                    } catch (err: any) {
+                      console.warn(`[Variants] Op failed for "${varName}": ${err.message}`, JSON.stringify(op));
+                    }
+                  }
+                  if (appliedCount === 0) {
+                    console.warn(`[Variants] All ${safeOps.length} LLM operations failed for "${varName}", using fallback`);
+                    applyFallbackVariantStyle(comp, varName);
+                  } else {
+                    console.log(`[Variants] Successfully applied ${appliedCount}/${safeOps.length} operations for "${varName}"`);
+                  }
+                } else {
+                  console.warn(`[Variants] LLM returned no operations for "${varName}", using fallback`);
+                  applyFallbackVariantStyle(comp, varName);
+                }
+              } catch (err: any) {
+                console.warn(`[Variants] LLM styling failed for "${varName}": ${err.message}, using fallback`);
+                applyFallbackVariantStyle(comp, varName);
+              }
+            }
+
+            // ── Process EACH selected node ──
+            // Each node gets its own variant set, so "add missing states"
+            // works for frames, buttons, instances, components — anything.
+            const allCreatedSets: (ComponentSetNode | ComponentNode)[] = [];
+            const summaryParts: string[] = [];
+
+            for (const sourceNode of [...selection]) {
+              const isAddingToExistingSet = sourceNode.type === "COMPONENT_SET";
+              let currentPropName = propName;
+              let templateSource: SceneNode;
+              let existingVariantNames: string[] = [];
+              let existingSet: ComponentSetNode | null = null;
+
+              if (isAddingToExistingSet) {
+                existingSet = sourceNode as ComponentSetNode;
+                const children = existingSet.children as ComponentNode[];
+                if (children.length === 0) {
+                  console.warn(`[Variants] Skipping empty component set "${sourceNode.name}"`);
+                  continue;
+                }
+                templateSource = children[0];
+                const firstChildName = children[0].name;
+                const eqIdx = firstChildName.indexOf("=");
+                if (eqIdx >= 0 && currentPropName === "State") {
+                  currentPropName = firstChildName.substring(0, eqIdx).trim();
+                }
+                existingVariantNames = children.map(c => {
+                  const eqIndex = c.name.indexOf("=");
+                  return eqIndex >= 0 ? c.name.substring(eqIndex + 1).trim().toLowerCase() : c.name.toLowerCase();
+                });
+                console.log(`[Variants] Existing set: "${existingSet.name}" variants: [${existingVariantNames.join(", ")}], prop="${currentPropName}"`);
+              } else {
+                templateSource = sourceNode;
+              }
+
+              // Filter out variants that already exist (for component sets)
+              let nodeVariantNames = [...variantNames];
+              if (isAddingToExistingSet && existingVariantNames.length > 0) {
+                nodeVariantNames = nodeVariantNames.filter(n => !existingVariantNames.includes(n.toLowerCase()));
+                if (nodeVariantNames.length === 0) {
+                  console.log(`[Variants] All variants already exist for "${sourceNode.name}", skipping.`);
+                  continue;
+                }
+              }
+
+              sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"…` });
+
+              // Create a component for each variant by cloning the template
+              const components: ComponentNode[] = [];
+              for (const vName of nodeVariantNames) {
+                const comp = cloneAsComponent(templateSource, vName, currentPropName);
+                figma.currentPage.appendChild(comp);
+                await applyVariantStyleViaLLM(comp, vName);
+                components.push(comp);
+              }
+
+              if (isAddingToExistingSet && existingSet) {
+                for (const comp of components) {
+                  existingSet.appendChild(comp);
+                }
+                allCreatedSets.push(existingSet);
+                summaryParts.push(`Added ${components.length} variant${components.length > 1 ? "s" : ""} to "${existingSet.name}"`);
+              } else if (components.length >= 2) {
+                const parentNode = sourceNode.parent as (BaseNode & ChildrenMixin) | null;
+                const targetParent = parentNode && "children" in parentNode ? parentNode : figma.currentPage;
+                const componentSet = figma.combineAsVariants(components, targetParent as any);
+                componentSet.name = sourceNode.name || "Component";
+
+                componentSet.layoutMode = "HORIZONTAL";
+                componentSet.primaryAxisSizingMode = "AUTO";
+                componentSet.counterAxisSizingMode = "AUTO";
+                componentSet.itemSpacing = 16;
+                componentSet.paddingTop = 40;
+                componentSet.paddingRight = 40;
+                componentSet.paddingBottom = 40;
+                componentSet.paddingLeft = 40;
+                componentSet.fills = [];
+
+                componentSet.x = sourceNode.x;
+                componentSet.y = sourceNode.y + sourceNode.height + 80;
+
+                allCreatedSets.push(componentSet);
+                summaryParts.push(`"${componentSet.name}" with ${nodeVariantNames.length} variants`);
+              } else if (components.length === 1) {
+                allCreatedSets.push(components[0]);
+                summaryParts.push(`"${sourceNode.name}" (1 variant — need 2+ for a set)`);
+              }
+            }
+
+            // Select all created sets and report
+            if (allCreatedSets.length > 0) {
+              figma.currentPage.selection = allCreatedSets as SceneNode[];
+              const summary = selection.length > 1
+                ? `Created variant sets for ${allCreatedSets.length} element${allCreatedSets.length > 1 ? "s" : ""}: ${summaryParts.join("; ")}`
+                : summaryParts[0] || "Variants created.";
+              figma.notify(summary, { timeout: 5000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdV, summary } as any);
+            } else {
+              sendToUI({ type: "job-complete", jobId: nativeJobIdV, summary: "No variants created." } as any);
+            }
+          } catch (err: any) {
+            figma.notify(`Failed to create variants: ${err.message}`, { timeout: 4000 });
+            sendToUI({ type: "job-error", jobId: nativeJobIdV, error: `Failed: ${err.message}` } as any);
+          }
+          break;
+        }
+
+        if (isDetachInstanceIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select an instance first.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobId2 = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobId2, prompt: intentText } as any);
+          let detached = 0;
+          const newSelection: SceneNode[] = [];
+          for (const node of [...selection]) {
+            if (node.type === "INSTANCE") {
+              const frame = (node as InstanceNode).detachInstance();
+              newSelection.push(frame);
+              detached++;
+            } else {
+              newSelection.push(node);
+            }
+          }
+          if (detached > 0) {
+            figma.currentPage.selection = newSelection;
+            const summary2 = `Detached ${detached} instance${detached > 1 ? "s" : ""}. `;
+            figma.notify(summary2, { timeout: 3000 });
+            sendToUI({ type: "job-complete", jobId: nativeJobId2, summary: summary2 } as any);
+          } else {
+            figma.notify("No instances found in selection.", { timeout: 3000 });
+            sendToUI({ type: "job-complete", jobId: nativeJobId2, summary: "No instances found." } as any);
+          }
+          break;
+        }
+
+        if (isGroupIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length < 2) {
+            figma.notify("Select at least 2 elements to group.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "Need 2+ elements." });
+            break;
+          }
+          const nativeJobId3 = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobId3, prompt: intentText } as any);
+          const group = figma.group([...selection], selection[0].parent!);
+          group.name = "Group";
+          figma.currentPage.selection = [group];
+          const summary3 = `Grouped ${selection.length} elements.`;
+          figma.notify(summary3, { timeout: 3000 });
+          sendToUI({ type: "job-complete", jobId: nativeJobId3, summary: summary3 } as any);
+          break;
+        }
+
+        if (isUngroupIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select a group first.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobId4 = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobId4, prompt: intentText } as any);
+          let ungrouped = 0;
+          const newSel: SceneNode[] = [];
+          for (const node of [...selection]) {
+            if (node.type === "GROUP") {
+              const parent = node.parent!;
+              const children = [...(node as GroupNode).children];
+              const idx = (parent.children as readonly SceneNode[]).indexOf(node);
+              for (let i = children.length - 1; i >= 0; i--) {
+                (parent as FrameNode).insertChild(idx, children[i]);
+                newSel.push(children[i]);
+              }
+              node.remove();
+              ungrouped++;
+            } else {
+              newSel.push(node);
+            }
+          }
+          if (ungrouped > 0) {
+            figma.currentPage.selection = newSel;
+            const summary4 = `Ungrouped ${ungrouped} group${ungrouped > 1 ? "s" : ""}. `;
+            figma.notify(summary4, { timeout: 3000 });
+            sendToUI({ type: "job-complete", jobId: nativeJobId4, summary: summary4 } as any);
+          } else {
+            figma.notify("No groups found in selection.", { timeout: 3000 });
+            sendToUI({ type: "job-complete", jobId: nativeJobId4, summary: "No groups found." } as any);
+          }
+          break;
+        }
+
+        if (isFlattenIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select elements to flatten.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobId5 = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobId5, prompt: intentText } as any);
+          const flattened: SceneNode[] = [];
+          for (const node of [...selection]) {
+            try {
+              const flat = figma.flatten([node]);
+              flattened.push(flat);
+            } catch (e: any) {
+              figma.notify(`Cannot flatten "${node.name}": ${e.message}`, { timeout: 3000 });
+            }
+          }
+          if (flattened.length > 0) {
+            figma.currentPage.selection = flattened;
+            const summary5 = `Flattened ${flattened.length} element${flattened.length > 1 ? "s" : ""}. `;
+            figma.notify(summary5, { timeout: 3000 });
+            sendToUI({ type: "job-complete", jobId: nativeJobId5, summary: summary5 } as any);
+          } else {
+            sendToUI({ type: "job-complete", jobId: nativeJobId5, summary: "Nothing flattened." } as any);
+          }
+          break;
+        }
+
+        if (isAutoLayoutIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select a frame first.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobIdAL = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobIdAL, prompt: intentText } as any);
+
+          try {
+            // Collect frames to apply auto layout to.
+            // ONLY walk the selected frame(s) and their direct FRAME children
+            // (max 3 levels deep). Never enter INSTANCE or COMPONENT nodes —
+            // those already have their own internal layout.
+            const MAX_AL_DEPTH = 3;
+
+            interface FrameLayoutInfo {
+              id: string;
+              name: string;
+              type: string;
+              depth: number;
+              width: number;
+              height: number;
+              childCount: number;
+              childSummary: string;
+              alreadyHasLayout: boolean;
+            }
+
+            function collectFrames(node: SceneNode, list: FrameLayoutInfo[], depth: number): void {
+              // Only process FRAME nodes — skip INSTANCE, COMPONENT, GROUP internals
+              if (node.type !== "FRAME") return;
+              if (depth > MAX_AL_DEPTH) return;
+
+              const container = node as FrameNode;
+              const childNames = container.children.map((c: SceneNode) => {
+                if (c.type === "TEXT") return `"${(c as TextNode).characters.substring(0, 30)}" (TEXT)`;
+                return `"${c.name}" (${c.type}, ${Math.round(c.width)}×${Math.round(c.height)})`;
+              });
+              const hasLayout = container.layoutMode === "HORIZONTAL" || container.layoutMode === "VERTICAL";
+
+              list.push({
+                id: node.id,
+                name: node.name,
+                type: node.type,
+                depth,
+                width: Math.round(node.width),
+                height: Math.round(node.height),
+                childCount: container.children.length,
+                childSummary: childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` … +${childNames.length - 10} more` : ""),
+                alreadyHasLayout: hasLayout,
+              });
+
+              // Only recurse into FRAME children (not instances/components)
+              for (const child of container.children) {
+                if (child.type === "FRAME") {
+                  collectFrames(child, list, depth + 1);
+                }
+              }
+            }
+
+            const allFrames: FrameLayoutInfo[] = [];
+            for (const node of [...selection]) {
+              collectFrames(node, allFrames, 0);
+            }
+
+            // Only process frames that don't already have auto layout
+            const framesToProcess = allFrames.filter(f => !f.alreadyHasLayout);
+
+            if (framesToProcess.length === 0) {
+              const msg = allFrames.length > 0
+                ? `All ${allFrames.length} frames already have auto layout.`
+                : "No frames found to apply auto layout to.";
+              figma.notify(msg, { timeout: 3000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdAL, summary: msg } as any);
+              break;
+            }
+
+            sendToUI({ type: "status", message: `Analyzing ${framesToProcess.length} frames for auto layout…` });
+
+            const frameDescriptions = framesToProcess.map(f =>
+              `• id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}×${f.height} children(${f.childCount}): [${f.childSummary}]`
+            ).join("\n");
+
+            const layoutPrompt =
+              `The user said: "${intentText}"\n` +
+              `Apply auto layout to a Figma frame and its nested sub-frames.\n\n` +
+              `Frames to configure (depth 0 = root, selected frame):\n${frameDescriptions}\n\n` +
+              `For EACH frame, determine the best auto layout settings:\n` +
+              `- "direction": "VERTICAL" or "HORIZONTAL"\n` +
+              `  • Vertical: when children are stacked top-to-bottom (lists, cards, full screens)\n` +
+              `  • Horizontal: when children are side-by-side (rows, navbars, quantity selectors, price lines)\n` +
+              `- "spacing": pixels between items (0 = touching, 8-16 = normal, 24+ = sections)\n` +
+              `- "padding": pixels on all sides (0 for inner groups, 16-24 for main containers)\n` +
+              `- "alignment": primary axis — "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN"\n` +
+              `- "counterAlignment": cross axis — "MIN" | "CENTER" | "MAX"\n\n` +
+              `IMPORTANT rules:\n` +
+              `- depth=0 root frame: use FIXED width to keep the screen width, spacing based on its sections\n` +
+              `- Inner frames: typically no padding, suitable spacing\n` +
+              `- Look at child dimensions to infer direction: if children are wider than tall and stacked, it's vertical. If children are narrow and side by side, it's horizontal.\n\n` +
+              `Respond with ONLY a JSON array, no markdown:\n` +
+              `[{"id": "...", "direction": "...", "spacing": N, "padding": N, "alignment": "...", "counterAlignment": "..."}]`;
+
+            const layoutPayload = {
+              intent: layoutPrompt,
+              selection: { nodes: [] },
+              designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+              apiKey: _userApiKey,
+              provider: _selectedProvider,
+              model: _selectedModel,
+            };
+
+            let layoutSettings: Array<{
+              id: string;
+              direction: "VERTICAL" | "HORIZONTAL";
+              spacing: number;
+              padding: number;
+              alignment: string;
+              counterAlignment: string;
+            }> = [];
+
+            try {
+              const layoutResult = await fetchViaUI("/plan?lenient=true&analyze=true", layoutPayload) as any;
+              // analyze=true returns parsed JSON directly — may be array or object
+              if (Array.isArray(layoutResult)) {
+                layoutSettings = layoutResult;
+              } else {
+                const rawStr = JSON.stringify(layoutResult);
+                const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                if (arrMatch) {
+                  const parsed = JSON.parse(arrMatch[0]);
+                  if (Array.isArray(parsed)) {
+                    layoutSettings = parsed;
+                  }
+                }
+              }
+              console.log(`[AutoLayout] LLM returned settings for ${layoutSettings.length} frames`);
+            } catch (parseErr: any) {
+              console.warn(`[AutoLayout] LLM layout analysis failed: ${parseErr.message}`);
+            }
+
+            const settingsMap = new Map<string, typeof layoutSettings[0]>();
+            for (const s of layoutSettings) settingsMap.set(s.id, s);
+
+            // Apply bottom-up (deepest frames first)
+            const sorted = [...framesToProcess].sort((a, b) => b.depth - a.depth);
+            let appliedCount = 0;
+
+            for (const frameInfo of sorted) {
+              const node = figma.getNodeById(frameInfo.id) as SceneNode | null;
+              if (!node || node.type !== "FRAME") continue;
+
+              const frame = node as FrameNode;
+              const settings = settingsMap.get(frameInfo.id);
+
+              const dir = settings?.direction || "VERTICAL";
+              const spacing = settings?.spacing ?? 0;
+              const pad = settings?.padding ?? 0;
+              const align = settings?.alignment || "MIN";
+              const counterAlign = settings?.counterAlignment || "MIN";
+
+              // Save original dimensions for root frame
+              const origWidth = frame.width;
+              const origHeight = frame.height;
+              const isRoot = frameInfo.depth === 0;
+
+              frame.layoutMode = dir;
+              frame.itemSpacing = spacing;
+              frame.paddingTop = pad;
+              frame.paddingRight = pad;
+              frame.paddingBottom = pad;
+              frame.paddingLeft = pad;
+
+              if (["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(align)) {
+                frame.primaryAxisAlignItems = align as any;
+              }
+              if (["MIN", "CENTER", "MAX"].includes(counterAlign)) {
+                frame.counterAxisAlignItems = counterAlign as any;
+              }
+
+              // Root frame: keep original fixed width, auto height
+              // Inner frames: hug content
+              if (isRoot) {
+                frame.counterAxisSizingMode = "FIXED"; // keep width
+                frame.primaryAxisSizingMode = "AUTO";  // hug height
+                frame.resize(origWidth, frame.height);
+              } else {
+                frame.primaryAxisSizingMode = "AUTO";
+                frame.counterAxisSizingMode = "AUTO";
+              }
+
+              appliedCount++;
+              console.log(`[AutoLayout] Applied to "${frame.name}" (depth ${frameInfo.depth}): ${dir}, spacing=${spacing}, padding=${pad}`);
+            }
+
+            if (appliedCount > 0) {
+              const summary = `Applied auto layout to ${appliedCount} frame${appliedCount > 1 ? "s" : ""}.`;
+              figma.notify(summary, { timeout: 4000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdAL, summary } as any);
+            } else {
+              sendToUI({ type: "job-complete", jobId: nativeJobIdAL, summary: "No frames had auto layout applied." } as any);
+            }
+          } catch (err: any) {
+            figma.notify(`Failed to apply auto layout: ${err.message}`, { timeout: 4000 });
+            sendToUI({ type: "job-error", jobId: nativeJobIdAL, error: `Failed: ${err.message}` } as any);
+          }
+          break;
+        }
+
+        if (isCleanupIntent) {
+          const selection = figma.currentPage.selection;
+          if (selection.length === 0) {
+            figma.notify("Select a frame first.", { timeout: 3000 });
+            sendToUI({ type: "status", message: "No selection." });
+            break;
+          }
+          const nativeJobIdCU = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobIdCU, prompt: intentText } as any);
+
+          try {
+            // ── Collect all frames in the hierarchy (max 3 levels deep) ──
+            const MAX_CU_DEPTH = 3;
+
+            interface CleanupFrameInfo {
+              id: string;
+              name: string;
+              depth: number;
+              width: number;
+              height: number;
+              layoutMode: string;       // HORIZONTAL | VERTICAL | NONE
+              paddingTop: number;
+              paddingRight: number;
+              paddingBottom: number;
+              paddingLeft: number;
+              itemSpacing: number;
+              counterAxisSpacing: number;
+              primaryAxisAlign: string;
+              counterAxisAlign: string;
+              sizingH: string;
+              sizingV: string;
+              childCount: number;
+              childSummary: string;
+            }
+
+            function collectCleanupFrames(node: SceneNode, list: CleanupFrameInfo[], depth: number): void {
+              if (node.type !== "FRAME") return;
+              if (depth > MAX_CU_DEPTH) return;
+
+              const f = node as FrameNode;
+              const childNames = f.children.map((c: SceneNode) => {
+                if (c.type === "TEXT") return `"${(c as TextNode).characters.substring(0, 30)}" (TEXT)`;
+                return `"${c.name}" (${c.type}, ${Math.round(c.width)}×${Math.round(c.height)})`;
+              });
+
+              const lm = f.layoutMode || "NONE";
+              list.push({
+                id: f.id,
+                name: f.name,
+                depth,
+                width: Math.round(f.width),
+                height: Math.round(f.height),
+                layoutMode: lm === "HORIZONTAL" || lm === "VERTICAL" ? lm : "NONE",
+                paddingTop: f.paddingTop ?? 0,
+                paddingRight: f.paddingRight ?? 0,
+                paddingBottom: f.paddingBottom ?? 0,
+                paddingLeft: f.paddingLeft ?? 0,
+                itemSpacing: f.itemSpacing ?? 0,
+                counterAxisSpacing: (f as any).counterAxisSpacing ?? 0,
+                primaryAxisAlign: (f as any).primaryAxisAlignItems || "MIN",
+                counterAxisAlign: (f as any).counterAxisAlignItems || "MIN",
+                sizingH: (f as any).layoutSizingHorizontal || "FIXED",
+                sizingV: (f as any).layoutSizingVertical || "FIXED",
+                childCount: f.children.length,
+                childSummary: childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` … +${childNames.length - 10} more` : ""),
+              });
+
+              for (const child of f.children) {
+                if (child.type === "FRAME") {
+                  collectCleanupFrames(child, list, depth + 1);
+                }
+              }
+            }
+
+            const allFrames: CleanupFrameInfo[] = [];
+            for (const node of [...selection]) {
+              collectCleanupFrames(node, allFrames, 0);
+            }
+
+            if (allFrames.length === 0) {
+              figma.notify("No frames found. Select a frame to clean up.", { timeout: 3000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No frames to clean up." } as any);
+              break;
+            }
+
+            sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup…` });
+
+            // ── Build a rich description of current layout state ──
+            const frameDescriptions = allFrames.map(f =>
+              `• id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}×${f.height}` +
+              ` layout=${f.layoutMode}` +
+              ` padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]` +
+              ` spacing=${f.itemSpacing} counterSpacing=${f.counterAxisSpacing}` +
+              ` align=${f.primaryAxisAlign}/${f.counterAxisAlign}` +
+              ` sizing=${f.sizingH}/${f.sizingV}` +
+              ` children(${f.childCount}): [${f.childSummary}]`
+            ).join("\n");
+
+            const cleanupPrompt =
+              `The user said: "${intentText}"\n` +
+              `They want to clean up / tidy a Figma frame and make its layout properties consistent.\n\n` +
+              `Here are ALL the frames in the hierarchy with their CURRENT layout properties:\n${frameDescriptions}\n\n` +
+              `Your task: analyze the current padding, spacing, and alignment values and make them CONSISTENT.\n\n` +
+              `Rules:\n` +
+              `- Look for inconsistencies: e.g., padding [16,24,16,8] should probably be [16,16,16,16] or [16,24,16,24].\n` +
+              `- Sibling frames at the same depth should generally share the same padding and spacing values.\n` +
+              `- Use common UI spacing scales: 0, 4, 8, 12, 16, 20, 24, 32, 40, 48.\n` +
+              `- Root frame (depth=0): typically needs more padding (16-32px) and spacing (16-24px).\n` +
+              `- Inner frames (depth>0): typically less padding (0-16px) with appropriate spacing.\n` +
+              `- If a frame has layoutMode=NONE and has children, consider enabling auto layout (set "layoutMode").\n` +
+              `- PRESERVE existing layout direction — don't change HORIZONTAL to VERTICAL or vice versa unless clearly wrong.\n` +
+              `- PRESERVE content — only adjust layout properties, never suggest content changes.\n\n` +
+              `For EACH frame that needs changes, return its updated values.\n` +
+              `Only include frames where you're actually changing something.\n\n` +
+              `Respond with ONLY a JSON array, no markdown:\n` +
+              `[{"id": "...", "layoutMode": "VERTICAL"|"HORIZONTAL" (optional — only to enable auto layout on NONE frames), "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "counterAxisSpacing": N (optional), "alignment": "MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN" (optional), "counterAlignment": "MIN"|"CENTER"|"MAX" (optional)}]`;
+
+            const cleanupPayload = {
+              intent: cleanupPrompt,
+              selection: { nodes: [] },
+              designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+              apiKey: _userApiKey,
+              provider: _selectedProvider,
+              model: _selectedModel,
+            };
+
+            let cleanupSettings: Array<{
+              id: string;
+              layoutMode?: string;
+              paddingTop?: number;
+              paddingRight?: number;
+              paddingBottom?: number;
+              paddingLeft?: number;
+              itemSpacing?: number;
+              counterAxisSpacing?: number;
+              alignment?: string;
+              counterAlignment?: string;
+            }> = [];
+
+            try {
+              const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload) as any;
+              // analyze=true returns parsed JSON directly — may be array or object
+              if (Array.isArray(cleanupResult)) {
+                cleanupSettings = cleanupResult;
+              } else {
+                const rawStr = JSON.stringify(cleanupResult);
+                const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                if (arrMatch) {
+                  const parsed = JSON.parse(arrMatch[0]);
+                  if (Array.isArray(parsed)) {
+                    cleanupSettings = parsed;
+                  }
+                }
+              }
+              console.log(`[Cleanup] LLM returned settings for ${cleanupSettings.length} frames`);
+            } catch (parseErr: any) {
+              console.warn(`[Cleanup] LLM analysis failed: ${parseErr.message}`);
+            }
+
+            if (cleanupSettings.length === 0) {
+              figma.notify("No layout changes needed — frame looks consistent.", { timeout: 3000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No cleanup changes needed." } as any);
+              break;
+            }
+
+            // ── Apply changes bottom-up ──
+            const settingsMap = new Map<string, typeof cleanupSettings[0]>();
+            for (const s of cleanupSettings) settingsMap.set(s.id, s);
+
+            // Sort by depth descending (children first)
+            const frameDepthMap = new Map<string, number>();
+            for (const f of allFrames) frameDepthMap.set(f.id, f.depth);
+
+            const sortedSettings = [...cleanupSettings].sort((a, b) =>
+              (frameDepthMap.get(b.id) ?? 0) - (frameDepthMap.get(a.id) ?? 0)
+            );
+
+            let appliedCount = 0;
+            const changes: string[] = [];
+
+            for (const settings of sortedSettings) {
+              const node = figma.getNodeById(settings.id) as SceneNode | null;
+              if (!node || node.type !== "FRAME") continue;
+
+              const frame = node as FrameNode;
+              const isRoot = (frameDepthMap.get(settings.id) ?? 0) === 0;
+              const origWidth = frame.width;
+              const changeDetails: string[] = [];
+
+              // Enable auto layout if frame has NONE and LLM suggests a mode
+              if (settings.layoutMode && (settings.layoutMode === "HORIZONTAL" || settings.layoutMode === "VERTICAL")) {
+                const currentMode = frame.layoutMode;
+                if (currentMode !== "HORIZONTAL" && currentMode !== "VERTICAL") {
+                  frame.layoutMode = settings.layoutMode as "HORIZONTAL" | "VERTICAL";
+                  changeDetails.push(`layout=${settings.layoutMode}`);
+                }
+              }
+
+              // Only adjust padding/spacing on auto-layout frames
+              if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
+                if (settings.paddingTop !== undefined) { frame.paddingTop = settings.paddingTop; }
+                if (settings.paddingRight !== undefined) { frame.paddingRight = settings.paddingRight; }
+                if (settings.paddingBottom !== undefined) { frame.paddingBottom = settings.paddingBottom; }
+                if (settings.paddingLeft !== undefined) { frame.paddingLeft = settings.paddingLeft; }
+                if (settings.itemSpacing !== undefined) { frame.itemSpacing = settings.itemSpacing; }
+                if (settings.counterAxisSpacing !== undefined) {
+                  (frame as any).counterAxisSpacing = settings.counterAxisSpacing;
+                }
+
+                const p = [settings.paddingTop, settings.paddingRight, settings.paddingBottom, settings.paddingLeft]
+                  .filter(v => v !== undefined);
+                if (p.length > 0) changeDetails.push(`padding=[${frame.paddingTop},${frame.paddingRight},${frame.paddingBottom},${frame.paddingLeft}]`);
+                if (settings.itemSpacing !== undefined) changeDetails.push(`spacing=${settings.itemSpacing}`);
+
+                if (settings.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(settings.alignment)) {
+                  frame.primaryAxisAlignItems = settings.alignment as any;
+                  changeDetails.push(`align=${settings.alignment}`);
+                }
+                if (settings.counterAlignment && ["MIN", "CENTER", "MAX"].includes(settings.counterAlignment)) {
+                  frame.counterAxisAlignItems = settings.counterAlignment as any;
+                  changeDetails.push(`crossAlign=${settings.counterAlignment}`);
+                }
+
+                // Root frame: preserve fixed width
+                if (isRoot) {
+                  frame.counterAxisSizingMode = "FIXED";
+                  frame.primaryAxisSizingMode = "AUTO";
+                  frame.resize(origWidth, frame.height);
+                }
+              }
+
+              if (changeDetails.length > 0) {
+                appliedCount++;
+                changes.push(`"${frame.name}": ${changeDetails.join(", ")}`);
+                console.log(`[Cleanup] Updated "${frame.name}" (depth ${frameDepthMap.get(settings.id)}): ${changeDetails.join(", ")}`);
+              }
+            }
+
+            if (appliedCount > 0) {
+              const summary = `Cleaned up ${appliedCount} frame${appliedCount > 1 ? "s" : ""}: ${changes.slice(0, 3).join("; ")}${changes.length > 3 ? ` … +${changes.length - 3} more` : ""}`;
+              figma.notify(summary, { timeout: 5000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary } as any);
+            } else {
+              figma.notify("No layout changes were needed.", { timeout: 3000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No changes applied." } as any);
+            }
+          } catch (err: any) {
+            figma.notify(`Failed to clean up layout: ${err.message}`, { timeout: 4000 });
+            sendToUI({ type: "job-error", jobId: nativeJobIdCU, error: `Failed: ${err.message}` } as any);
+          }
+          break;
+        }
+
+        // ── AI-powered flows (generate or edit) ─────────────
         const isGenerateIntent = figma.currentPage.selection.length === 0 ||
           /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) ||
           /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) ||

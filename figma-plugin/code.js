@@ -75,7 +75,6 @@
   var MIN_HEIGHT = 280;
   figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
   clearAuditBadges();
-  // DS cache loading is deferred until the UI sends "ui-ready"
   function sendToUI(msg) {
     figma.ui.postMessage(msg);
   }
@@ -364,7 +363,6 @@
     for (let i = 0; i < designFrames.length; i++) {
       currentRootFrameName = designFrames[i].name;
       walkNode(designFrames[i], 0);
-      // Yield every 3 frames to keep UI responsive during heavy tree walks
       if (i % 3 === 2) await yieldToUI();
     }
     console.log("[extractStyleTokens] Found", buttonStyles.length, "buttons:", JSON.stringify(buttonStyles));
@@ -1358,8 +1356,6 @@
   var _unscopedStyleMap = null;
   var _textStyleMap = null;
   var _currentThemeMode = "auto";
-  var _paintStyleNameMap = null;
-  var _textStyleNameMap = null;
   function ensurePaintStyleMaps() {
     if (_lightStyleMap) return;
     _lightStyleMap = /* @__PURE__ */ new Map();
@@ -1441,9 +1437,11 @@
     if (/\blight\b/.test(lower)) return "light";
     return "auto";
   }
+  var _paintStyleNameMap = null;
+  var _textStyleNameMap = null;
   function ensurePaintStyleNameMap() {
     if (_paintStyleNameMap) return _paintStyleNameMap;
-    _paintStyleNameMap = new Map();
+    _paintStyleNameMap = /* @__PURE__ */ new Map();
     try {
       for (const s of figma.getLocalPaintStyles()) {
         const key = s.name.toLowerCase().trim();
@@ -1459,7 +1457,7 @@
   }
   function ensureTextStyleNameMap() {
     if (_textStyleNameMap) return _textStyleNameMap;
-    _textStyleNameMap = new Map();
+    _textStyleNameMap = /* @__PURE__ */ new Map();
     try {
       for (const s of figma.getLocalTextStyles()) {
         const key = s.name.toLowerCase().trim();
@@ -1481,34 +1479,35 @@
         node.fillStyleId = styleId;
         return true;
       }
-    } catch (_) {}
+    } catch (_) {
+    }
     return false;
   }
   function tryBindTextStyleByName(node, styleName) {
     try {
       const map = ensureTextStyleNameMap();
       const key = styleName.toLowerCase().trim();
-      var styleId = map.get(key);
+      let styleId = map.get(key);
       if (!styleId) {
-        // Fuzzy match: strip hyphens, spaces, underscores and compare
-        var normalize = function(s) { return s.replace(/[-_ ]/g, ""); };
-        var normalizedKey = normalize(key);
-        for (var entry of map.entries()) {
-          if (normalize(entry[0]) === normalizedKey) {
-            styleId = entry[1];
-            console.log('[styleBinding] Text style fuzzy-matched: "' + styleName + '" -> "' + entry[0] + '"');
+        const normalize = (s) => s.replace(/[-_ ]/g, "");
+        const normalizedKey = normalize(key);
+        for (const [mapKey, mapVal] of map.entries()) {
+          if (normalize(mapKey) === normalizedKey) {
+            styleId = mapVal;
+            console.log(`[styleBinding] Text style fuzzy-matched: "${styleName}" -> "${mapKey}"`);
             break;
           }
         }
       }
       if (styleId) {
         node.textStyleId = styleId;
-        console.log('[styleBinding] Text style bound: "' + styleName + '"');
+        console.log(`[styleBinding] Text style bound: "${styleName}"`);
         return true;
       } else {
-        console.warn('[styleBinding] Text style NOT FOUND: "' + styleName + '" (' + map.size + ' styles available)');
+        console.warn(`[styleBinding] Text style NOT FOUND: "${styleName}" (${map.size} styles available)`);
       }
-    } catch (_) {}
+    } catch (_) {
+    }
     return false;
   }
   function clearStyleMaps() {
@@ -1521,7 +1520,7 @@
     _currentThemeMode = "auto";
   }
   async function createNodeFromSnapshot(snap, parent) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
     let node;
     const parentIsAutoLayout = "layoutMode" in parent && (parent.layoutMode === "HORIZONTAL" || parent.layoutMode === "VERTICAL");
     if (snap.type === "TEXT") {
@@ -1732,7 +1731,8 @@
               if (snap.layoutSizingVertical === "FIXED") comp.counterAxisSizingMode = "FIXED";
             }
             comp.resize((_i = snap.width) != null ? _i : 100, (_j = snap.height) != null ? _j : 100);
-          } catch (_) {}
+          } catch (_) {
+          }
         }
       }
       if (snap.cornerRadius != null && snap.cornerRadius > 0) comp.cornerRadius = snap.cornerRadius;
@@ -1748,7 +1748,8 @@
             comp.strokeBottomWeight = snap.strokeBottomWeight;
             comp.strokeLeftWeight = (_n = snap.strokeLeftWeight) != null ? _n : 0;
           }
-        } catch (_) {}
+        } catch (_) {
+        }
       }
       if (snap.fillStyleName) {
         comp.fills = snap.fillColor ? [{ type: "SOLID", color: hexToRgb(snap.fillColor) }] : [];
@@ -1772,7 +1773,7 @@
       node = comp;
       _importStats.frames++;
     } else if (snap.type === "COMPONENT_SET") {
-      console.log(`[createNodeFromSnapshot] COMPONENT_SET "${snap.name}" — ${(snap.children == null ? void 0 : snap.children.length) || 0} children`);
+      console.log(`[createNodeFromSnapshot] COMPONENT_SET "${snap.name}" \u2014 ${((_o = snap.children) == null ? void 0 : _o.length) || 0} children`);
       const components = [];
       if (snap.children && snap.children.length > 0) {
         for (let ci = 0; ci < snap.children.length; ci++) {
@@ -1787,7 +1788,7 @@
             const childNode = await createNodeFromSnapshot(childSnap, parent);
             if (childNode && childNode.type === "COMPONENT") {
               components.push(childNode);
-              console.log(`[createNodeFromSnapshot] COMPONENT_SET child ${ci}: "${childNode.name}" (${childNode.width}x${childNode.height}, ${childNode.children ? childNode.children.length : 0} inner children)`);
+              console.log(`[createNodeFromSnapshot] COMPONENT_SET child ${ci}: "${childNode.name}" (${childNode.width}x${childNode.height}, ${((_p = childNode.children) == null ? void 0 : _p.length) || 0} inner children)`);
             } else {
               console.warn(`[createNodeFromSnapshot] COMPONENT_SET child ${ci} was not a COMPONENT:`, childNode == null ? void 0 : childNode.type);
             }
@@ -1803,24 +1804,24 @@
           const componentSet = figma.combineAsVariants(components, parent);
           componentSet.name = snap.name || "Component Set";
           console.log(`[createNodeFromSnapshot] combineAsVariants succeeded: "${componentSet.name}" (${componentSet.children.length} variants)`);
-          // Always apply auto-layout so variants are spaced out (not overlapping at 0,0)
           componentSet.layoutMode = snap.layoutMode === "VERTICAL" ? "VERTICAL" : "HORIZONTAL";
           componentSet.primaryAxisSizingMode = "AUTO";
           componentSet.counterAxisSizingMode = "AUTO";
-          componentSet.itemSpacing = snap.itemSpacing != null ? snap.itemSpacing : 16;
-          componentSet.paddingTop = snap.paddingTop != null ? snap.paddingTop : 40;
-          componentSet.paddingRight = snap.paddingRight != null ? snap.paddingRight : 40;
-          componentSet.paddingBottom = snap.paddingBottom != null ? snap.paddingBottom : 40;
-          componentSet.paddingLeft = snap.paddingLeft != null ? snap.paddingLeft : 40;
-          // Do NOT apply fillColor or cornerRadius to the component set wrapper.
-          // Figma component sets should have transparent bg with dashed purple border.
+          componentSet.itemSpacing = (_q = snap.itemSpacing) != null ? _q : 16;
+          componentSet.paddingTop = (_r = snap.paddingTop) != null ? _r : 40;
+          componentSet.paddingRight = (_s = snap.paddingRight) != null ? _s : 40;
+          componentSet.paddingBottom = (_t = snap.paddingBottom) != null ? _t : 40;
+          componentSet.paddingLeft = (_u = snap.paddingLeft) != null ? _u : 40;
           componentSet.fills = [];
           _importStats.frames++;
           return componentSet;
         } catch (combineErr) {
           console.error(`[createNodeFromSnapshot] combineAsVariants FAILED:`, combineErr.message);
           for (const orphan of components) {
-            try { orphan.remove(); } catch (_) {}
+            try {
+              orphan.remove();
+            } catch (_) {
+            }
           }
           return null;
         }
@@ -1835,8 +1836,8 @@
     } else {
       const frame = figma.createFrame();
       frame.resize(
-        (_g = snap.width) != null ? _g : 100,
-        (_h = snap.height) != null ? _h : 100
+        (_v = snap.width) != null ? _v : 100,
+        (_w = snap.height) != null ? _w : 100
       );
       if (snap.layoutMode === "HORIZONTAL" || snap.layoutMode === "VERTICAL") {
         frame.layoutMode = snap.layoutMode;
@@ -1868,7 +1869,7 @@
               if (snap.layoutSizingHorizontal === "FIXED") frame.primaryAxisSizingMode = "FIXED";
               if (snap.layoutSizingVertical === "FIXED") frame.counterAxisSizingMode = "FIXED";
             }
-            frame.resize((_i = snap.width) != null ? _i : 100, (_j = snap.height) != null ? _j : 100);
+            frame.resize((_x = snap.width) != null ? _x : 100, (_y = snap.height) != null ? _y : 100);
           } catch (_) {
           }
         }
@@ -1882,13 +1883,13 @@
       if (snap.strokeColor) {
         try {
           frame.strokes = [{ type: "SOLID", color: hexToRgb(snap.strokeColor) }];
-          frame.strokeWeight = (_k = snap.strokeWeight) != null ? _k : 1;
+          frame.strokeWeight = (_z = snap.strokeWeight) != null ? _z : 1;
           frame.strokeAlign = "INSIDE";
           if (snap.strokeBottomWeight != null) {
-            frame.strokeTopWeight = (_l = snap.strokeTopWeight) != null ? _l : 0;
-            frame.strokeRightWeight = (_m = snap.strokeRightWeight) != null ? _m : 0;
+            frame.strokeTopWeight = (_A = snap.strokeTopWeight) != null ? _A : 0;
+            frame.strokeRightWeight = (_B = snap.strokeRightWeight) != null ? _B : 0;
             frame.strokeBottomWeight = snap.strokeBottomWeight;
-            frame.strokeLeftWeight = (_n = snap.strokeLeftWeight) != null ? _n : 0;
+            frame.strokeLeftWeight = (_C = snap.strokeLeftWeight) != null ? _C : 0;
           }
         } catch (_) {
         }
@@ -2041,11 +2042,13 @@
     try {
       const compNodes = figma.currentPage.findAllWithCriteria({ types: ["COMPONENT"] });
       for (const c of compNodes) {
-        components.push({ key: c.key, name: c.name });
+        const comp = c;
+        components.push({ key: comp.key, name: comp.name });
       }
     } catch (_) {
       figma.currentPage.findAll((n) => n.type === "COMPONENT").forEach((c) => {
-        components.push({ key: c.key, name: c.name });
+        const comp = c;
+        components.push({ key: comp.key, name: comp.name });
       });
     }
     let variables = [];
@@ -2482,9 +2485,27 @@
       themingStatus: ds.themingStatus || "none"
     };
   }
-  // ── Per-file DS cache helpers ──────────────────────────────────────
-  const DS_CACHE_MAX_FILES = 5;
+  var DS_CACHE_MAX_FILES = 5;
+  function generateFileUUID() {
+    const hex = "0123456789abcdef";
+    let uuid = "";
+    for (let i = 0; i < 16; i++) uuid += hex[Math.floor(Math.random() * 16)];
+    return uuid;
+  }
+  function getStableFileId() {
+    let id = figma.root.getPluginData("designops_fileId");
+    if (!id) {
+      id = generateFileUUID();
+      figma.root.setPluginData("designops_fileId", id);
+      console.log(`[DS Cache] Generated new stable file ID: ${id}`);
+    }
+    return id;
+  }
   function getDSCacheKey() {
+    const fileId = getStableFileId();
+    return "fullDS_" + fileId;
+  }
+  function getLegacyCacheKey() {
     const fileId = figma.fileKey || computeDocumentHash();
     return "fullDS_" + fileId.replace(/[^a-zA-Z0-9_|-]/g, "_");
   }
@@ -2496,12 +2517,14 @@
       try {
         const raw = await figma.clientStorage.getAsync("fullDS_index");
         if (raw) index = JSON.parse(raw);
-      } catch (_) {}
+      } catch (_) {
+      }
       index = index.filter((k) => k !== cacheKey);
       index.unshift(cacheKey);
       while (index.length > DS_CACHE_MAX_FILES) {
         const evicted = index.pop();
-        await figma.clientStorage.deleteAsync(evicted).catch(() => {});
+        await figma.clientStorage.deleteAsync(evicted).catch(() => {
+        });
         console.log(`[extractFullDS] Evicted old cache: ${evicted}`);
       }
       await figma.clientStorage.setAsync("fullDS_index", JSON.stringify(index));
@@ -2513,31 +2536,64 @@
   async function loadCachedFullDesignSystem() {
     try {
       const cacheKey = getDSCacheKey();
-      const cached = await figma.clientStorage.getAsync(cacheKey);
-      const data = cached || await figma.clientStorage.getAsync("fullDesignSystem");
-      if (data) {
-        const parsed = JSON.parse(data);
-        const currentHash = computeDocumentHash();
-        const isStale = parsed.documentHash !== currentHash;
-        console.log(`[extractFullDS] Loaded cached DS from ${cached ? cacheKey : "legacy key"} (${parsed.colorPalette.length} colors, stale=${isStale})`);
-        // Always load the cached data — paint styles/typography rarely change
-        // when frames are added/removed. The stale flag just means the page
-        // structure changed, not necessarily the design system itself.
-        _fullDesignSystem = parsed;
-        if (!cached && data) {
-          await saveDSToCache(parsed);
-          await figma.clientStorage.deleteAsync("fullDesignSystem").catch(() => {});
-          console.log("[extractFullDS] Migrated legacy cache to per-file key");
-        }
-        sendToUI({
-          type: "extract-ds-cached",
-          summary: buildDSSummary(parsed),
-          extractedAt: parsed.extractedAt,
-          stale: isStale
-        });
+      console.log(`[DS Cache] Looking up cache key: ${cacheKey}`);
+      let cached = await figma.clientStorage.getAsync(cacheKey);
+      let source = cacheKey;
+      if (!cached) {
+        const legacyKey = getLegacyCacheKey();
+        console.log(`[DS Cache] Primary miss, trying legacy key: ${legacyKey}`);
+        cached = await figma.clientStorage.getAsync(legacyKey);
+        if (cached) source = legacyKey;
       }
-    } catch (_) {
-      console.warn("[extractFullDS] No cached design system found");
+      if (!cached) {
+        console.log(`[DS Cache] Legacy miss, trying single-file key: fullDesignSystem`);
+        cached = await figma.clientStorage.getAsync("fullDesignSystem");
+        if (cached) source = "fullDesignSystem";
+      }
+      if (!cached) {
+        try {
+          const rawIdx = await figma.clientStorage.getAsync("fullDS_index");
+          if (rawIdx) {
+            const index = JSON.parse(rawIdx);
+            console.log(`[DS Cache] Trying ${index.length} indexed keys: ${index.join(", ")}`);
+            for (const key of index) {
+              const candidate = await figma.clientStorage.getAsync(key);
+              if (candidate) {
+                cached = candidate;
+                source = key;
+                console.log(`[DS Cache] Found cached DS under indexed key: ${key}`);
+                break;
+              }
+            }
+          }
+        } catch (_) {
+        }
+      }
+      if (!cached) {
+        console.log(`[DS Cache] No cached design system found for this file`);
+        return;
+      }
+      const parsed = JSON.parse(cached);
+      const currentHash = computeDocumentHash();
+      const isStale = parsed.documentHash !== currentHash;
+      console.log(`[DS Cache] Loaded DS from "${source}" (${parsed.colorPalette.length} colors, stale=${isStale})`);
+      _fullDesignSystem = parsed;
+      if (source !== cacheKey) {
+        await saveDSToCache(parsed);
+        if (source === "fullDesignSystem") {
+          await figma.clientStorage.deleteAsync("fullDesignSystem").catch(() => {
+          });
+        }
+        console.log(`[DS Cache] Migrated from "${source}" to "${cacheKey}"`);
+      }
+      sendToUI({
+        type: "extract-ds-cached",
+        summary: buildDSSummary(parsed),
+        extractedAt: parsed.extractedAt,
+        stale: isStale
+      });
+    } catch (e) {
+      console.warn("[DS Cache] Error loading cached design system:", e);
     }
   }
   async function generateDesignDocs() {
@@ -5529,7 +5585,6 @@ RULES:
     var _a;
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
-      // Yield so the UI can render the progress bar before heavy work begins
       await yieldToUI();
       console.log(`[edit-job ${job.id}] Extracting design system...`);
       const designSystem = await extractDesignSystemSnapshot();
@@ -6027,11 +6082,13 @@ RULES:
     }
   }
   figma.ui.onmessage = async (msg) => {
+    var _a, _b, _c;
     try {
       switch (msg.type) {
         // ── UI ready handshake ────────────────────────────────
         case "ui-ready": {
-          loadCachedFullDesignSystem().catch(() => {});
+          loadCachedFullDesignSystem().catch(() => {
+          });
           return;
         }
         // ── Resize enforcement ────────────────────────────────
@@ -6294,7 +6351,7 @@ RULES:
         case "audit-states": {
           try {
             let walkForStateAudit2 = function(node) {
-              var _a;
+              var _a2;
               if (items.length >= MAX_ITEMS) return;
               if (node.type === "COMPONENT_SET") {
                 const variantNames = node.children.map((c) => c.name);
@@ -6307,7 +6364,7 @@ RULES:
                 return;
               }
               if (node.type === "COMPONENT") {
-                if (((_a = node.parent) == null ? void 0 : _a.type) !== "COMPONENT_SET") {
+                if (((_a2 = node.parent) == null ? void 0 : _a2.type) !== "COMPONENT_SET") {
                   items.push({
                     nodeId: node.id,
                     name: node.name,
@@ -6370,8 +6427,8 @@ RULES:
             if (result && result.items) {
               sendToUI({ type: "state-audit-results", items: result.items });
               const missingCount = result.items.reduce((sum, it) => {
-                var _a;
-                return sum + (((_a = it.missingStates) == null ? void 0 : _a.length) || 0);
+                var _a2;
+                return sum + (((_a2 = it.missingStates) == null ? void 0 : _a2.length) || 0);
               }, 0);
               figma.notify(`State audit: ${missingCount} missing state(s) found across ${result.items.length} item(s).`, { timeout: 4e3 });
             } else {
@@ -6398,6 +6455,1046 @@ RULES:
         // ── Run (plan + apply in one step) ─────────────────────
         case "run": {
           const intentText = msg.intent || "";
+          const intentLower = intentText.toLowerCase();
+          const hasVariantKeyword = /\bvariants?\b/i.test(intentText) || /\bstates?\b/i.test(intentText);
+          const hasCreateKeyword = /\b(create|make|add|generate|missing)\b/i.test(intentText);
+          const selectionIsComponentSet = figma.currentPage.selection.length > 0 && figma.currentPage.selection[0].type === "COMPONENT_SET";
+          const isCreateVariantsIntent = hasVariantKeyword && hasCreateKeyword || selectionIsComponentSet && hasCreateKeyword && hasVariantKeyword;
+          const isCreateComponentIntent = /\b(create|make|convert|turn)\b.+\bcomponent\b/i.test(intentText) && !/\bcomponent\s*set\b/i.test(intentText) && !isCreateVariantsIntent;
+          const isDetachInstanceIntent = /\b(detach|unlink|disconnect)\b.+\b(instance|component)\b/i.test(intentText) || /\binstance\b.+\b(detach|unlink)\b/i.test(intentText);
+          const isGroupIntent = /\b(group)\b.+\b(selection|selected|these|nodes?|layers?|elements?)\b/i.test(intentText) || /\b(selection|selected|these)\b.+\bgroup\b/i.test(intentText);
+          const isUngroupIntent = /\b(ungroup|un-group)\b/i.test(intentText);
+          const isFlattenIntent = /\b(flatten)\b.+\b(selection|selected|these|nodes?|layers?|elements?)\b/i.test(intentText) || /\bflatten\s+(this|it)\b/i.test(intentText);
+          const isAutoLayoutIntent = /\bauto[\s-]?layout\b/i.test(intentText) || /\b(add|apply|set|enable|convert|turn\s+on)\b/i.test(intentText) && /\b(layout|auto[\s-]?layout)\b/i.test(intentText);
+          const isCleanupIntent = /\b(clean\s*up|cleanup|tidy\s*(up)?|neaten|straighten)\b/i.test(intentText) || /\b(consistent|normalize|standardize|even\s*out|fix|align|regularize)\b/i.test(intentText) && /\b(padding|margins?|spacing|gaps?|layout|alignment|indentation)\b/i.test(intentText);
+          if (isCreateComponentIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select a frame or element first.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobId = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobId, prompt: intentText });
+            let customName = null;
+            const nameMatch = intentText.match(
+              /\b(?:called|named|name(?:d)?|as)\s+["']?([A-Za-z0-9_\-/ ]+?)["']?\s*$/i
+            ) || intentText.match(
+              /\bcomponent\s+["']([A-Za-z0-9_\-/ ]+?)["']/i
+            ) || intentText.match(
+              /["']([A-Za-z0-9_\-/ ]+?)["']/i
+            );
+            if (nameMatch) customName = nameMatch[1].trim();
+            try {
+              const created = [];
+              for (let ni = 0; ni < selection.length; ni++) {
+                let detachNestedInstances2 = function(n) {
+                  if (!("children" in n)) return;
+                  const container = n;
+                  for (let ci = 0; ci < container.children.length; ci++) {
+                    const child = container.children[ci];
+                    if (child.type === "INSTANCE") {
+                      const detached = child.detachInstance();
+                      detachNestedInstances2(detached);
+                    } else {
+                      detachNestedInstances2(child);
+                    }
+                  }
+                };
+                var detachNestedInstances = detachNestedInstances2;
+                const node = selection[ni];
+                const isInsideInstance = (() => {
+                  let cur = node.parent;
+                  while (cur) {
+                    if (cur.type === "INSTANCE") return true;
+                    cur = "parent" in cur ? cur.parent : null;
+                  }
+                  return false;
+                })();
+                let clone = node.clone();
+                if (clone.type === "INSTANCE") {
+                  clone = clone.detachInstance();
+                }
+                detachNestedInstances2(clone);
+                const comp = figma.createComponent();
+                comp.resize(clone.width, clone.height);
+                if ("fills" in clone) {
+                  try {
+                    comp.fills = JSON.parse(JSON.stringify(clone.fills));
+                  } catch (_) {
+                  }
+                }
+                if ("strokes" in clone) {
+                  try {
+                    comp.strokes = JSON.parse(JSON.stringify(clone.strokes));
+                    comp.strokeWeight = clone.strokeWeight;
+                    comp.strokeAlign = clone.strokeAlign;
+                    if ("strokeTopWeight" in clone) {
+                      comp.strokeTopWeight = clone.strokeTopWeight;
+                      comp.strokeRightWeight = clone.strokeRightWeight;
+                      comp.strokeBottomWeight = clone.strokeBottomWeight;
+                      comp.strokeLeftWeight = clone.strokeLeftWeight;
+                    }
+                  } catch (_) {
+                  }
+                }
+                if ("cornerRadius" in clone) {
+                  try {
+                    comp.cornerRadius = clone.cornerRadius;
+                  } catch (_) {
+                  }
+                }
+                if ("topLeftRadius" in clone) {
+                  try {
+                    comp.topLeftRadius = clone.topLeftRadius;
+                    comp.topRightRadius = clone.topRightRadius;
+                    comp.bottomLeftRadius = clone.bottomLeftRadius;
+                    comp.bottomRightRadius = clone.bottomRightRadius;
+                  } catch (_) {
+                  }
+                }
+                if ("clipsContent" in clone) {
+                  comp.clipsContent = clone.clipsContent;
+                }
+                if ("opacity" in clone) {
+                  comp.opacity = clone.opacity;
+                }
+                if ("effects" in clone) {
+                  try {
+                    comp.effects = JSON.parse(JSON.stringify(clone.effects));
+                  } catch (_) {
+                  }
+                }
+                if ("blendMode" in clone) {
+                  try {
+                    comp.blendMode = clone.blendMode;
+                  } catch (_) {
+                  }
+                }
+                if ("layoutMode" in clone && clone.layoutMode !== "NONE") {
+                  const f = clone;
+                  comp.layoutMode = f.layoutMode;
+                  comp.primaryAxisSizingMode = f.primaryAxisSizingMode;
+                  comp.counterAxisSizingMode = f.counterAxisSizingMode;
+                  comp.primaryAxisAlignItems = f.primaryAxisAlignItems;
+                  comp.counterAxisAlignItems = f.counterAxisAlignItems;
+                  comp.paddingTop = f.paddingTop;
+                  comp.paddingRight = f.paddingRight;
+                  comp.paddingBottom = f.paddingBottom;
+                  comp.paddingLeft = f.paddingLeft;
+                  comp.itemSpacing = f.itemSpacing;
+                  if ("counterAxisSpacing" in f) comp.counterAxisSpacing = f.counterAxisSpacing;
+                  if ("layoutWrap" in f) comp.layoutWrap = f.layoutWrap;
+                }
+                if ("children" in clone) {
+                  const children = [...clone.children];
+                  for (const child of children) {
+                    comp.appendChild(child);
+                  }
+                }
+                comp.name = customName && selection.length === 1 ? customName : customName ? `${customName} ${ni + 1}` : node.name;
+                comp.x = node.x;
+                comp.y = node.y;
+                const parent = node.parent;
+                if (parent && "children" in parent && !isInsideInstance) {
+                  const idx = parent.children.indexOf(node);
+                  if (idx >= 0) {
+                    parent.insertChild(idx, comp);
+                  } else {
+                    parent.appendChild(comp);
+                  }
+                  node.remove();
+                } else {
+                  figma.currentPage.appendChild(comp);
+                }
+                clone.remove();
+                created.push(comp);
+              }
+              if (created.length > 0) {
+                figma.currentPage.selection = created;
+                const summary = `Created component${created.length > 1 ? "s" : ""}: ${created.map((c) => c.name).join(", ")}`;
+                figma.notify(summary, { timeout: 4e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobId, summary });
+              } else {
+                sendToUI({ type: "job-complete", jobId: nativeJobId, summary: "No components created." });
+              }
+            } catch (err) {
+              figma.notify(`Failed to create component: ${err.message}`, { timeout: 4e3 });
+              sendToUI({ type: "job-error", jobId: nativeJobId, error: `Failed: ${err.message}` });
+            }
+            break;
+          }
+          if (isCreateVariantsIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select a frame or element first.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobIdV = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobIdV, prompt: intentText });
+            try {
+              let cloneAsComponent2 = function(src, varName, pName) {
+                var _a2;
+                let clone = src.clone();
+                if (clone.type === "INSTANCE") {
+                  clone = clone.detachInstance();
+                }
+                function detachNested(n) {
+                  if (!("children" in n)) return;
+                  const container = n;
+                  for (let ci = 0; ci < container.children.length; ci++) {
+                    const child = container.children[ci];
+                    if (child.type === "INSTANCE") {
+                      const det = child.detachInstance();
+                      detachNested(det);
+                    } else {
+                      detachNested(child);
+                    }
+                  }
+                }
+                detachNested(clone);
+                if (clone.type === "COMPONENT") {
+                  clone.name = `${pName}=${varName}`;
+                  console.log(`[Variants] cloneAsComponent: COMPONENT path \u2014 ${((_a2 = clone.children) == null ? void 0 : _a2.length) || 0} children preserved`);
+                  return clone;
+                }
+                const comp = figma.createComponent();
+                comp.name = `${pName}=${varName}`;
+                comp.resize(clone.width, clone.height);
+                comp.fills = [];
+                comp.clipsContent = false;
+                clone.x = 0;
+                clone.y = 0;
+                comp.appendChild(clone);
+                comp.layoutMode = "VERTICAL";
+                comp.primaryAxisSizingMode = "AUTO";
+                comp.counterAxisSizingMode = "AUTO";
+                comp.paddingTop = 0;
+                comp.paddingRight = 0;
+                comp.paddingBottom = 0;
+                comp.paddingLeft = 0;
+                if ("layoutSizingHorizontal" in clone) {
+                  try {
+                    clone.layoutSizingHorizontal = "FILL";
+                  } catch (_) {
+                  }
+                }
+                console.log(`[Variants] cloneAsComponent: FRAME-wrap path \u2014 clone type=${clone.type}, inner children=${"children" in clone ? clone.children.length : 0}`);
+                return comp;
+              }, describeNodeVisuals2 = function(snap, indent = "") {
+                const lines = [];
+                let desc = `${indent}\u2022 "${snap.name}" (${snap.type}, id="${snap.id}")`;
+                if (snap.fillColor) desc += ` fill=${snap.fillColor}`;
+                if (snap.opacity !== void 0 && snap.opacity < 1) desc += ` opacity=${snap.opacity}`;
+                if (snap.strokeColor) desc += ` stroke=${snap.strokeColor}`;
+                if (snap.cornerRadius) desc += ` radius=${snap.cornerRadius}`;
+                if (snap.characters) desc += ` text="${snap.characters}"`;
+                if (snap.effects && snap.effects.length > 0) desc += ` effects=[${snap.effects.map((e) => e.type).join(",")}]`;
+                lines.push(desc);
+                if (snap.children) {
+                  for (const child of snap.children) {
+                    lines.push(...describeNodeVisuals2(child, indent + "  ").split("\n"));
+                  }
+                }
+                return lines.join("\n");
+              }, collectFillNodes2 = function(snap) {
+                const result = [];
+                if (snap.fillColor) {
+                  result.push({ id: snap.id, name: snap.name, fillColor: snap.fillColor });
+                }
+                if (snap.children) {
+                  for (const child of snap.children) {
+                    result.push(...collectFillNodes2(child));
+                  }
+                }
+                return result;
+              }, adjustHexColor2 = function(hex, factor) {
+                const r = parseInt(hex.slice(1, 3), 16);
+                const g = parseInt(hex.slice(3, 5), 16);
+                const b = parseInt(hex.slice(5, 7), 16);
+                const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+                if (factor > 1) {
+                  const t = factor - 1;
+                  return `#${clamp(r + (255 - r) * t).toString(16).padStart(2, "0")}${clamp(g + (255 - g) * t).toString(16).padStart(2, "0")}${clamp(b + (255 - b) * t).toString(16).padStart(2, "0")}`.toUpperCase();
+                } else {
+                  return `#${clamp(r * factor).toString(16).padStart(2, "0")}${clamp(g * factor).toString(16).padStart(2, "0")}${clamp(b * factor).toString(16).padStart(2, "0")}`.toUpperCase();
+                }
+              }, applyFallbackVariantStyle2 = function(comp, varName) {
+                const state = varName.toLowerCase();
+                console.log(`[Variants] Applying fallback styling for "${varName}"`);
+                const compSnap = snapshotNode(comp, 0);
+                const fillNodes = collectFillNodes2(compSnap);
+                if (fillNodes.length === 0) return;
+                for (const fNode of fillNodes) {
+                  const node = figma.getNodeById(fNode.id);
+                  if (!node || !("fills" in node)) continue;
+                  const fills = node.fills;
+                  if (!Array.isArray(fills) || fills.length === 0) continue;
+                  const newFills = fills.map((f) => {
+                    if (f.type !== "SOLID") return f;
+                    const solid = f;
+                    const hexR = Math.round(solid.color.r * 255).toString(16).padStart(2, "0");
+                    const hexG = Math.round(solid.color.g * 255).toString(16).padStart(2, "0");
+                    const hexB = Math.round(solid.color.b * 255).toString(16).padStart(2, "0");
+                    const origHex = `#${hexR}${hexG}${hexB}`;
+                    let newHex = origHex;
+                    if (state === "hover") {
+                      newHex = adjustHexColor2(origHex, 1.25);
+                    } else if (state === "active" || state === "pressed") {
+                      newHex = adjustHexColor2(origHex, 0.65);
+                    } else if (state === "disabled") {
+                      newHex = adjustHexColor2(origHex, 1.4);
+                    } else if (state === "focused" || state === "focus") {
+                      newHex = adjustHexColor2(origHex, 1.1);
+                    } else if (state === "error" || state === "danger") {
+                      newHex = "#D32F2F";
+                    } else {
+                      newHex = adjustHexColor2(origHex, 0.85);
+                    }
+                    const nr = parseInt(newHex.slice(1, 3), 16) / 255;
+                    const ng = parseInt(newHex.slice(3, 5), 16) / 255;
+                    const nb = parseInt(newHex.slice(5, 7), 16) / 255;
+                    return __spreadProps(__spreadValues({}, solid), { color: { r: nr, g: ng, b: nb } });
+                  });
+                  node.fills = newFills;
+                }
+                if (state === "disabled") {
+                  comp.opacity = 0.5;
+                }
+                if (state === "hover") {
+                  comp.effects = [
+                    { type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.15 }, offset: { x: 0, y: 2 }, radius: 6, spread: 0, visible: true, blendMode: "NORMAL" }
+                  ];
+                } else if (state === "active" || state === "pressed") {
+                  comp.effects = [
+                    { type: "INNER_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.25 }, offset: { x: 0, y: 2 }, radius: 4, spread: 0, visible: true, blendMode: "NORMAL" }
+                  ];
+                } else if (state === "focused" || state === "focus") {
+                  comp.effects = [
+                    { type: "DROP_SHADOW", color: { r: 0.25, g: 0.4, b: 1, a: 0.5 }, offset: { x: 0, y: 0 }, radius: 0, spread: 3, visible: true, blendMode: "NORMAL" }
+                  ];
+                }
+                figma.notify(`Applied fallback styling for "${varName}"`, { timeout: 2e3 });
+              };
+              var cloneAsComponent = cloneAsComponent2, describeNodeVisuals = describeNodeVisuals2, collectFillNodes = collectFillNodes2, adjustHexColor = adjustHexColor2, applyFallbackVariantStyle = applyFallbackVariantStyle2;
+              sendToUI({ type: "status", message: "Understanding your request\u2026" });
+              let existingVariantInfo = "";
+              const componentSetNodes = [...selection].filter((n) => n.type === "COMPONENT_SET");
+              if (componentSetNodes.length > 0) {
+                const allExisting = [];
+                for (const csNode of componentSetNodes) {
+                  const children = csNode.children;
+                  for (const c of children) {
+                    const eqIndex = c.name.indexOf("=");
+                    allExisting.push(eqIndex >= 0 ? c.name.substring(eqIndex + 1).trim() : c.name);
+                  }
+                }
+                if (allExisting.length > 0) {
+                  existingVariantInfo = `
+Some component sets already have these variants: [${[...new Set(allExisting)].join(", ")}]. Do NOT include variants that already exist.`;
+                }
+              }
+              const parsePrompt = `The user said: "${intentText}"
+They are working with ${selection.length > 1 ? selection.length + " UI components" : "a UI component"} and want to create variant states.${existingVariantInfo}
+
+Extract the following from the user's message:
+1. "variantNames": An array of state/variant names to create (e.g., ["Hover", "Active", "Disabled"]).
+   - Capitalize each name (e.g., "hover" \u2192 "Hover").
+   - If the user says "missing" or "all" without specifying names, infer common UI states: Default, Hover, Active, Disabled \u2014 but exclude any that already exist.
+   - If the user asks for a single state, return just that one.
+   - Only include actual UI state names, not filler words.
+2. "propertyName": The Figma variant property name (e.g., "State", "Size", "Type"). Default to "State" if not specified.
+
+Respond with ONLY valid JSON, no markdown:
+{"variantNames": ["..."], "propertyName": "..."}`;
+              let variantNames = [];
+              let propName = "State";
+              try {
+                const parsePayload = {
+                  intent: parsePrompt,
+                  selection: { nodes: [] },
+                  designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel
+                };
+                const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true", parsePayload);
+                let parsed = null;
+                if (parseResult.variantNames) {
+                  parsed = parseResult;
+                }
+                if (!parsed) {
+                  const rawStr = JSON.stringify(parseResult);
+                  const jsonMatch = rawStr.match(/\{"variantNames"\s*:\s*\[.*?\]\s*,\s*"propertyName"\s*:\s*"[^"]*"\s*\}/);
+                  if (jsonMatch) {
+                    parsed = JSON.parse(jsonMatch[0]);
+                  }
+                }
+                if (!parsed && parseResult._raw) {
+                  const jsonMatch = parseResult._raw.match(/\{"variantNames"\s*:\s*\[.*?\]\s*,\s*"propertyName"\s*:\s*"[^"]*"\s*\}/);
+                  if (jsonMatch) {
+                    parsed = JSON.parse(jsonMatch[0]);
+                  }
+                }
+                if (parsed && Array.isArray(parsed.variantNames) && parsed.variantNames.length > 0) {
+                  variantNames = parsed.variantNames.map((n) => String(n).charAt(0).toUpperCase() + String(n).slice(1));
+                  if (parsed.propertyName && typeof parsed.propertyName === "string") {
+                    propName = parsed.propertyName;
+                  }
+                  console.log(`[Variants] LLM parsed intent: names=[${variantNames.join(", ")}], property="${propName}"`);
+                } else {
+                  console.warn(`[Variants] LLM intent parsing returned no variant names, using fallback`);
+                }
+              } catch (parseErr) {
+                console.warn(`[Variants] LLM intent parsing failed: ${parseErr.message}, using fallback`);
+              }
+              if (variantNames.length === 0) {
+                const knownStates = ["default", "hover", "active", "pressed", "disabled", "focused", "focus", "selected", "error", "loading"];
+                const foundStates = knownStates.filter((s) => new RegExp(`\\b${s}\\b`, "i").test(intentText));
+                if (foundStates.length > 0) {
+                  variantNames = foundStates.map((s) => s.charAt(0).toUpperCase() + s.slice(1));
+                } else {
+                  variantNames = ["Default", "Hover", "Active", "Disabled"];
+                }
+                console.log(`[Variants] Fallback parsed: [${variantNames.join(", ")}]`);
+              }
+              async function applyVariantStyleViaLLM(comp, varName) {
+                const state = varName.toLowerCase();
+                if (state === "default" || state === "normal" || state === "rest" || state === "base") {
+                  console.log(`[Variants] Skipping LLM for "${varName}" (default state)`);
+                  return;
+                }
+                try {
+                  const compSnapshot = snapshotNode(comp, 0);
+                  const compSelection = { nodes: [compSnapshot] };
+                  const designSystem = await extractDesignSystemSnapshot();
+                  const visualSummary = describeNodeVisuals2(compSnapshot);
+                  const fillNodes = collectFillNodes2(compSnapshot);
+                  const fillNodeList = fillNodes.map((n) => `  - id="${n.id}" name="${n.name}" currentFill=${n.fillColor}`).join("\n");
+                  const variantPrompt = `Apply "${varName}" state styling to this UI component.
+
+COMPONENT STRUCTURE (node tree with current visual properties):
+${visualSummary}
+
+NODES WITH FILLS (these are the main targets for color changes):
+${fillNodeList}
+
+CRITICAL RULES:
+1. ONLY use the node IDs listed above \u2014 do NOT invent new IDs.
+2. Do NOT change text content, font family, or font size.
+3. Do NOT use DUPLICATE_FRAME, INSERT_COMPONENT, or RESIZE_NODE.
+4. You MUST return at least one SET_FILL_COLOR operation to visually differentiate this state.
+5. Use design system colors/tokens when available.
+
+REQUIRED CHANGES for "${varName}" state:
+\u2022 The component MUST look visibly different from the default state.
+\u2022 Use SET_FILL_COLOR on the nodes listed above to change their fill colors.
+` + (state === "hover" ? `\u2022 HOVER state: lighten the primary fill color by 15-25%. Add a subtle DROP_SHADOW for elevation.
+` : state === "active" || state === "pressed" ? `\u2022 ACTIVE/PRESSED state: darken the primary fill color by 25-35%. Add an INNER_SHADOW for depth. The color should be noticeably darker than the default.
+` : state === "disabled" ? `\u2022 DISABLED state: desaturate/grey out all fill colors. Set opacity to 0.4-0.5 using SET_OPACITY.
+` : state === "focused" || state === "focus" ? `\u2022 FOCUSED state: add a visible focus ring (DROP_SHADOW with spread:3, no offset, blue/accent color). Slightly lighten the fill.
+` : state === "error" || state === "danger" ? `\u2022 ERROR state: change the primary fill to a red/danger color (e.g., #D32F2F or design system error color).
+` : state === "selected" ? `\u2022 SELECTED state: use accent/selection color for the fill. Consider adding a subtle border or highlight.
+` : `\u2022 For "${varName}": apply appropriate visual changes based on common UI patterns for this state.
+`) + `
+Return ONLY the operations array. Every operation must target a real node ID from the list above.`;
+                  const payload = __spreadProps(__spreadValues({
+                    intent: variantPrompt,
+                    selection: compSelection,
+                    designSystem
+                  }, _fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {}), {
+                    apiKey: _userApiKey,
+                    provider: _selectedProvider,
+                    model: _selectedModel
+                  });
+                  sendToUI({ type: "status", message: `Styling "${varName}" variant via AI\u2026` });
+                  console.log(`[Variants] Sending "${varName}" to LLM for styling...`);
+                  console.log(`[Variants] Fill targets: ${fillNodes.map((n) => `${n.name}(${n.fillColor})`).join(", ")}`);
+                  const batch = await fetchViaUI("/plan?lenient=true", payload);
+                  if (batch.operations && batch.operations.length > 0) {
+                    const safeOps = batch.operations.filter(
+                      (o) => o.type !== "DUPLICATE_FRAME" && o.type !== "INSERT_COMPONENT" && o.type !== "RESIZE_NODE"
+                    );
+                    console.log(`[Variants] Applying ${safeOps.length} LLM operations for "${varName}" (filtered ${batch.operations.length - safeOps.length} unsafe ops)`);
+                    let appliedCount = 0;
+                    for (const op of safeOps) {
+                      try {
+                        await applyOperation(op);
+                        appliedCount++;
+                      } catch (err) {
+                        console.warn(`[Variants] Op failed for "${varName}": ${err.message}`, JSON.stringify(op));
+                      }
+                    }
+                    if (appliedCount === 0) {
+                      console.warn(`[Variants] All ${safeOps.length} LLM operations failed for "${varName}", using fallback`);
+                      applyFallbackVariantStyle2(comp, varName);
+                    } else {
+                      console.log(`[Variants] Successfully applied ${appliedCount}/${safeOps.length} operations for "${varName}"`);
+                    }
+                  } else {
+                    console.warn(`[Variants] LLM returned no operations for "${varName}", using fallback`);
+                    applyFallbackVariantStyle2(comp, varName);
+                  }
+                } catch (err) {
+                  console.warn(`[Variants] LLM styling failed for "${varName}": ${err.message}, using fallback`);
+                  applyFallbackVariantStyle2(comp, varName);
+                }
+              }
+              const allCreatedSets = [];
+              const summaryParts = [];
+              for (const sourceNode of [...selection]) {
+                const isAddingToExistingSet = sourceNode.type === "COMPONENT_SET";
+                let currentPropName = propName;
+                let templateSource;
+                let existingVariantNames = [];
+                let existingSet = null;
+                if (isAddingToExistingSet) {
+                  existingSet = sourceNode;
+                  const children = existingSet.children;
+                  if (children.length === 0) {
+                    console.warn(`[Variants] Skipping empty component set "${sourceNode.name}"`);
+                    continue;
+                  }
+                  templateSource = children[0];
+                  const firstChildName = children[0].name;
+                  const eqIdx = firstChildName.indexOf("=");
+                  if (eqIdx >= 0 && currentPropName === "State") {
+                    currentPropName = firstChildName.substring(0, eqIdx).trim();
+                  }
+                  existingVariantNames = children.map((c) => {
+                    const eqIndex = c.name.indexOf("=");
+                    return eqIndex >= 0 ? c.name.substring(eqIndex + 1).trim().toLowerCase() : c.name.toLowerCase();
+                  });
+                  console.log(`[Variants] Existing set: "${existingSet.name}" variants: [${existingVariantNames.join(", ")}], prop="${currentPropName}"`);
+                } else {
+                  templateSource = sourceNode;
+                }
+                let nodeVariantNames = [...variantNames];
+                if (isAddingToExistingSet && existingVariantNames.length > 0) {
+                  nodeVariantNames = nodeVariantNames.filter((n) => !existingVariantNames.includes(n.toLowerCase()));
+                  if (nodeVariantNames.length === 0) {
+                    console.log(`[Variants] All variants already exist for "${sourceNode.name}", skipping.`);
+                    continue;
+                  }
+                }
+                sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"\u2026` });
+                const components = [];
+                for (const vName of nodeVariantNames) {
+                  const comp = cloneAsComponent2(templateSource, vName, currentPropName);
+                  figma.currentPage.appendChild(comp);
+                  await applyVariantStyleViaLLM(comp, vName);
+                  components.push(comp);
+                }
+                if (isAddingToExistingSet && existingSet) {
+                  for (const comp of components) {
+                    existingSet.appendChild(comp);
+                  }
+                  allCreatedSets.push(existingSet);
+                  summaryParts.push(`Added ${components.length} variant${components.length > 1 ? "s" : ""} to "${existingSet.name}"`);
+                } else if (components.length >= 2) {
+                  const parentNode = sourceNode.parent;
+                  const targetParent = parentNode && "children" in parentNode ? parentNode : figma.currentPage;
+                  const componentSet = figma.combineAsVariants(components, targetParent);
+                  componentSet.name = sourceNode.name || "Component";
+                  componentSet.layoutMode = "HORIZONTAL";
+                  componentSet.primaryAxisSizingMode = "AUTO";
+                  componentSet.counterAxisSizingMode = "AUTO";
+                  componentSet.itemSpacing = 16;
+                  componentSet.paddingTop = 40;
+                  componentSet.paddingRight = 40;
+                  componentSet.paddingBottom = 40;
+                  componentSet.paddingLeft = 40;
+                  componentSet.fills = [];
+                  componentSet.x = sourceNode.x;
+                  componentSet.y = sourceNode.y + sourceNode.height + 80;
+                  allCreatedSets.push(componentSet);
+                  summaryParts.push(`"${componentSet.name}" with ${nodeVariantNames.length} variants`);
+                } else if (components.length === 1) {
+                  allCreatedSets.push(components[0]);
+                  summaryParts.push(`"${sourceNode.name}" (1 variant \u2014 need 2+ for a set)`);
+                }
+              }
+              if (allCreatedSets.length > 0) {
+                figma.currentPage.selection = allCreatedSets;
+                const summary = selection.length > 1 ? `Created variant sets for ${allCreatedSets.length} element${allCreatedSets.length > 1 ? "s" : ""}: ${summaryParts.join("; ")}` : summaryParts[0] || "Variants created.";
+                figma.notify(summary, { timeout: 5e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdV, summary });
+              } else {
+                sendToUI({ type: "job-complete", jobId: nativeJobIdV, summary: "No variants created." });
+              }
+            } catch (err) {
+              figma.notify(`Failed to create variants: ${err.message}`, { timeout: 4e3 });
+              sendToUI({ type: "job-error", jobId: nativeJobIdV, error: `Failed: ${err.message}` });
+            }
+            break;
+          }
+          if (isDetachInstanceIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select an instance first.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobId2 = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobId2, prompt: intentText });
+            let detached = 0;
+            const newSelection = [];
+            for (const node of [...selection]) {
+              if (node.type === "INSTANCE") {
+                const frame = node.detachInstance();
+                newSelection.push(frame);
+                detached++;
+              } else {
+                newSelection.push(node);
+              }
+            }
+            if (detached > 0) {
+              figma.currentPage.selection = newSelection;
+              const summary2 = `Detached ${detached} instance${detached > 1 ? "s" : ""}. `;
+              figma.notify(summary2, { timeout: 3e3 });
+              sendToUI({ type: "job-complete", jobId: nativeJobId2, summary: summary2 });
+            } else {
+              figma.notify("No instances found in selection.", { timeout: 3e3 });
+              sendToUI({ type: "job-complete", jobId: nativeJobId2, summary: "No instances found." });
+            }
+            break;
+          }
+          if (isGroupIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length < 2) {
+              figma.notify("Select at least 2 elements to group.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "Need 2+ elements." });
+              break;
+            }
+            const nativeJobId3 = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobId3, prompt: intentText });
+            const group = figma.group([...selection], selection[0].parent);
+            group.name = "Group";
+            figma.currentPage.selection = [group];
+            const summary3 = `Grouped ${selection.length} elements.`;
+            figma.notify(summary3, { timeout: 3e3 });
+            sendToUI({ type: "job-complete", jobId: nativeJobId3, summary: summary3 });
+            break;
+          }
+          if (isUngroupIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select a group first.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobId4 = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobId4, prompt: intentText });
+            let ungrouped = 0;
+            const newSel = [];
+            for (const node of [...selection]) {
+              if (node.type === "GROUP") {
+                const parent = node.parent;
+                const children = [...node.children];
+                const idx = parent.children.indexOf(node);
+                for (let i = children.length - 1; i >= 0; i--) {
+                  parent.insertChild(idx, children[i]);
+                  newSel.push(children[i]);
+                }
+                node.remove();
+                ungrouped++;
+              } else {
+                newSel.push(node);
+              }
+            }
+            if (ungrouped > 0) {
+              figma.currentPage.selection = newSel;
+              const summary4 = `Ungrouped ${ungrouped} group${ungrouped > 1 ? "s" : ""}. `;
+              figma.notify(summary4, { timeout: 3e3 });
+              sendToUI({ type: "job-complete", jobId: nativeJobId4, summary: summary4 });
+            } else {
+              figma.notify("No groups found in selection.", { timeout: 3e3 });
+              sendToUI({ type: "job-complete", jobId: nativeJobId4, summary: "No groups found." });
+            }
+            break;
+          }
+          if (isFlattenIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select elements to flatten.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobId5 = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobId5, prompt: intentText });
+            const flattened = [];
+            for (const node of [...selection]) {
+              try {
+                const flat = figma.flatten([node]);
+                flattened.push(flat);
+              } catch (e) {
+                figma.notify(`Cannot flatten "${node.name}": ${e.message}`, { timeout: 3e3 });
+              }
+            }
+            if (flattened.length > 0) {
+              figma.currentPage.selection = flattened;
+              const summary5 = `Flattened ${flattened.length} element${flattened.length > 1 ? "s" : ""}. `;
+              figma.notify(summary5, { timeout: 3e3 });
+              sendToUI({ type: "job-complete", jobId: nativeJobId5, summary: summary5 });
+            } else {
+              sendToUI({ type: "job-complete", jobId: nativeJobId5, summary: "Nothing flattened." });
+            }
+            break;
+          }
+          if (isAutoLayoutIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select a frame first.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobIdAL = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobIdAL, prompt: intentText });
+            try {
+              let collectFrames2 = function(node, list, depth) {
+                if (node.type !== "FRAME") return;
+                if (depth > MAX_AL_DEPTH) return;
+                const container = node;
+                const childNames = container.children.map((c) => {
+                  if (c.type === "TEXT") return `"${c.characters.substring(0, 30)}" (TEXT)`;
+                  return `"${c.name}" (${c.type}, ${Math.round(c.width)}\xD7${Math.round(c.height)})`;
+                });
+                const hasLayout = container.layoutMode === "HORIZONTAL" || container.layoutMode === "VERTICAL";
+                list.push({
+                  id: node.id,
+                  name: node.name,
+                  type: node.type,
+                  depth,
+                  width: Math.round(node.width),
+                  height: Math.round(node.height),
+                  childCount: container.children.length,
+                  childSummary: childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` \u2026 +${childNames.length - 10} more` : ""),
+                  alreadyHasLayout: hasLayout
+                });
+                for (const child of container.children) {
+                  if (child.type === "FRAME") {
+                    collectFrames2(child, list, depth + 1);
+                  }
+                }
+              };
+              var collectFrames = collectFrames2;
+              const MAX_AL_DEPTH = 3;
+              const allFrames = [];
+              for (const node of [...selection]) {
+                collectFrames2(node, allFrames, 0);
+              }
+              const framesToProcess = allFrames.filter((f) => !f.alreadyHasLayout);
+              if (framesToProcess.length === 0) {
+                const msg2 = allFrames.length > 0 ? `All ${allFrames.length} frames already have auto layout.` : "No frames found to apply auto layout to.";
+                figma.notify(msg2, { timeout: 3e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdAL, summary: msg2 });
+                break;
+              }
+              sendToUI({ type: "status", message: `Analyzing ${framesToProcess.length} frames for auto layout\u2026` });
+              const frameDescriptions = framesToProcess.map(
+                (f) => `\u2022 id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}\xD7${f.height} children(${f.childCount}): [${f.childSummary}]`
+              ).join("\n");
+              const layoutPrompt = `The user said: "${intentText}"
+Apply auto layout to a Figma frame and its nested sub-frames.
+
+Frames to configure (depth 0 = root, selected frame):
+${frameDescriptions}
+
+For EACH frame, determine the best auto layout settings:
+- "direction": "VERTICAL" or "HORIZONTAL"
+  \u2022 Vertical: when children are stacked top-to-bottom (lists, cards, full screens)
+  \u2022 Horizontal: when children are side-by-side (rows, navbars, quantity selectors, price lines)
+- "spacing": pixels between items (0 = touching, 8-16 = normal, 24+ = sections)
+- "padding": pixels on all sides (0 for inner groups, 16-24 for main containers)
+- "alignment": primary axis \u2014 "MIN" | "CENTER" | "MAX" | "SPACE_BETWEEN"
+- "counterAlignment": cross axis \u2014 "MIN" | "CENTER" | "MAX"
+
+IMPORTANT rules:
+- depth=0 root frame: use FIXED width to keep the screen width, spacing based on its sections
+- Inner frames: typically no padding, suitable spacing
+- Look at child dimensions to infer direction: if children are wider than tall and stacked, it's vertical. If children are narrow and side by side, it's horizontal.
+
+Respond with ONLY a JSON array, no markdown:
+[{"id": "...", "direction": "...", "spacing": N, "padding": N, "alignment": "...", "counterAlignment": "..."}]`;
+              const layoutPayload = {
+                intent: layoutPrompt,
+                selection: { nodes: [] },
+                designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                apiKey: _userApiKey,
+                provider: _selectedProvider,
+                model: _selectedModel
+              };
+              let layoutSettings = [];
+              try {
+                const layoutResult = await fetchViaUI("/plan?lenient=true&analyze=true", layoutPayload);
+                if (Array.isArray(layoutResult)) {
+                  layoutSettings = layoutResult;
+                } else {
+                  const rawStr = JSON.stringify(layoutResult);
+                  const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                  if (arrMatch) {
+                    const parsed = JSON.parse(arrMatch[0]);
+                    if (Array.isArray(parsed)) {
+                      layoutSettings = parsed;
+                    }
+                  }
+                }
+                console.log(`[AutoLayout] LLM returned settings for ${layoutSettings.length} frames`);
+              } catch (parseErr) {
+                console.warn(`[AutoLayout] LLM layout analysis failed: ${parseErr.message}`);
+              }
+              const settingsMap = /* @__PURE__ */ new Map();
+              for (const s of layoutSettings) settingsMap.set(s.id, s);
+              const sorted = [...framesToProcess].sort((a, b) => b.depth - a.depth);
+              let appliedCount = 0;
+              for (const frameInfo of sorted) {
+                const node = figma.getNodeById(frameInfo.id);
+                if (!node || node.type !== "FRAME") continue;
+                const frame = node;
+                const settings = settingsMap.get(frameInfo.id);
+                const dir = (settings == null ? void 0 : settings.direction) || "VERTICAL";
+                const spacing = (_a = settings == null ? void 0 : settings.spacing) != null ? _a : 0;
+                const pad = (_b = settings == null ? void 0 : settings.padding) != null ? _b : 0;
+                const align = (settings == null ? void 0 : settings.alignment) || "MIN";
+                const counterAlign = (settings == null ? void 0 : settings.counterAlignment) || "MIN";
+                const origWidth = frame.width;
+                const origHeight = frame.height;
+                const isRoot = frameInfo.depth === 0;
+                frame.layoutMode = dir;
+                frame.itemSpacing = spacing;
+                frame.paddingTop = pad;
+                frame.paddingRight = pad;
+                frame.paddingBottom = pad;
+                frame.paddingLeft = pad;
+                if (["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(align)) {
+                  frame.primaryAxisAlignItems = align;
+                }
+                if (["MIN", "CENTER", "MAX"].includes(counterAlign)) {
+                  frame.counterAxisAlignItems = counterAlign;
+                }
+                if (isRoot) {
+                  frame.counterAxisSizingMode = "FIXED";
+                  frame.primaryAxisSizingMode = "AUTO";
+                  frame.resize(origWidth, frame.height);
+                } else {
+                  frame.primaryAxisSizingMode = "AUTO";
+                  frame.counterAxisSizingMode = "AUTO";
+                }
+                appliedCount++;
+                console.log(`[AutoLayout] Applied to "${frame.name}" (depth ${frameInfo.depth}): ${dir}, spacing=${spacing}, padding=${pad}`);
+              }
+              if (appliedCount > 0) {
+                const summary = `Applied auto layout to ${appliedCount} frame${appliedCount > 1 ? "s" : ""}.`;
+                figma.notify(summary, { timeout: 4e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdAL, summary });
+              } else {
+                sendToUI({ type: "job-complete", jobId: nativeJobIdAL, summary: "No frames had auto layout applied." });
+              }
+            } catch (err) {
+              figma.notify(`Failed to apply auto layout: ${err.message}`, { timeout: 4e3 });
+              sendToUI({ type: "job-error", jobId: nativeJobIdAL, error: `Failed: ${err.message}` });
+            }
+            break;
+          }
+          if (isCleanupIntent) {
+            const selection = figma.currentPage.selection;
+            if (selection.length === 0) {
+              figma.notify("Select a frame first.", { timeout: 3e3 });
+              sendToUI({ type: "status", message: "No selection." });
+              break;
+            }
+            const nativeJobIdCU = ++_nextJobId;
+            sendToUI({ type: "job-started", jobId: nativeJobIdCU, prompt: intentText });
+            try {
+              let collectCleanupFrames2 = function(node, list, depth) {
+                var _a2, _b2, _c2, _d, _e, _f;
+                if (node.type !== "FRAME") return;
+                if (depth > MAX_CU_DEPTH) return;
+                const f = node;
+                const childNames = f.children.map((c) => {
+                  if (c.type === "TEXT") return `"${c.characters.substring(0, 30)}" (TEXT)`;
+                  return `"${c.name}" (${c.type}, ${Math.round(c.width)}\xD7${Math.round(c.height)})`;
+                });
+                const lm = f.layoutMode || "NONE";
+                list.push({
+                  id: f.id,
+                  name: f.name,
+                  depth,
+                  width: Math.round(f.width),
+                  height: Math.round(f.height),
+                  layoutMode: lm === "HORIZONTAL" || lm === "VERTICAL" ? lm : "NONE",
+                  paddingTop: (_a2 = f.paddingTop) != null ? _a2 : 0,
+                  paddingRight: (_b2 = f.paddingRight) != null ? _b2 : 0,
+                  paddingBottom: (_c2 = f.paddingBottom) != null ? _c2 : 0,
+                  paddingLeft: (_d = f.paddingLeft) != null ? _d : 0,
+                  itemSpacing: (_e = f.itemSpacing) != null ? _e : 0,
+                  counterAxisSpacing: (_f = f.counterAxisSpacing) != null ? _f : 0,
+                  primaryAxisAlign: f.primaryAxisAlignItems || "MIN",
+                  counterAxisAlign: f.counterAxisAlignItems || "MIN",
+                  sizingH: f.layoutSizingHorizontal || "FIXED",
+                  sizingV: f.layoutSizingVertical || "FIXED",
+                  childCount: f.children.length,
+                  childSummary: childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` \u2026 +${childNames.length - 10} more` : "")
+                });
+                for (const child of f.children) {
+                  if (child.type === "FRAME") {
+                    collectCleanupFrames2(child, list, depth + 1);
+                  }
+                }
+              };
+              var collectCleanupFrames = collectCleanupFrames2;
+              const MAX_CU_DEPTH = 3;
+              const allFrames = [];
+              for (const node of [...selection]) {
+                collectCleanupFrames2(node, allFrames, 0);
+              }
+              if (allFrames.length === 0) {
+                figma.notify("No frames found. Select a frame to clean up.", { timeout: 3e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No frames to clean up." });
+                break;
+              }
+              sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup\u2026` });
+              const frameDescriptions = allFrames.map(
+                (f) => `\u2022 id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}\xD7${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} counterSpacing=${f.counterAxisSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} children(${f.childCount}): [${f.childSummary}]`
+              ).join("\n");
+              const cleanupPrompt = `The user said: "${intentText}"
+They want to clean up / tidy a Figma frame and make its layout properties consistent.
+
+Here are ALL the frames in the hierarchy with their CURRENT layout properties:
+${frameDescriptions}
+
+Your task: analyze the current padding, spacing, and alignment values and make them CONSISTENT.
+
+Rules:
+- Look for inconsistencies: e.g., padding [16,24,16,8] should probably be [16,16,16,16] or [16,24,16,24].
+- Sibling frames at the same depth should generally share the same padding and spacing values.
+- Use common UI spacing scales: 0, 4, 8, 12, 16, 20, 24, 32, 40, 48.
+- Root frame (depth=0): typically needs more padding (16-32px) and spacing (16-24px).
+- Inner frames (depth>0): typically less padding (0-16px) with appropriate spacing.
+- If a frame has layoutMode=NONE and has children, consider enabling auto layout (set "layoutMode").
+- PRESERVE existing layout direction \u2014 don't change HORIZONTAL to VERTICAL or vice versa unless clearly wrong.
+- PRESERVE content \u2014 only adjust layout properties, never suggest content changes.
+
+For EACH frame that needs changes, return its updated values.
+Only include frames where you're actually changing something.
+
+Respond with ONLY a JSON array, no markdown:
+[{"id": "...", "layoutMode": "VERTICAL"|"HORIZONTAL" (optional \u2014 only to enable auto layout on NONE frames), "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "counterAxisSpacing": N (optional), "alignment": "MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN" (optional), "counterAlignment": "MIN"|"CENTER"|"MAX" (optional)}]`;
+              const cleanupPayload = {
+                intent: cleanupPrompt,
+                selection: { nodes: [] },
+                designSystem: { textStyles: [], fillStyles: [], components: [], variables: [] },
+                apiKey: _userApiKey,
+                provider: _selectedProvider,
+                model: _selectedModel
+              };
+              let cleanupSettings = [];
+              try {
+                const cleanupResult = await fetchViaUI("/plan?lenient=true&analyze=true", cleanupPayload);
+                if (Array.isArray(cleanupResult)) {
+                  cleanupSettings = cleanupResult;
+                } else {
+                  const rawStr = JSON.stringify(cleanupResult);
+                  const arrMatch = rawStr.match(/\[[\s\S]*?\{[\s\S]*?"id"[\s\S]*?\}[\s\S]*?\]/);
+                  if (arrMatch) {
+                    const parsed = JSON.parse(arrMatch[0]);
+                    if (Array.isArray(parsed)) {
+                      cleanupSettings = parsed;
+                    }
+                  }
+                }
+                console.log(`[Cleanup] LLM returned settings for ${cleanupSettings.length} frames`);
+              } catch (parseErr) {
+                console.warn(`[Cleanup] LLM analysis failed: ${parseErr.message}`);
+              }
+              if (cleanupSettings.length === 0) {
+                figma.notify("No layout changes needed \u2014 frame looks consistent.", { timeout: 3e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No cleanup changes needed." });
+                break;
+              }
+              const settingsMap = /* @__PURE__ */ new Map();
+              for (const s of cleanupSettings) settingsMap.set(s.id, s);
+              const frameDepthMap = /* @__PURE__ */ new Map();
+              for (const f of allFrames) frameDepthMap.set(f.id, f.depth);
+              const sortedSettings = [...cleanupSettings].sort(
+                (a, b) => {
+                  var _a2, _b2;
+                  return ((_a2 = frameDepthMap.get(b.id)) != null ? _a2 : 0) - ((_b2 = frameDepthMap.get(a.id)) != null ? _b2 : 0);
+                }
+              );
+              let appliedCount = 0;
+              const changes = [];
+              for (const settings of sortedSettings) {
+                const node = figma.getNodeById(settings.id);
+                if (!node || node.type !== "FRAME") continue;
+                const frame = node;
+                const isRoot = ((_c = frameDepthMap.get(settings.id)) != null ? _c : 0) === 0;
+                const origWidth = frame.width;
+                const changeDetails = [];
+                if (settings.layoutMode && (settings.layoutMode === "HORIZONTAL" || settings.layoutMode === "VERTICAL")) {
+                  const currentMode = frame.layoutMode;
+                  if (currentMode !== "HORIZONTAL" && currentMode !== "VERTICAL") {
+                    frame.layoutMode = settings.layoutMode;
+                    changeDetails.push(`layout=${settings.layoutMode}`);
+                  }
+                }
+                if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
+                  if (settings.paddingTop !== void 0) {
+                    frame.paddingTop = settings.paddingTop;
+                  }
+                  if (settings.paddingRight !== void 0) {
+                    frame.paddingRight = settings.paddingRight;
+                  }
+                  if (settings.paddingBottom !== void 0) {
+                    frame.paddingBottom = settings.paddingBottom;
+                  }
+                  if (settings.paddingLeft !== void 0) {
+                    frame.paddingLeft = settings.paddingLeft;
+                  }
+                  if (settings.itemSpacing !== void 0) {
+                    frame.itemSpacing = settings.itemSpacing;
+                  }
+                  if (settings.counterAxisSpacing !== void 0) {
+                    frame.counterAxisSpacing = settings.counterAxisSpacing;
+                  }
+                  const p = [settings.paddingTop, settings.paddingRight, settings.paddingBottom, settings.paddingLeft].filter((v) => v !== void 0);
+                  if (p.length > 0) changeDetails.push(`padding=[${frame.paddingTop},${frame.paddingRight},${frame.paddingBottom},${frame.paddingLeft}]`);
+                  if (settings.itemSpacing !== void 0) changeDetails.push(`spacing=${settings.itemSpacing}`);
+                  if (settings.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(settings.alignment)) {
+                    frame.primaryAxisAlignItems = settings.alignment;
+                    changeDetails.push(`align=${settings.alignment}`);
+                  }
+                  if (settings.counterAlignment && ["MIN", "CENTER", "MAX"].includes(settings.counterAlignment)) {
+                    frame.counterAxisAlignItems = settings.counterAlignment;
+                    changeDetails.push(`crossAlign=${settings.counterAlignment}`);
+                  }
+                  if (isRoot) {
+                    frame.counterAxisSizingMode = "FIXED";
+                    frame.primaryAxisSizingMode = "AUTO";
+                    frame.resize(origWidth, frame.height);
+                  }
+                }
+                if (changeDetails.length > 0) {
+                  appliedCount++;
+                  changes.push(`"${frame.name}": ${changeDetails.join(", ")}`);
+                  console.log(`[Cleanup] Updated "${frame.name}" (depth ${frameDepthMap.get(settings.id)}): ${changeDetails.join(", ")}`);
+                }
+              }
+              if (appliedCount > 0) {
+                const summary = `Cleaned up ${appliedCount} frame${appliedCount > 1 ? "s" : ""}: ${changes.slice(0, 3).join("; ")}${changes.length > 3 ? ` \u2026 +${changes.length - 3} more` : ""}`;
+                figma.notify(summary, { timeout: 5e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary });
+              } else {
+                figma.notify("No layout changes were needed.", { timeout: 3e3 });
+                sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No changes applied." });
+              }
+            } catch (err) {
+              figma.notify(`Failed to clean up layout: ${err.message}`, { timeout: 4e3 });
+              sendToUI({ type: "job-error", jobId: nativeJobIdCU, error: `Failed: ${err.message}` });
+            }
+            break;
+          }
           const isGenerateIntent = figma.currentPage.selection.length === 0 || /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) || /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) || /\b(frames?|screens?|pages?)\b.+\bfor\b/i.test(intentText) || /\b(dark|light)\s+mode\s+(variant|version|copy|of)\b/i.test(intentText) || /\bvariant\b.+\b(of|for)\b/i.test(intentText);
           const jobId = ++_nextJobId;
           const job = { id: jobId, cancelled: false };

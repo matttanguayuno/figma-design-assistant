@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 
 const app = express();
@@ -152,6 +152,39 @@ app.post("/cancel", (_req: Request, res: Response) => {
   res.json({ status: "cancelled" });
 });
 
+// ── POST /analyze — free-form LLM call (no operations schema) ──────
+
+app.post("/analyze", async (req: Request, res: Response) => {
+  try {
+    const { prompt, apiKey, provider, model } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key." });
+      return;
+    }
+    if (!prompt || typeof prompt !== "string") {
+      res.status(400).json({ error: "Missing 'prompt'" });
+      return;
+    }
+
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+
+    console.log(`[analyze] provider=${resolvedProvider}, model=${model || "default"}, prompt=${prompt.length} chars`);
+
+    const result = await callLLMAnalyze(prompt, apiKey, resolvedProvider, model);
+    console.log(`[analyze] LLM returned:`, JSON.stringify(result).slice(0, 300));
+
+    res.json(result);
+  } catch (err: any) {
+    console.error("[analyze] Error:", err);
+    res.status(500).json({ error: err.message || "Unknown error" });
+  }
+});
+
 // ── POST /plan ──────────────────────────────────────────────────────
 
 app.post("/plan", async (req: Request, res: Response) => {
@@ -231,6 +264,15 @@ app.post("/plan", async (req: Request, res: Response) => {
     }
 
     // 1. Call LLM
+    const analyzeMode = req.query.analyze === "true";
+    if (analyzeMode) {
+      // Free-form analysis mode: skip operations system prompt and validation
+      const result = await callLLMAnalyze(intent, apiKey, resolvedProvider, model);
+      console.log(`[plan/analyze] LLM returned:`, JSON.stringify(result).slice(0, 300));
+      res.json(result);
+      return;
+    }
+
     const rawBatch = await callLLM(intent, selection, designSystem, apiKey, resolvedProvider, model, safeFullDS);
     console.log(`[plan] LLM returned:`, JSON.stringify(rawBatch).slice(0, 300));
 

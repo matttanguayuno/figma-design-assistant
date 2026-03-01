@@ -265,6 +265,31 @@ export async function callLLM(
   return parseJsonResponse(raw, "llm");
 }
 
+// ── Call LLM for free-form analysis (no operations system prompt) ───
+
+export async function callLLMAnalyze(
+  prompt: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string
+): Promise<unknown> {
+  const systemPrompt =
+    "You are a design layout analyzer. Return ONLY valid JSON — no markdown fences, no prose, no explanation.";
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 4096, apiKey, abort);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "analyze");
+}
+
 // ── Call LLM for Frame Generation ───────────────────────────────────
 
 export async function callLLMGenerate(
