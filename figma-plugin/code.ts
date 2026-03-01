@@ -9632,7 +9632,186 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               fixPositionAndBounds(node, 0);
             }
             if (phase0Count > 0) {
-              console.log(`[Cleanup] Phase 0: Fixed position/bounds on ${phase0Count} elements`);
+              console.log(`[Cleanup] Phase 0a: Fixed position/bounds on ${phase0Count} elements`);
+            }
+
+            // ── PHASE 0b: NONE-layout margin enforcement & sibling consistency ──
+            // After bounds are fixed, enforce consistent horizontal margins and
+            // same-name sibling consistency within NONE-layout parents.
+            function enforceNoneLayoutConsistency(node: SceneNode, depth: number): void {
+              if (node.type !== "FRAME") return;
+              if (depth > MAX_CU_DEPTH + 1) return;
+              const parent = node as FrameNode;
+              const parentW = Math.round(parent.width);
+              const parentLM = parent.layoutMode || "NONE";
+
+              if (parentLM === "NONE" && parent.children.length >= 2) {
+                // Gather child positioning info
+                const childInfos: Array<{
+                  node: SceneNode;
+                  name: string;
+                  x: number;
+                  y: number;
+                  w: number;
+                  h: number;
+                  isVisual: boolean;
+                }> = [];
+                for (const child of parent.children) {
+                  const cn = child.name || "(unnamed)";
+                  const isVis = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator|gesture|bar$/i.test(cn.toLowerCase());
+                  childInfos.push({
+                    node: child,
+                    name: cn,
+                    x: Math.round(child.x),
+                    y: Math.round(child.y),
+                    w: Math.round(child.width),
+                    h: Math.round(child.height),
+                    isVisual: isVis,
+                  });
+                }
+
+                // --- Horizontal margin enforcement ---
+                // Find the most common left margin among non-visual, non-full-width children
+                const leftMargins: number[] = [];
+                for (const ci of childInfos) {
+                  if (!ci.isVisual && ci.w < parentW - 4) {
+                    leftMargins.push(ci.x);
+                  }
+                }
+                // If we have siblings with proper margins, use majority-vote
+                let targetMargin = 0;
+                if (leftMargins.length > 0) {
+                  const marginCounts = new Map<number, number>();
+                  for (const m of leftMargins) {
+                    marginCounts.set(m, (marginCounts.get(m) || 0) + 1);
+                  }
+                  let bestCount = 0;
+                  for (const [m, count] of marginCounts) {
+                    if (count > bestCount) { bestCount = count; targetMargin = m; }
+                  }
+                }
+                // If no siblings have margins (all flush), use standard 20px mobile margin
+                if (targetMargin < 4) targetMargin = 20;
+                const targetWidth = parentW - (targetMargin * 2);
+
+                // Apply margin to non-visual children that are flush or inconsistent
+                for (const ci of childInfos) {
+                  if (ci.isVisual) continue;
+                  // Skip children that are already correctly positioned (within 4px tolerance)
+                  if (Math.abs(ci.x - targetMargin) <= 4 && Math.abs(ci.w - targetWidth) <= 4) continue;
+                  // Skip children that are much narrower than target (intentionally small elements)
+                  if (ci.w < targetWidth * 0.5) continue;
+                  // Only fix children that are flush (x=0 or x=1) or at wrong margin, AND near full-width
+                  if (ci.x <= 4 && ci.w >= parentW - 8) {
+                    // Full-width child needs inset
+                    ci.node.x = targetMargin;
+                    try {
+                      ci.node.resize(targetWidth, ci.h);
+                    } catch (_e) { /* ignore */ }
+                    phase0Count++;
+                    phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin)`);
+                    console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth}`);
+                    ci.x = targetMargin;
+                    ci.w = targetWidth;
+                  } else if (ci.w >= parentW - 8 && ci.x > 4) {
+                    // Positioned child that's too wide — resize to target
+                    ci.node.x = targetMargin;
+                    try {
+                      ci.node.resize(targetWidth, ci.h);
+                    } catch (_e) { /* ignore */ }
+                    phase0Count++;
+                    phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin adjust)`);
+                    console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": margin adjust`);
+                    ci.x = targetMargin;
+                    ci.w = targetWidth;
+                  }
+                }
+
+                // --- Same-name sibling width/x consistency ---
+                const nameGroups = new Map<string, typeof childInfos>();
+                for (const ci of childInfos) {
+                  if (!nameGroups.has(ci.name)) nameGroups.set(ci.name, []);
+                  nameGroups.get(ci.name)!.push(ci);
+                }
+                for (const [_name, group] of nameGroups) {
+                  if (group.length < 2) continue;
+                  // Majority-vote on x position and width
+                  const xCounts = new Map<number, number>();
+                  const wCounts = new Map<number, number>();
+                  for (const g of group) {
+                    xCounts.set(g.x, (xCounts.get(g.x) || 0) + 1);
+                    wCounts.set(g.w, (wCounts.get(g.w) || 0) + 1);
+                  }
+                  let bestX = group[0].x, bestXCount = 0;
+                  for (const [x, cnt] of xCounts) { if (cnt > bestXCount) { bestXCount = cnt; bestX = x; } }
+                  let bestW = group[0].w, bestWCount = 0;
+                  for (const [w, cnt] of wCounts) { if (cnt > bestWCount) { bestWCount = cnt; bestW = w; } }
+
+                  for (const g of group) {
+                    if (g.x === bestX && g.w === bestW) continue;
+                    const fixes: string[] = [];
+                    if (g.x !== bestX) { g.node.x = bestX; fixes.push(`x ${g.x}->${bestX}`); g.x = bestX; }
+                    if (g.w !== bestW) {
+                      try { g.node.resize(bestW, g.h); fixes.push(`w ${g.w}->${bestW}`); g.w = bestW; } catch (_e) {}
+                    }
+                    if (fixes.length > 0) {
+                      phase0Count++;
+                      phase0Changes.push(`"${g.name}": ${fixes.join(", ")} (sibling match)`);
+                      console.log(`[Cleanup Phase0b] "${g.name}" in "${parent.name}": ${fixes.join(", ")} (sibling match)`);
+                    }
+                  }
+                }
+
+                // --- Vertical gap compaction ---
+                // Sort children by y, find excessive gaps, reduce them
+                const sorted = [...childInfos].sort((a, b) => a.y - b.y);
+                const gaps: Array<{ index: number; gap: number }> = [];
+                for (let i = 1; i < sorted.length; i++) {
+                  const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
+                  gaps.push({ index: i, gap });
+                }
+                if (gaps.length >= 2) {
+                  // Find median gap
+                  const sortedGaps = gaps.map(g => g.gap).sort((a, b) => a - b);
+                  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)];
+                  const maxAllowedGap = Math.max(medianGap * 2, 32);
+
+                  // Compact from top to bottom — shift everything below an excessive gap upward
+                  let totalShift = 0;
+                  for (let i = 0; i < gaps.length; i++) {
+                    const gapInfo = gaps[i];
+                    if (gapInfo.gap > maxAllowedGap && gapInfo.gap > 40) {
+                      const reduction = gapInfo.gap - Math.max(medianGap, 16);
+                      totalShift += reduction;
+                      phase0Count++;
+                      phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                      console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                    }
+                    if (totalShift > 0) {
+                      sorted[gapInfo.index].node.y = sorted[gapInfo.index].y - totalShift;
+                    }
+                  }
+                }
+              }
+
+              // Recurse
+              for (const child of parent.children) {
+                if (child.type === "FRAME") {
+                  enforceNoneLayoutConsistency(child, depth + 1);
+                } else if (child.type === "GROUP") {
+                  for (const gc of (child as GroupNode).children) {
+                    if (gc.type === "FRAME") enforceNoneLayoutConsistency(gc, depth + 1);
+                  }
+                }
+              }
+            }
+
+            // Run Phase 0b on all selected frames
+            for (const node of [...selection]) {
+              enforceNoneLayoutConsistency(node, 0);
+            }
+            if (phase0Count > 0) {
+              console.log(`[Cleanup] Phase 0 total: ${phase0Count} fixes`);
             }
 
             if (allFrames.length === 0) {
