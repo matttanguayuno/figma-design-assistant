@@ -7375,30 +7375,26 @@ Respond with ONLY a JSON array, no markdown:
                   const isVisChild = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test(childName.toLowerCase());
                   const fixes = [];
                   if (parentLM === "NONE") {
-                    if (childX < 0) {
+                    let curX = childX;
+                    if (curX < 0) {
                       child.x = 0;
-                      fixes.push(`x ${childX}->0`);
+                      fixes.push(`x ${curX}->0`);
+                      curX = 0;
                     }
-                    if (childW > parentW && !isVisChild) {
-                      try {
-                        child.resize(parentW, childH);
-                        fixes.push(`width ${childW}->${parentW}`);
-                      } catch (_e2) {
-                      }
-                    }
-                    const currentX = Math.round(child.x);
-                    const currentW = Math.round(child.width);
-                    if (currentX + currentW > parentW) {
-                      if (currentX > 0 && currentW <= parentW) {
-                        child.x = parentW - currentW;
-                        fixes.push(`x ${currentX}->${parentW - currentW} (shift to fit)`);
-                      } else if (currentX >= 0 && currentW > parentW) {
-                        child.x = 0;
-                        try {
-                          child.resize(parentW, Math.round(child.height));
-                          fixes.push(`x->0, width ${currentW}->${parentW} (resize to fit)`);
-                        } catch (_e2) {
-                          fixes.push(`x ${currentX}->0`);
+                    const curW = Math.round(child.width);
+                    if (curX + curW > parentW + 2 && !isVisChild) {
+                      if (curW <= parentW) {
+                        const newX = parentW - curW;
+                        child.x = newX;
+                        fixes.push(`x ${curX}->${newX} (shift to fit)`);
+                      } else {
+                        const targetW = parentW - curX;
+                        if (targetW > 0) {
+                          try {
+                            child.resize(targetW, childH);
+                            fixes.push(`width ${curW}->${targetW} (fit in parent)`);
+                          } catch (_e2) {
+                          }
                         }
                       }
                     }
@@ -7445,7 +7441,6 @@ Respond with ONLY a JSON array, no markdown:
                 const parent = node;
                 const parentW = Math.round(parent.width);
                 const parentLM = parent.layoutMode || "NONE";
-                const isAtRootEdge = parentW >= rootWidth - 4;
                 if (parentLM === "NONE" && parent.children.length >= 2) {
                   const childInfos = [];
                   for (const child of parent.children) {
@@ -7460,58 +7455,6 @@ Respond with ONLY a JSON array, no markdown:
                       h: Math.round(child.height),
                       isVisual: isVis
                     });
-                  }
-                  if (isAtRootEdge) {
-                    const leftMargins = [];
-                    for (const ci of childInfos) {
-                      if (!ci.isVisual && ci.w < parentW - 4) {
-                        leftMargins.push(ci.x);
-                      }
-                    }
-                    let targetMargin = 0;
-                    if (leftMargins.length > 0) {
-                      const marginCounts = /* @__PURE__ */ new Map();
-                      for (const m of leftMargins) {
-                        marginCounts.set(m, (marginCounts.get(m) || 0) + 1);
-                      }
-                      let bestCount = 0;
-                      for (const [m, count] of marginCounts) {
-                        if (count > bestCount) {
-                          bestCount = count;
-                          targetMargin = m;
-                        }
-                      }
-                    }
-                    if (targetMargin < 4) targetMargin = 20;
-                    const targetWidth = parentW - targetMargin * 2;
-                    for (const ci of childInfos) {
-                      if (ci.isVisual) continue;
-                      if (Math.abs(ci.x - targetMargin) <= 4 && Math.abs(ci.w - targetWidth) <= 4) continue;
-                      if (ci.w < targetWidth * 0.5) continue;
-                      if (ci.x <= 4 && ci.w >= parentW - 8) {
-                        ci.node.x = targetMargin;
-                        try {
-                          ci.node.resize(targetWidth, ci.h);
-                        } catch (_e2) {
-                        }
-                        phase0Count++;
-                        phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin)`);
-                        console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth}`);
-                        ci.x = targetMargin;
-                        ci.w = targetWidth;
-                      } else if (ci.w >= parentW - 8 && ci.x > 4) {
-                        ci.node.x = targetMargin;
-                        try {
-                          ci.node.resize(targetWidth, ci.h);
-                        } catch (_e2) {
-                        }
-                        phase0Count++;
-                        phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin adjust)`);
-                        console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": margin adjust`);
-                        ci.x = targetMargin;
-                        ci.w = targetWidth;
-                      }
-                    }
                   }
                   const nameGroups = /* @__PURE__ */ new Map();
                   for (const ci of childInfos) {
@@ -7620,12 +7563,6 @@ Respond with ONLY a JSON array, no markdown:
               if (phase0Count > 0) {
                 console.log(`[Cleanup] Phase 0a: Fixed position/bounds on ${phase0Count} elements`);
               }
-              const rootWidth = (() => {
-                for (const n of [...selection]) {
-                  if (n.type === "FRAME") return Math.round(n.width);
-                }
-                return 393;
-              })();
               for (const node of [...selection]) {
                 enforceNoneLayoutConsistency2(node, 0);
               }

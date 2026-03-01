@@ -9550,35 +9550,31 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   // NONE-layout parent: children are absolutely positioned
 
                   // Fix A: child.x < 0 — shift to x=0
-                  if (childX < 0) {
+                  let curX = childX;
+                  if (curX < 0) {
                     child.x = 0;
-                    fixes.push(`x ${childX}->0`);
+                    fixes.push(`x ${curX}->0`);
+                    curX = 0;
                   }
 
-                  // Fix B: child is wider than parent — resize to fit
-                  if (childW > parentW && !isVisChild) {
-                    try {
-                      child.resize(parentW, childH);
-                      fixes.push(`width ${childW}->${parentW}`);
-                    } catch (_e) { /* resize may fail for some node types */ }
-                  }
-
-                  // Fix C: child.x + child.width > parentWidth — shift left or resize
-                  const currentX = Math.round(child.x);
-                  const currentW = Math.round(child.width);
-                  if (currentX + currentW > parentW) {
-                    if (currentX > 0 && currentW <= parentW) {
-                      // Child fits, just poorly positioned — shift left
-                      child.x = parentW - currentW;
-                      fixes.push(`x ${currentX}->${parentW - currentW} (shift to fit)`);
-                    } else if (currentX >= 0 && currentW > parentW) {
-                      // Child too wide even at x=0 — resize
-                      child.x = 0;
-                      try {
-                        child.resize(parentW, Math.round(child.height));
-                        fixes.push(`x->0, width ${currentW}->${parentW} (resize to fit)`);
-                      } catch (_e) {
-                        fixes.push(`x ${currentX}->0`);
+                  // Fix B: child overflows parent right edge — resize to fit from current x
+                  // We preserve the child's x position (intentional inset/margin) and only
+                  // shrink width to fit. If the child fits but is just mispositioned, shift.
+                  const curW = Math.round(child.width);
+                  if (curX + curW > parentW + 2 && !isVisChild) {
+                    if (curW <= parentW) {
+                      // Child width fits within parent — just shift left to eliminate overflow
+                      const newX = parentW - curW;
+                      child.x = newX;
+                      fixes.push(`x ${curX}->${newX} (shift to fit)`);
+                    } else {
+                      // Child is wider than parent — resize to available space from current position
+                      const targetW = parentW - curX;
+                      if (targetW > 0) {
+                        try {
+                          child.resize(targetW, childH);
+                          fixes.push(`width ${curW}->${targetW} (fit in parent)`);
+                        } catch (_e) { /* resize may fail for some node types */ }
                       }
                     }
                   }
@@ -9635,18 +9631,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               console.log(`[Cleanup] Phase 0a: Fixed position/bounds on ${phase0Count} elements`);
             }
 
-            // ── PHASE 0b: NONE-layout margin enforcement & sibling consistency ──
-            // After bounds are fixed, enforce consistent horizontal margins and
-            // same-name sibling consistency within NONE-layout parents.
-            // IMPORTANT: Only apply margins at the root-edge level. If a parent is
-            // already narrower than root (already inset), skip margin enforcement to
-            // prevent cascading double/triple margins.
-            const rootWidth = (() => {
-              for (const n of [...selection]) {
-                if (n.type === "FRAME") return Math.round(n.width);
-              }
-              return 393; // fallback mobile width
-            })();
+            // ── PHASE 0b: NONE-layout sibling consistency & gap compaction ──
+            // After bounds are fixed, enforce same-name sibling consistency
+            // and compact excessive vertical gaps within NONE-layout parents.
+            // NOTE: We do NOT invent horizontal margins. If content is flush to
+            // the edge, that's the design intent. We only fix genuine
+            // inconsistencies between same-named siblings and excessive gaps.
 
             function enforceNoneLayoutConsistency(node: SceneNode, depth: number): void {
               if (node.type !== "FRAME") return;
@@ -9654,10 +9644,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const parent = node as FrameNode;
               const parentW = Math.round(parent.width);
               const parentLM = parent.layoutMode || "NONE";
-
-              // Only apply margin enforcement if this parent is at root width (device edge).
-              // If parent is already narrower than root, it's already been inset — skip margins.
-              const isAtRootEdge = parentW >= rootWidth - 4;
 
               if (parentLM === "NONE" && parent.children.length >= 2) {
                 // Gather child positioning info
@@ -9682,65 +9668,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     h: Math.round(child.height),
                     isVisual: isVis,
                   });
-                }
-
-                // --- Horizontal margin enforcement (only at root-edge level) ---
-                if (isAtRootEdge) {
-                  // Find the most common left margin among non-visual, non-full-width children
-                  const leftMargins: number[] = [];
-                  for (const ci of childInfos) {
-                    if (!ci.isVisual && ci.w < parentW - 4) {
-                      leftMargins.push(ci.x);
-                    }
-                  }
-                  // If we have siblings with proper margins, use majority-vote
-                  let targetMargin = 0;
-                  if (leftMargins.length > 0) {
-                    const marginCounts = new Map<number, number>();
-                    for (const m of leftMargins) {
-                      marginCounts.set(m, (marginCounts.get(m) || 0) + 1);
-                    }
-                    let bestCount = 0;
-                    for (const [m, count] of marginCounts) {
-                      if (count > bestCount) { bestCount = count; targetMargin = m; }
-                    }
-                  }
-                  // If no siblings have margins (all flush), use standard 20px mobile margin
-                  if (targetMargin < 4) targetMargin = 20;
-                  const targetWidth = parentW - (targetMargin * 2);
-
-                  // Apply margin to non-visual children that are flush or inconsistent
-                  for (const ci of childInfos) {
-                    if (ci.isVisual) continue;
-                    // Skip children that are already correctly positioned (within 4px tolerance)
-                    if (Math.abs(ci.x - targetMargin) <= 4 && Math.abs(ci.w - targetWidth) <= 4) continue;
-                    // Skip children that are much narrower than target (intentionally small elements)
-                    if (ci.w < targetWidth * 0.5) continue;
-                    // Only fix children that are flush (x=0 or x=1) or at wrong margin, AND near full-width
-                    if (ci.x <= 4 && ci.w >= parentW - 8) {
-                      // Full-width child needs inset
-                      ci.node.x = targetMargin;
-                      try {
-                        ci.node.resize(targetWidth, ci.h);
-                      } catch (_e) { /* ignore */ }
-                      phase0Count++;
-                      phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin)`);
-                      console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth}`);
-                      ci.x = targetMargin;
-                      ci.w = targetWidth;
-                    } else if (ci.w >= parentW - 8 && ci.x > 4) {
-                      // Positioned child that's too wide — resize to target
-                      ci.node.x = targetMargin;
-                      try {
-                        ci.node.resize(targetWidth, ci.h);
-                      } catch (_e) { /* ignore */ }
-                      phase0Count++;
-                      phase0Changes.push(`"${ci.name}": x ${ci.x}->${targetMargin}, w ${ci.w}->${targetWidth} (margin adjust)`);
-                      console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": margin adjust`);
-                      ci.x = targetMargin;
-                      ci.w = targetWidth;
-                    }
-                  }
                 }
 
                 // --- Same-name sibling width/x consistency ---
