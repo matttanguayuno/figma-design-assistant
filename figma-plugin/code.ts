@@ -9953,6 +9953,25 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               break;
             }
 
+            // ── Helper: compute cumulative padding from ALL ancestors ──
+            // Walks up the tree summing auto-layout padding at each level.
+            // Used to prevent the "funnel effect" where nested frames each add 16px.
+            function getCumulativeAncestorPadding(node: SceneNode): { lr: number; tb: number } {
+              let lr = 0, tb = 0;
+              let walk: BaseNode | null = node.parent;
+              while (walk) {
+                if (walk.type === "FRAME") {
+                  const wf = walk as FrameNode;
+                  if (wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") {
+                    lr += Math.max(wf.paddingLeft || 0, wf.paddingRight || 0);
+                    tb += Math.max(wf.paddingTop || 0, wf.paddingBottom || 0);
+                  }
+                }
+                walk = walk.parent;
+              }
+              return { lr, tb };
+            }
+
             // ── LOCAL PRE-FIX PASS: deterministic fixes — this is the PRIMARY fixer ──
             let preFixCount = 0;
             const preFixChanges: string[] = [];
@@ -10010,46 +10029,29 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // Fix 5: Text content flush against edges — add 16px padding
-              // BUT: first check if any ancestor already provides padding on that side.
-              // If parent/grandparent has >=12px horizontal padding, child doesn't need its own.
+              // Uses CUMULATIVE ancestor padding to prevent stacking (the "funnel effect").
+              // Only adds padding if total ancestor padding on that axis is < 16px.
               // SKIP structural containers: if ALL children are frames (no direct text), this is a layout wrapper.
               const allChildrenAreFrames = fi.childCount > 0 && !fi.childSummary.includes("(TEXT)");
               const isStructuralContainer = allChildrenAreFrames && fi.childCount >= 2;
               if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80 && !isStructuralContainer && fi.depth > 0) {
-                let ancestorHasPadLR = false;
-                let ancestorHasPadTB = false;
-                let walkNode: BaseNode | null = node.parent;
-                for (let walkDepth = 0; walkDepth < 3 && walkNode; walkDepth++) {
-                  if (walkNode.type === "FRAME") {
-                    const wf = walkNode as FrameNode;
-                    if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") &&
-                        wf.paddingLeft >= 12 && wf.paddingRight >= 12) {
-                      ancestorHasPadLR = true;
-                    }
-                    if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") &&
-                        wf.paddingTop >= 12 && wf.paddingBottom >= 12) {
-                      ancestorHasPadTB = true;
-                    }
-                  }
-                  walkNode = walkNode.parent;
-                }
-                if (fi.paddingLeft === 0 && fi.paddingRight === 0 && !ancestorHasPadLR) {
+                const cumPad = getCumulativeAncestorPadding(node);
+                if (fi.paddingLeft === 0 && fi.paddingRight === 0 && cumPad.lr < 16) {
                   frame.paddingLeft = 16; fi.paddingLeft = 16;
                   frame.paddingRight = 16; fi.paddingRight = 16;
                   localFixes.push("padLR 0->16 (text flush)");
                 }
-                if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1 && !ancestorHasPadTB) {
+                if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1 && cumPad.tb < 16) {
                   frame.paddingTop = 12; fi.paddingTop = 12;
                   frame.paddingBottom = 12; fi.paddingBottom = 12;
                   localFixes.push("padTB 0->12 (text flush)");
                 }
               }
 
-              // Fix 6: One-sided asymmetric padding — make symmetric
-              // Cap the symmetric copy at 16px to avoid propagating huge padding values
-              // Skip structural containers (all-frame children) — their padding is positional, not design intent
+              // Fix 6: One-sided asymmetric padding — make symmetric (VERTICAL ONLY)
+              // Horizontal symmetric DISABLED — it causes padding stacking in nested frames.
+              // Only fix vertical asymmetry (one side 0, other > 4), capped at 16px.
               if (!isSepFrame && !isCarouselFrame && !isStructuralContainer) {
-                // Vertical: one side 0, other > 4
                 if (fi.paddingTop === 0 && fi.paddingBottom > 4) {
                   const nv = Math.min(fi.paddingBottom, 16);
                   frame.paddingTop = nv; fi.paddingTop = nv;
@@ -10058,16 +10060,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   const nv = Math.min(fi.paddingTop, 16);
                   frame.paddingBottom = nv; fi.paddingBottom = nv;
                   localFixes.push(`padBot 0->${nv} (symmetric)`);
-                }
-                // Horizontal: one side 0, other > 4
-                if (fi.paddingLeft === 0 && fi.paddingRight > 4) {
-                  const nv = Math.min(fi.paddingRight, 16);
-                  frame.paddingLeft = nv; fi.paddingLeft = nv;
-                  localFixes.push(`padLeft 0->${nv} (symmetric)`);
-                } else if (fi.paddingRight === 0 && fi.paddingLeft > 4) {
-                  const nv = Math.min(fi.paddingLeft, 16);
-                  frame.paddingRight = nv; fi.paddingRight = nv;
-                  localFixes.push(`padRight 0->${nv} (symmetric)`);
                 }
               }
 
@@ -10222,7 +10214,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             // Pass 2: Fix mapping — LLM maps problems to frames, outputs JSON fixes
             // Pass 3+: Verify loop — apply, re-screenshot, check for remaining issues
             // ═══════════════════════════════════════════════════════════════
-            const MAX_CLEANUP_PASSES = 5;
+            const MAX_CLEANUP_PASSES = 3;
 
             // ── Helper: re-collect live frame descriptions with issue annotations ──
             function buildFrameDescriptions(frames: CleanupFrameInfo[]): string {
@@ -10282,10 +10274,14 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   problems.push("[ISSUE] clipsContent=true with FIXED height -- content clipped. Consider sizingV=HUG");
                 }
                 if (!isImage && !isSeparator && !isCarousel && hasDeepText) {
-                  if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
+                  // Only report "text flush" if CUMULATIVE ancestor padding is insufficient.
+                  // This prevents the LLM from adding padding at every nesting level.
+                  const flushNode = figma.getNodeById(f.id) as SceneNode | null;
+                  const flushCum = flushNode ? getCumulativeAncestorPadding(flushNode) : { lr: 0, tb: 0 };
+                  if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80 && flushCum.lr < 16) {
                     problems.push("[ISSUE] text flush against L/R edges -- needs horizontal padding (16px)");
                   }
-                  if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
+                  if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1 && flushCum.tb < 16) {
                     problems.push("[ISSUE] text with no vertical padding -- needs top/bottom padding");
                   }
                 }
@@ -10362,20 +10358,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   ` clips=${f.clipsContent}` +
                   ` children(${f.childCount}): [${f.childSummary}]`;
 
-                // Add ancestor padding context — helps LLM avoid adding redundant padding
-                const node = figma.getNodeById(f.id) as SceneNode | null;
-                if (node) {
-                  let walk: BaseNode | null = node.parent;
-                  for (let d = 0; d < 2 && walk; d++) {
-                    if (walk.type === "FRAME") {
-                      const wf = walk as FrameNode;
-                      if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") &&
-                          (wf.paddingLeft >= 8 || wf.paddingRight >= 8 || wf.paddingTop >= 8 || wf.paddingBottom >= 8)) {
-                        desc += ` ancestorPad="${wf.name}":[${wf.paddingTop},${wf.paddingRight},${wf.paddingBottom},${wf.paddingLeft}]`;
-                        break; // Only show nearest ancestor with padding
-                      }
-                    }
-                    walk = walk.parent;
+                // Add cumulative ancestor padding context — shows LLM how much padding is already provided
+                const descNode = figma.getNodeById(f.id) as SceneNode | null;
+                if (descNode) {
+                  const cumDescPad = getCumulativeAncestorPadding(descNode);
+                  if (cumDescPad.lr > 0 || cumDescPad.tb > 0) {
+                    desc += ` cumulativePad=LR:${cumDescPad.lr},TB:${cumDescPad.tb}`;
                   }
                 }
 
@@ -10549,22 +10537,27 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     itemSpacing: before.iS
                   });
 
-                  // Ancestor padding guard: strip padding additions when parent already provides padding
-                  // This prevents the "funnel effect" where nested frames each add 16px of padding
-                  if (parentFrame && "layoutMode" in parentFrame) {
-                    const pf = parentFrame as FrameNode;
-                    if (pf.layoutMode === "HORIZONTAL" || pf.layoutMode === "VERTICAL") {
-                      if (pf.paddingLeft >= 12 || pf.paddingRight >= 12) {
-                        // Parent already has horizontal padding — don't add MORE horizontal padding
-                        if (s.paddingLeft !== undefined && s.paddingLeft > before.pL && before.pL === 0) {
-                          console.log(`[${passLabel}] Stripping padLeft ${s.paddingLeft} on "${frame.name}" — parent "${pf.name}" already has padLeft=${pf.paddingLeft}`);
-                          delete s.paddingLeft;
-                        }
-                        if (s.paddingRight !== undefined && s.paddingRight > before.pR && before.pR === 0) {
-                          console.log(`[${passLabel}] Stripping padRight ${s.paddingRight} on "${frame.name}" — parent "${pf.name}" already has padRight=${pf.paddingRight}`);
-                          delete s.paddingRight;
-                        }
-                      }
+                  // Ancestor padding guard: block padding additions when CUMULATIVE ancestor padding
+                  // is already sufficient. This prevents the "funnel effect" where nested frames each add 16px.
+                  const cumPad = getCumulativeAncestorPadding(node);
+                  if (cumPad.lr >= 16) {
+                    if (s.paddingLeft !== undefined && s.paddingLeft > before.pL) {
+                      console.log(`[${passLabel}] Blocking padLeft ${s.paddingLeft} on "${frame.name}" — cumulative ancestor LR=${cumPad.lr}px (≥16)`);
+                      delete s.paddingLeft;
+                    }
+                    if (s.paddingRight !== undefined && s.paddingRight > before.pR) {
+                      console.log(`[${passLabel}] Blocking padRight ${s.paddingRight} on "${frame.name}" — cumulative ancestor LR=${cumPad.lr}px (≥16)`);
+                      delete s.paddingRight;
+                    }
+                  }
+                  if (cumPad.tb >= 24) {
+                    if (s.paddingTop !== undefined && s.paddingTop > before.pT) {
+                      console.log(`[${passLabel}] Blocking padTop ${s.paddingTop} on "${frame.name}" — cumulative ancestor TB=${cumPad.tb}px (≥24)`);
+                      delete s.paddingTop;
+                    }
+                    if (s.paddingBottom !== undefined && s.paddingBottom > before.pB) {
+                      console.log(`[${passLabel}] Blocking padBot ${s.paddingBottom} on "${frame.name}" — cumulative ancestor TB=${cumPad.tb}px (≥24)`);
+                      delete s.paddingBottom;
                     }
                   }
 
@@ -10730,7 +10723,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `- Padding should be symmetric: paddingLeft = paddingRight, paddingTop = paddingBottom.\n` +
               `- Sibling frames with the SAME NAME must have IDENTICAL padding, spacing, and sizing.\n` +
               `- DO NOT add padding to image/photo/carousel/separator/divider frames.\n` +
-              `- DO NOT add padding to a frame if its parent already has padding >= 12px on that side (padding is inherited visually).\n` +
+              `- CRITICAL: Padding in Figma auto-layout is CUMULATIVE through the hierarchy. If frame A has padLR=16 and child B also has padLR=16, the text inside B is inset 32px from A's edge.\n` +
+              `- Check "cumulativePad" annotations — this shows total padding already provided by ALL ancestors. If cumulativePad LR >= 16, do NOT add more horizontal padding. If TB >= 24, do NOT add more vertical padding.\n` +
+              `- Only add horizontal padding to the OUTERMOST frame that needs it. Inner frames should have padLR=0 and use sizingH=FILL instead.\n` +
               `- DO NOT change alignment unless you are CERTAIN it is wrong. Alignment values like SPACE_BETWEEN are usually intentional (e.g., for label+value rows, headers with actions).\n` +
               `- Round fractional values to nearest multiple of 4 (14.5->16).\n` +
               `- Negative spacing must become 0 or a small positive value.\n` +

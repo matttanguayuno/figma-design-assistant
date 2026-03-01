@@ -7673,6 +7673,20 @@ Respond with ONLY a JSON array, no markdown:
                 } catch (e) {
                   console.log(`[Cleanup Phase0c] Failed to convert "${frame.name}": ${e}`);
                 }
+              }, getCumulativeAncestorPadding2 = function(node) {
+                let lr = 0, tb = 0;
+                let walk = node.parent;
+                while (walk) {
+                  if (walk.type === "FRAME") {
+                    const wf = walk;
+                    if (wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") {
+                      lr += Math.max(wf.paddingLeft || 0, wf.paddingRight || 0);
+                      tb += Math.max(wf.paddingTop || 0, wf.paddingBottom || 0);
+                    }
+                  }
+                  walk = walk.parent;
+                }
+                return { lr, tb };
               }, buildFrameDescriptions2 = function(frames) {
                 var _a2, _b2, _c, _d, _e, _f, _g;
                 for (const f of frames) {
@@ -7726,10 +7740,12 @@ Respond with ONLY a JSON array, no markdown:
                     problems.push("[ISSUE] clipsContent=true with FIXED height -- content clipped. Consider sizingV=HUG");
                   }
                   if (!isImage && !isSeparator && !isCarousel && hasDeepText) {
-                    if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80) {
+                    const flushNode = figma.getNodeById(f.id);
+                    const flushCum = flushNode ? getCumulativeAncestorPadding2(flushNode) : { lr: 0, tb: 0 };
+                    if (f.paddingLeft === 0 && f.paddingRight === 0 && f.width > 80 && flushCum.lr < 16) {
                       problems.push("[ISSUE] text flush against L/R edges -- needs horizontal padding (16px)");
                     }
-                    if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
+                    if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1 && flushCum.tb < 16) {
                       problems.push("[ISSUE] text with no vertical padding -- needs top/bottom padding");
                     }
                   }
@@ -7788,18 +7804,11 @@ Respond with ONLY a JSON array, no markdown:
                     }
                   }
                   let desc = `- id="${f.id}" name="${f.name}" depth=${f.depth}` + (f.parentName ? ` parent="${f.parentName}"` : "") + (f.parentLayoutMode ? ` parentLayout=${f.parentLayoutMode}` : "") + (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") + ` size=${f.width}x${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} clips=${f.clipsContent} children(${f.childCount}): [${f.childSummary}]`;
-                  const node = figma.getNodeById(f.id);
-                  if (node) {
-                    let walk = node.parent;
-                    for (let d = 0; d < 2 && walk; d++) {
-                      if (walk.type === "FRAME") {
-                        const wf = walk;
-                        if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") && (wf.paddingLeft >= 8 || wf.paddingRight >= 8 || wf.paddingTop >= 8 || wf.paddingBottom >= 8)) {
-                          desc += ` ancestorPad="${wf.name}":[${wf.paddingTop},${wf.paddingRight},${wf.paddingBottom},${wf.paddingLeft}]`;
-                          break;
-                        }
-                      }
-                      walk = walk.parent;
+                  const descNode = figma.getNodeById(f.id);
+                  if (descNode) {
+                    const cumDescPad = getCumulativeAncestorPadding2(descNode);
+                    if (cumDescPad.lr > 0 || cumDescPad.tb > 0) {
+                      desc += ` cumulativePad=LR:${cumDescPad.lr},TB:${cumDescPad.tb}`;
                     }
                   }
                   if (problems.length > 0) {
@@ -7932,19 +7941,25 @@ Respond with ONLY a JSON array, no markdown:
                       paddingLeft: before.pL,
                       itemSpacing: before.iS
                     });
-                    if (parentFrame && "layoutMode" in parentFrame) {
-                      const pf = parentFrame;
-                      if (pf.layoutMode === "HORIZONTAL" || pf.layoutMode === "VERTICAL") {
-                        if (pf.paddingLeft >= 12 || pf.paddingRight >= 12) {
-                          if (s.paddingLeft !== void 0 && s.paddingLeft > before.pL && before.pL === 0) {
-                            console.log(`[${passLabel}] Stripping padLeft ${s.paddingLeft} on "${frame.name}" \u2014 parent "${pf.name}" already has padLeft=${pf.paddingLeft}`);
-                            delete s.paddingLeft;
-                          }
-                          if (s.paddingRight !== void 0 && s.paddingRight > before.pR && before.pR === 0) {
-                            console.log(`[${passLabel}] Stripping padRight ${s.paddingRight} on "${frame.name}" \u2014 parent "${pf.name}" already has padRight=${pf.paddingRight}`);
-                            delete s.paddingRight;
-                          }
-                        }
+                    const cumPad = getCumulativeAncestorPadding2(node);
+                    if (cumPad.lr >= 16) {
+                      if (s.paddingLeft !== void 0 && s.paddingLeft > before.pL) {
+                        console.log(`[${passLabel}] Blocking padLeft ${s.paddingLeft} on "${frame.name}" \u2014 cumulative ancestor LR=${cumPad.lr}px (\u226516)`);
+                        delete s.paddingLeft;
+                      }
+                      if (s.paddingRight !== void 0 && s.paddingRight > before.pR) {
+                        console.log(`[${passLabel}] Blocking padRight ${s.paddingRight} on "${frame.name}" \u2014 cumulative ancestor LR=${cumPad.lr}px (\u226516)`);
+                        delete s.paddingRight;
+                      }
+                    }
+                    if (cumPad.tb >= 24) {
+                      if (s.paddingTop !== void 0 && s.paddingTop > before.pT) {
+                        console.log(`[${passLabel}] Blocking padTop ${s.paddingTop} on "${frame.name}" \u2014 cumulative ancestor TB=${cumPad.tb}px (\u226524)`);
+                        delete s.paddingTop;
+                      }
+                      if (s.paddingBottom !== void 0 && s.paddingBottom > before.pB) {
+                        console.log(`[${passLabel}] Blocking padBot ${s.paddingBottom} on "${frame.name}" \u2014 cumulative ancestor TB=${cumPad.tb}px (\u226524)`);
+                        delete s.paddingBottom;
                       }
                     }
                     const oscillatingProps = [];
@@ -8125,7 +8140,7 @@ Respond with ONLY a JSON array, no markdown:
                 if (!history || history.size < 2) return false;
                 return history.has(newVal);
               };
-              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, convertNoneToAutoLayout = convertNoneToAutoLayout2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2, recordFrameValues = recordFrameValues2, isOscillating = isOscillating2;
+              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, convertNoneToAutoLayout = convertNoneToAutoLayout2, getCumulativeAncestorPadding = getCumulativeAncestorPadding2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2, recordFrameValues = recordFrameValues2, isOscillating = isOscillating2;
               const MAX_CU_DEPTH = 5;
               let phase0Count = 0;
               const phase0Changes = [];
@@ -8243,29 +8258,15 @@ Respond with ONLY a JSON array, no markdown:
                 const allChildrenAreFrames = fi.childCount > 0 && !fi.childSummary.includes("(TEXT)");
                 const isStructuralContainer = allChildrenAreFrames && fi.childCount >= 2;
                 if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80 && !isStructuralContainer && fi.depth > 0) {
-                  let ancestorHasPadLR = false;
-                  let ancestorHasPadTB = false;
-                  let walkNode = node.parent;
-                  for (let walkDepth = 0; walkDepth < 3 && walkNode; walkDepth++) {
-                    if (walkNode.type === "FRAME") {
-                      const wf = walkNode;
-                      if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") && wf.paddingLeft >= 12 && wf.paddingRight >= 12) {
-                        ancestorHasPadLR = true;
-                      }
-                      if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") && wf.paddingTop >= 12 && wf.paddingBottom >= 12) {
-                        ancestorHasPadTB = true;
-                      }
-                    }
-                    walkNode = walkNode.parent;
-                  }
-                  if (fi.paddingLeft === 0 && fi.paddingRight === 0 && !ancestorHasPadLR) {
+                  const cumPad = getCumulativeAncestorPadding2(node);
+                  if (fi.paddingLeft === 0 && fi.paddingRight === 0 && cumPad.lr < 16) {
                     frame.paddingLeft = 16;
                     fi.paddingLeft = 16;
                     frame.paddingRight = 16;
                     fi.paddingRight = 16;
                     localFixes.push("padLR 0->16 (text flush)");
                   }
-                  if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1 && !ancestorHasPadTB) {
+                  if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1 && cumPad.tb < 16) {
                     frame.paddingTop = 12;
                     fi.paddingTop = 12;
                     frame.paddingBottom = 12;
@@ -8284,17 +8285,6 @@ Respond with ONLY a JSON array, no markdown:
                     frame.paddingBottom = nv;
                     fi.paddingBottom = nv;
                     localFixes.push(`padBot 0->${nv} (symmetric)`);
-                  }
-                  if (fi.paddingLeft === 0 && fi.paddingRight > 4) {
-                    const nv = Math.min(fi.paddingRight, 16);
-                    frame.paddingLeft = nv;
-                    fi.paddingLeft = nv;
-                    localFixes.push(`padLeft 0->${nv} (symmetric)`);
-                  } else if (fi.paddingRight === 0 && fi.paddingLeft > 4) {
-                    const nv = Math.min(fi.paddingLeft, 16);
-                    frame.paddingRight = nv;
-                    fi.paddingRight = nv;
-                    localFixes.push(`padRight 0->${nv} (symmetric)`);
                   }
                 }
                 if (!isVisualFrame && fi.sizingV === "FIXED" && fi.childCount <= 3 && fi.height > 100) {
@@ -8481,7 +8471,7 @@ Respond with ONLY a JSON array, no markdown:
                 console.log(`[Cleanup] Pre-fixed ${preFixCount} frames locally before LLM analysis`);
               }
               sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup...` });
-              const MAX_CLEANUP_PASSES = 5;
+              const MAX_CLEANUP_PASSES = 3;
               async function captureScreenshot() {
                 try {
                   const rootNode = selection[0];
@@ -8507,7 +8497,9 @@ Respond with ONLY a JSON array, no markdown:
 - Padding should be symmetric: paddingLeft = paddingRight, paddingTop = paddingBottom.
 - Sibling frames with the SAME NAME must have IDENTICAL padding, spacing, and sizing.
 - DO NOT add padding to image/photo/carousel/separator/divider frames.
-- DO NOT add padding to a frame if its parent already has padding >= 12px on that side (padding is inherited visually).
+- CRITICAL: Padding in Figma auto-layout is CUMULATIVE through the hierarchy. If frame A has padLR=16 and child B also has padLR=16, the text inside B is inset 32px from A's edge.
+- Check "cumulativePad" annotations \u2014 this shows total padding already provided by ALL ancestors. If cumulativePad LR >= 16, do NOT add more horizontal padding. If TB >= 24, do NOT add more vertical padding.
+- Only add horizontal padding to the OUTERMOST frame that needs it. Inner frames should have padLR=0 and use sizingH=FILL instead.
 - DO NOT change alignment unless you are CERTAIN it is wrong. Alignment values like SPACE_BETWEEN are usually intentional (e.g., for label+value rows, headers with actions).
 - Round fractional values to nearest multiple of 4 (14.5->16).
 - Negative spacing must become 0 or a small positive value.
