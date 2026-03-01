@@ -9608,7 +9608,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // Fix 6: Child wider than parent -> FILL (if in auto-layout parent)
-              if (!isVisualFrame && fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
+              // Allow this even for carousel/image frames — overflow must be fixed
+              if (fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
                 try {
                   if (fi.parentLayoutMode === "VERTICAL") {
                     (frame as any).layoutSizingHorizontal = "FILL";
@@ -9731,7 +9732,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // ── CHILD WIDER/TALLER THAN PARENT ──
-              if (f.parentWidth && f.width > f.parentWidth && !isCarousel) {
+              if (f.parentWidth && f.width > f.parentWidth) {
                 problems.push(`[ISSUE] frame width (${f.width}) exceeds parent width (${f.parentWidth}) -- overflowing. Set sizingH=FILL`);
               }
 
@@ -9957,9 +9958,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const changeDetails: string[] = [];
 
               // Safety guard: block sizing changes on image/carousel/separator frames
+              // Exception: allow sizing fix if the frame is overflowing its parent
               const fnLower = frame.name.toLowerCase();
               const isVisualGuard = /image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider/i.test(fnLower);
-              if (isVisualGuard) {
+              const parentFrame = node.parent && "width" in node.parent ? node.parent as FrameNode : null;
+              const isOverflowing = parentFrame && frame.width > parentFrame.width;
+              if (isVisualGuard && !isOverflowing) {
                 // Strip sizing changes — these frames should keep their original sizing
                 delete settings.sizingH;
                 delete settings.sizingV;

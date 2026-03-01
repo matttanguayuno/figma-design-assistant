@@ -7482,7 +7482,7 @@ Respond with ONLY a JSON array, no markdown:
                     localFixes.push(`pad ${oldPad}->[${bT},${bR},${bB},${bL}] (sibling match)`);
                   }
                 }
-                if (!isVisualFrame && fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
+                if (fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
                   try {
                     if (fi.parentLayoutMode === "VERTICAL") {
                       frame.layoutSizingHorizontal = "FILL";
@@ -7574,7 +7574,7 @@ Respond with ONLY a JSON array, no markdown:
                 if (f.itemSpacing > 48 && !isCarousel) {
                   problems.push(`[ISSUE] very large spacing (${f.itemSpacing}) -- consider reducing to 16-24px`);
                 }
-                if (f.parentWidth && f.width > f.parentWidth && !isCarousel) {
+                if (f.parentWidth && f.width > f.parentWidth) {
                   problems.push(`[ISSUE] frame width (${f.width}) exceeds parent width (${f.parentWidth}) -- overflowing. Set sizingH=FILL`);
                 }
                 const siblings = allFrames.filter((s) => s.parentId === f.parentId && s.id !== f.id);
@@ -7749,7 +7749,9 @@ Include ALL frames that need changes. Do NOT return only one frame.`;
                 const changeDetails = [];
                 const fnLower = frame.name.toLowerCase();
                 const isVisualGuard = /image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider/i.test(fnLower);
-                if (isVisualGuard) {
+                const parentFrame = node.parent && "width" in node.parent ? node.parent : null;
+                const isOverflowing = parentFrame && frame.width > parentFrame.width;
+                if (isVisualGuard && !isOverflowing) {
                   delete settings.sizingH;
                   delete settings.sizingV;
                 }
