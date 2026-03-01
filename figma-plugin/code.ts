@@ -9612,6 +9612,26 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       fixes.push(`sizingH->FILL (${childW}>${parentW} in ${parentLM})`);
                     } catch (_e) { /* ignore */ }
                   }
+
+                  // Fix G: Auto-layout parent with 0 right padding — last child touching edge
+                  // If parent is HORIZONTAL with 0 paddingRight and content reaches the edge, add padding
+                  if (parentLM === "HORIZONTAL" && parent.paddingRight < 4) {
+                    const lastIdx = parent.children.length - 1;
+                    if (lastIdx >= 0 && child === parent.children[lastIdx]) {
+                      // Check if parent right edge is flush against its own parent
+                      const grandparent = parent.parent;
+                      if (grandparent && "width" in grandparent) {
+                        const gpW = Math.round((grandparent as FrameNode).width);
+                        const parentRight = Math.round(parent.x + parent.width);
+                        if (parentRight >= gpW - 2 && parent.paddingRight < 8) {
+                          // Parent stretches to edge with no right padding — add it
+                          parent.paddingRight = 16;
+                          if (parent.paddingLeft < 8) parent.paddingLeft = 16;
+                          fixes.push(`paddingLR 0->16 (edge padding)`);
+                        }
+                      }
+                    }
+                  }
                 }
 
                 if (fixes.length > 0) {
@@ -9749,22 +9769,27 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
                   gaps.push({ index: i, gap });
                 }
-                if (gaps.length >= 2) {
-                  // Find median gap
-                  const sortedGaps = gaps.map(g => g.gap).sort((a, b) => a - b);
-                  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)];
-                  const maxAllowedGap = Math.max(medianGap * 2, 32);
+                if (gaps.length >= 1) {
+                  // Calculate target gap based on available data
+                  const positiveGaps = gaps.map(g => g.gap).filter(g => g > 0).sort((a, b) => a - b);
+                  const medianGap = positiveGaps.length >= 2
+                    ? positiveGaps[Math.floor(positiveGaps.length / 2)]
+                    : 16; // default target gap when only 1 gap exists
+                  const maxAllowedGap = Math.max(medianGap * 2.5, 40);
 
                   // Compact from top to bottom — shift everything below an excessive gap upward
                   let totalShift = 0;
                   for (let i = 0; i < gaps.length; i++) {
                     const gapInfo = gaps[i];
-                    if (gapInfo.gap > maxAllowedGap && gapInfo.gap > 40) {
-                      const reduction = gapInfo.gap - Math.max(medianGap, 16);
-                      totalShift += reduction;
-                      phase0Count++;
-                      phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
-                      console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                    if (gapInfo.gap > maxAllowedGap) {
+                      const targetGap = Math.max(medianGap, 16);
+                      const reduction = gapInfo.gap - targetGap;
+                      if (reduction > 8) { // only compact if meaningful
+                        totalShift += reduction;
+                        phase0Count++;
+                        phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                        console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                      }
                     }
                     if (totalShift > 0) {
                       sorted[gapInfo.index].node.y = sorted[gapInfo.index].y - totalShift;
@@ -10055,7 +10080,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 f.childSummary = childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` … +${childNames.length - 10} more` : "");
               }
 
-              return frames.map(f => {
+              return frames.filter(f => {
+                // Don't show NONE-layout frames to LLM — padding/spacing have no effect on them
+                if (f.layoutMode === "NONE") return false;
+                return true;
+              }).map(f => {
                 const problems: string[] = [];
                 const nameLower = f.name.toLowerCase();
                 const isImage = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
@@ -10256,6 +10285,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   if (s.sizingV) { console.log(`[${passLabel}] Skipping sizingV=${s.sizingV} on "${frame.name}" — parent NONE`); delete s.sizingV; }
                 }
 
+                // Safety guard: NONE-layout frames — padding, spacing, alignment have no effect
+                if (frame.layoutMode === "NONE" || !frame.layoutMode) {
+                  console.log(`[${passLabel}] Skipping "${frame.name}" — layoutMode=NONE (no effect)`);
+                  continue;
+                }
+
                 if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
                   const before = {
                     pT: frame.paddingTop, pR: frame.paddingRight,
@@ -10268,6 +10303,24 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     sizV: (frame as any).layoutSizingVertical || "FIXED",
                     clips: frame.clipsContent,
                   };
+
+                  // Anti-oscillation: if this frame was already modified, reject trivial padding tweaks
+                  const prevState = modifiedFrameStates.get(s.id);
+                  if (prevState && prevState.modCount >= 2) {
+                    // Frame has been modified 2+ times — only allow changes >6px or non-padding changes
+                    const hasBigPaddingDelta =
+                      (s.paddingTop !== undefined && Math.abs(s.paddingTop - before.pT) > 6) ||
+                      (s.paddingRight !== undefined && Math.abs(s.paddingRight - before.pR) > 6) ||
+                      (s.paddingBottom !== undefined && Math.abs(s.paddingBottom - before.pB) > 6) ||
+                      (s.paddingLeft !== undefined && Math.abs(s.paddingLeft - before.pL) > 6);
+                    const hasNonPaddingChange = s.itemSpacing !== undefined || s.sizingH !== undefined ||
+                      s.sizingV !== undefined || s.alignment !== undefined || s.counterAlignment !== undefined ||
+                      s.clipsContent !== undefined;
+                    if (!hasBigPaddingDelta && !hasNonPaddingChange) {
+                      console.log(`[${passLabel}] Skipping oscillating change on "${frame.name}" (modified ${prevState.modCount}x, delta ≤6px)`);
+                      continue;
+                    }
+                  }
 
                   if (s.paddingTop !== undefined) frame.paddingTop = s.paddingTop;
                   if (s.paddingRight !== undefined) frame.paddingRight = s.paddingRight;
@@ -10317,6 +10370,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     applied++;
                     changes.push(`"${frame.name}": ${realChanges.join(", ")}`);
                     console.log(`[${passLabel}] Updated "${frame.name}": ${realChanges.join(", ")}`);
+
+                    // Track modification count for anti-oscillation
+                    const prev = modifiedFrameStates.get(s.id);
+                    modifiedFrameStates.set(s.id, {
+                      pT: after.pT, pR: after.pR, pB: after.pB, pL: after.pL,
+                      iS: after.iS, modCount: (prev?.modCount ?? 0) + 1,
+                    });
                   }
 
                   if (isRoot) {
@@ -10394,6 +10454,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             let totalPostFix = 0;
             const allLLMChanges: string[] = [];
             const allPostFixChanges: string[] = [];
+
+            // ── Anti-oscillation: track which frames were modified and their last state ──
+            // Prevents verify passes from flip-flopping on padding by ±4px
+            const modifiedFrameStates = new Map<string, {
+              pT: number; pR: number; pB: number; pL: number;
+              iS: number; modCount: number;
+            }>();
 
             // ═══════════════════════════════════════════
             // PASS 1: VISUAL ANALYSIS — LLM examines screenshot, returns problem list

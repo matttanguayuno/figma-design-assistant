@@ -7428,6 +7428,21 @@ Respond with ONLY a JSON array, no markdown:
                       } catch (_e) {
                       }
                     }
+                    if (parentLM === "HORIZONTAL" && parent.paddingRight < 4) {
+                      const lastIdx = parent.children.length - 1;
+                      if (lastIdx >= 0 && child === parent.children[lastIdx]) {
+                        const grandparent = parent.parent;
+                        if (grandparent && "width" in grandparent) {
+                          const gpW = Math.round(grandparent.width);
+                          const parentRight = Math.round(parent.x + parent.width);
+                          if (parentRight >= gpW - 2 && parent.paddingRight < 8) {
+                            parent.paddingRight = 16;
+                            if (parent.paddingLeft < 8) parent.paddingLeft = 16;
+                            fixes.push(`paddingLR 0->16 (edge padding)`);
+                          }
+                        }
+                      }
+                    }
                   }
                   if (fixes.length > 0) {
                     phase0Count++;
@@ -7543,19 +7558,22 @@ Respond with ONLY a JSON array, no markdown:
                     const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
                     gaps.push({ index: i, gap });
                   }
-                  if (gaps.length >= 2) {
-                    const sortedGaps = gaps.map((g) => g.gap).sort((a, b) => a - b);
-                    const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)];
-                    const maxAllowedGap = Math.max(medianGap * 2, 32);
+                  if (gaps.length >= 1) {
+                    const positiveGaps = gaps.map((g) => g.gap).filter((g) => g > 0).sort((a, b) => a - b);
+                    const medianGap = positiveGaps.length >= 2 ? positiveGaps[Math.floor(positiveGaps.length / 2)] : 16;
+                    const maxAllowedGap = Math.max(medianGap * 2.5, 40);
                     let totalShift = 0;
                     for (let i = 0; i < gaps.length; i++) {
                       const gapInfo = gaps[i];
-                      if (gapInfo.gap > maxAllowedGap && gapInfo.gap > 40) {
-                        const reduction = gapInfo.gap - Math.max(medianGap, 16);
-                        totalShift += reduction;
-                        phase0Count++;
-                        phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
-                        console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                      if (gapInfo.gap > maxAllowedGap) {
+                        const targetGap = Math.max(medianGap, 16);
+                        const reduction = gapInfo.gap - targetGap;
+                        if (reduction > 8) {
+                          totalShift += reduction;
+                          phase0Count++;
+                          phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                          console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                        }
                       }
                       if (totalShift > 0) {
                         sorted[gapInfo.index].node.y = sorted[gapInfo.index].y - totalShift;
@@ -7598,7 +7616,10 @@ Respond with ONLY a JSON array, no markdown:
                   f.childCount = fr.children.length;
                   f.childSummary = childNames.slice(0, 10).join(", ") + (childNames.length > 10 ? ` \u2026 +${childNames.length - 10} more` : "");
                 }
-                return frames.map((f) => {
+                return frames.filter((f) => {
+                  if (f.layoutMode === "NONE") return false;
+                  return true;
+                }).map((f) => {
                   const problems = [];
                   const nameLower = f.name.toLowerCase();
                   const isImage = /image|photo|thumbnail|hero|banner|avatar|icon/i.test(nameLower);
@@ -7707,7 +7728,7 @@ Respond with ONLY a JSON array, no markdown:
                 }
                 return [];
               }, applyCleanupSettings2 = function(settings, frames, passLabel) {
-                var _a2, _b2, _c;
+                var _a2, _b2, _c, _d;
                 const frameDepthMap = /* @__PURE__ */ new Map();
                 for (const f of frames) frameDepthMap.set(f.id, f.depth);
                 const sorted = [...settings].sort(
@@ -7743,6 +7764,10 @@ Respond with ONLY a JSON array, no markdown:
                       delete s.sizingV;
                     }
                   }
+                  if (frame.layoutMode === "NONE" || !frame.layoutMode) {
+                    console.log(`[${passLabel}] Skipping "${frame.name}" \u2014 layoutMode=NONE (no effect)`);
+                    continue;
+                  }
                   if (frame.layoutMode === "HORIZONTAL" || frame.layoutMode === "VERTICAL") {
                     const before = {
                       pT: frame.paddingTop,
@@ -7757,6 +7782,15 @@ Respond with ONLY a JSON array, no markdown:
                       sizV: frame.layoutSizingVertical || "FIXED",
                       clips: frame.clipsContent
                     };
+                    const prevState = modifiedFrameStates.get(s.id);
+                    if (prevState && prevState.modCount >= 2) {
+                      const hasBigPaddingDelta = s.paddingTop !== void 0 && Math.abs(s.paddingTop - before.pT) > 6 || s.paddingRight !== void 0 && Math.abs(s.paddingRight - before.pR) > 6 || s.paddingBottom !== void 0 && Math.abs(s.paddingBottom - before.pB) > 6 || s.paddingLeft !== void 0 && Math.abs(s.paddingLeft - before.pL) > 6;
+                      const hasNonPaddingChange = s.itemSpacing !== void 0 || s.sizingH !== void 0 || s.sizingV !== void 0 || s.alignment !== void 0 || s.counterAlignment !== void 0 || s.clipsContent !== void 0;
+                      if (!hasBigPaddingDelta && !hasNonPaddingChange) {
+                        console.log(`[${passLabel}] Skipping oscillating change on "${frame.name}" (modified ${prevState.modCount}x, delta \u22646px)`);
+                        continue;
+                      }
+                    }
                     if (s.paddingTop !== void 0) frame.paddingTop = s.paddingTop;
                     if (s.paddingRight !== void 0) frame.paddingRight = s.paddingRight;
                     if (s.paddingBottom !== void 0) frame.paddingBottom = s.paddingBottom;
@@ -7810,6 +7844,15 @@ Respond with ONLY a JSON array, no markdown:
                       applied++;
                       changes.push(`"${frame.name}": ${realChanges.join(", ")}`);
                       console.log(`[${passLabel}] Updated "${frame.name}": ${realChanges.join(", ")}`);
+                      const prev = modifiedFrameStates.get(s.id);
+                      modifiedFrameStates.set(s.id, {
+                        pT: after.pT,
+                        pR: after.pR,
+                        pB: after.pB,
+                        pL: after.pL,
+                        iS: after.iS,
+                        modCount: ((_d = prev == null ? void 0 : prev.modCount) != null ? _d : 0) + 1
+                      });
                     }
                     if (isRoot) {
                       frame.counterAxisSizingMode = "FIXED";
@@ -8214,6 +8257,7 @@ Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, item
               let totalPostFix = 0;
               const allLLMChanges = [];
               const allPostFixChanges = [];
+              const modifiedFrameStates = /* @__PURE__ */ new Map();
               sendToUI({ type: "status", message: `Cleanup pass 1/${MAX_CLEANUP_PASSES}: analyzing layout...` });
               figma.notify(`Cleanup pass 1/${MAX_CLEANUP_PASSES}: analyzing layout...`, { timeout: 3e3 });
               let screenshotBase64 = await captureScreenshot();
