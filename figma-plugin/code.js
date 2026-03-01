@@ -7631,39 +7631,42 @@ Respond with ONLY a JSON array, no markdown:
               } catch (e) {
                 console.warn(`[Cleanup] Screenshot export failed: ${e.message}`);
               }
-              const cleanupPrompt = `The user said: "${intentText}"
-They want to clean up / tidy a Figma design. Fix ALL layout problems to make it look polished and professional.
+              const cleanupPrompt = (screenshotBase64 ? `STEP 1 \u2014 VISUAL ANALYSIS (screenshot attached):
+Study the screenshot carefully. You are a senior UI designer reviewing this layout. List every visual problem you can see:
+- Text that is cropped, clipped, cut off, or overlapping
+- Buttons or sections that are way too tall, too wide, or have excessive whitespace inside them
+- Elements that overflow or extend beyond their container
+- Inconsistent spacing: similar items (cards, list rows, buttons) with different gaps between them
+- Inconsistent padding: similar items with different internal spacing
+- Misaligned elements that should line up
+- Missing padding: text jammed against edges with no breathing room
+The screenshot is the TRUTH. Trust what you see over the data.
 
-` + (screenshotBase64 ? `A SCREENSHOT of the frame is attached. LOOK AT IT CAREFULLY:
-- Identify text that is clipped, cut off, or overflowing (this means the parent frame needs sizingH=FILL instead of FIXED)
-- Identify oversized buttons or sections with way too much padding
-- Identify inconsistent spacing between similar items (cards, reviews, rows)
-- Identify items that look misaligned
-The screenshot is the TRUTH -- if something looks wrong visually, fix it.
+` : "") + `STEP 2 \u2014 MAP PROBLEMS TO FRAMES:
+${rootContext}
 
-` : "") + `${rootContext}
+Below are the auto-layout frames you can modify. Match each visual problem from Step 1 to the correct frame ID.
+Frames marked with ** have programmatically-detected issues that confirm what you see.
 
-Here are the auto-layout frames with their CURRENT layout properties.
-Frames marked with ** have detected problems that MUST be fixed:
 ${frameDescriptions}
 
-CRITICAL RULES:
-1. SIZING IS THE #1 FIX: Child frames inside auto-layout parents should almost always use sizingH="FILL" (not "FIXED"). FIXED width children inside VERTICAL parents cause text to overflow and get cropped. Change them to FILL.
-2. SIBLING CONSISTENCY: Frames with the SAME NAME under the SAME PARENT must have IDENTICAL padding, spacing, alignment, and sizing.
-3. DO NOT add padding to image/photo/carousel/separator/divider/icon frames. They should stay at 0 padding.
-4. FIX EXCESSIVE PADDING: Buttons should have ~12-16px vertical padding and ~16-24px horizontal. Sections should have ~16-24px padding. Anything larger is excessive and must be reduced.
-5. FIX FRACTIONAL VALUES: Round to nearest multiple of 4 (14.5->16, 10.5->12).
-6. FIX NEGATIVE SPACING: Change to 0 or a small positive value (4, 8, 12, 16).
-7. MAKE PADDING SYMMETRIC: left should equal right, top should equal bottom.
-8. NEVER change or set "layoutMode".
+STEP 3 \u2014 FIX EVERY PROBLEM:
+Apply fixes using these Figma layout rules:
+- sizingH="FILL" makes a child stretch to its parent width. ONLY works when the parent has layoutMode=VERTICAL or HORIZONTAL (not NONE).
+- sizingH="FILL" does NOT work if parentLayout=NONE. Skip sizing changes for those frames.
+- sizingV="HUG" makes a frame shrink-wrap its content vertically. Use this to fix oversized buttons/cards.
+- Buttons should have ~12-16px vertical padding, ~16-24px horizontal. Anything over 20px vertical is excessive.
+- Cards and content sections should have ~12-20px padding on all sides.
+- Padding should be symmetric: paddingLeft = paddingRight, paddingTop = paddingBottom.
+- Sibling frames with the SAME NAME must have IDENTICAL padding, spacing, and sizing.
+- DO NOT add padding to image/photo/carousel/separator/divider frames.
+- Round fractional values to nearest multiple of 4 (14.5->16).
+- Negative spacing must become 0 or a small positive value.
+- NEVER change "layoutMode".
 
-YOU MUST FIX EVERY FRAME that has ** markers. Also fix any OTHER frame that looks wrong in the screenshot, even if not flagged.
-There are ${allFrames.length} frames total. Return fixes for as many as needed -- typically 8-15 frames need changes.
-Be AGGRESSIVE -- fix everything that has an issue. Do not leave problems unfixed.
-
-Respond with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}
-Properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).
-Include ALL frames that need changes. Do NOT return only one frame.`;
+Respond ONLY with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}
+Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).
+Fix EVERY visual problem. Return ALL frames that need changes \u2014 typically most frames need at least one fix.`;
               const cleanupPayload = {
                 intent: cleanupPrompt,
                 selection: { nodes: [] },
