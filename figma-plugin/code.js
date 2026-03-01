@@ -7428,21 +7428,6 @@ Respond with ONLY a JSON array, no markdown:
                       } catch (_e) {
                       }
                     }
-                    if (parentLM === "HORIZONTAL" && parent.paddingRight < 4) {
-                      const lastIdx = parent.children.length - 1;
-                      if (lastIdx >= 0 && child === parent.children[lastIdx]) {
-                        const grandparent = parent.parent;
-                        if (grandparent && "width" in grandparent) {
-                          const gpW = Math.round(grandparent.width);
-                          const parentRight = Math.round(parent.x + parent.width);
-                          if (parentRight >= gpW - 2 && parent.paddingRight < 8) {
-                            parent.paddingRight = 16;
-                            if (parent.paddingLeft < 8) parent.paddingLeft = 16;
-                            fixes.push(`paddingLR 0->16 (edge padding)`);
-                          }
-                        }
-                      }
-                    }
                   }
                   if (fixes.length > 0) {
                     phase0Count++;
@@ -7705,6 +7690,20 @@ Respond with ONLY a JSON array, no markdown:
                     }
                   }
                   let desc = `- id="${f.id}" name="${f.name}" depth=${f.depth}` + (f.parentName ? ` parent="${f.parentName}"` : "") + (f.parentLayoutMode ? ` parentLayout=${f.parentLayoutMode}` : "") + (f.parentWidth ? ` parentWidth=${f.parentWidth}` : "") + ` size=${f.width}x${f.height} layout=${f.layoutMode} padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}] spacing=${f.itemSpacing} align=${f.primaryAxisAlign}/${f.counterAxisAlign} sizing=${f.sizingH}/${f.sizingV} clips=${f.clipsContent} children(${f.childCount}): [${f.childSummary}]`;
+                  const node = figma.getNodeById(f.id);
+                  if (node) {
+                    let walk = node.parent;
+                    for (let d = 0; d < 2 && walk; d++) {
+                      if (walk.type === "FRAME") {
+                        const wf = walk;
+                        if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") && (wf.paddingLeft >= 8 || wf.paddingRight >= 8 || wf.paddingTop >= 8 || wf.paddingBottom >= 8)) {
+                          desc += ` ancestorPad="${wf.name}":[${wf.paddingTop},${wf.paddingRight},${wf.paddingBottom},${wf.paddingLeft}]`;
+                          break;
+                        }
+                      }
+                      walk = walk.parent;
+                    }
+                  }
                   if (problems.length > 0) {
                     desc += `
   ** ${problems.join("\n  ** ")}`;
@@ -7798,7 +7797,11 @@ Respond with ONLY a JSON array, no markdown:
                     if (s.itemSpacing !== void 0) frame.itemSpacing = s.itemSpacing;
                     if (s.counterAxisSpacing !== void 0) frame.counterAxisSpacing = s.counterAxisSpacing;
                     if (s.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(s.alignment)) {
-                      frame.primaryAxisAlignItems = s.alignment;
+                      if (before.align === "MIN" || frame.children.length <= 2) {
+                        frame.primaryAxisAlignItems = s.alignment;
+                      } else {
+                        console.log(`[${passLabel}] Protecting alignment on "${frame.name}" (${before.align} \u2192 ${s.alignment} blocked \u2014 non-MIN with ${frame.children.length} children)`);
+                      }
                     }
                     if (s.counterAlignment && ["MIN", "CENTER", "MAX"].includes(s.counterAlignment)) {
                       frame.counterAxisAlignItems = s.counterAlignment;
@@ -8017,14 +8020,29 @@ Respond with ONLY a JSON array, no markdown:
                   }
                 }
                 if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80) {
-                  if (fi.paddingLeft === 0 && fi.paddingRight === 0) {
+                  let ancestorHasPadLR = false;
+                  let ancestorHasPadTB = false;
+                  let walkNode = node.parent;
+                  for (let walkDepth = 0; walkDepth < 3 && walkNode; walkDepth++) {
+                    if (walkNode.type === "FRAME") {
+                      const wf = walkNode;
+                      if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") && wf.paddingLeft >= 12 && wf.paddingRight >= 12) {
+                        ancestorHasPadLR = true;
+                      }
+                      if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") && wf.paddingTop >= 12 && wf.paddingBottom >= 12) {
+                        ancestorHasPadTB = true;
+                      }
+                    }
+                    walkNode = walkNode.parent;
+                  }
+                  if (fi.paddingLeft === 0 && fi.paddingRight === 0 && !ancestorHasPadLR) {
                     frame.paddingLeft = 16;
                     fi.paddingLeft = 16;
                     frame.paddingRight = 16;
                     fi.paddingRight = 16;
                     localFixes.push("padLR 0->16 (text flush)");
                   }
-                  if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1) {
+                  if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1 && !ancestorHasPadTB) {
                     frame.paddingTop = 12;
                     fi.paddingTop = 12;
                     frame.paddingBottom = 12;
@@ -8247,12 +8265,14 @@ Respond with ONLY a JSON array, no markdown:
 - Padding should be symmetric: paddingLeft = paddingRight, paddingTop = paddingBottom.
 - Sibling frames with the SAME NAME must have IDENTICAL padding, spacing, and sizing.
 - DO NOT add padding to image/photo/carousel/separator/divider frames.
+- DO NOT add padding to a frame if its parent already has padding >= 12px on that side (padding is inherited visually).
+- DO NOT change alignment unless you are CERTAIN it is wrong. Alignment values like SPACE_BETWEEN are usually intentional (e.g., for label+value rows, headers with actions).
 - Round fractional values to nearest multiple of 4 (14.5->16).
 - Negative spacing must become 0 or a small positive value.
 - NEVER change "layoutMode".
 
 Respond ONLY with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}
-Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).`;
+Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).`;
               let totalLLMApplied = 0;
               let totalPostFix = 0;
               const allLLMChanges = [];

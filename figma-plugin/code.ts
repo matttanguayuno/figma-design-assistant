@@ -9612,26 +9612,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       fixes.push(`sizingH->FILL (${childW}>${parentW} in ${parentLM})`);
                     } catch (_e) { /* ignore */ }
                   }
-
-                  // Fix G: Auto-layout parent with 0 right padding — last child touching edge
-                  // If parent is HORIZONTAL with 0 paddingRight and content reaches the edge, add padding
-                  if (parentLM === "HORIZONTAL" && parent.paddingRight < 4) {
-                    const lastIdx = parent.children.length - 1;
-                    if (lastIdx >= 0 && child === parent.children[lastIdx]) {
-                      // Check if parent right edge is flush against its own parent
-                      const grandparent = parent.parent;
-                      if (grandparent && "width" in grandparent) {
-                        const gpW = Math.round((grandparent as FrameNode).width);
-                        const parentRight = Math.round(parent.x + parent.width);
-                        if (parentRight >= gpW - 2 && parent.paddingRight < 8) {
-                          // Parent stretches to edge with no right padding — add it
-                          parent.paddingRight = 16;
-                          if (parent.paddingLeft < 8) parent.paddingLeft = 16;
-                          fixes.push(`paddingLR 0->16 (edge padding)`);
-                        }
-                      }
-                    }
-                  }
                 }
 
                 if (fixes.length > 0) {
@@ -9880,13 +9860,32 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // Fix 5: Text content flush against edges — add 16px padding
+              // BUT: first check if any ancestor already provides padding on that side.
+              // If parent/grandparent has >=12px horizontal padding, child doesn't need its own.
               if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80) {
-                if (fi.paddingLeft === 0 && fi.paddingRight === 0) {
+                let ancestorHasPadLR = false;
+                let ancestorHasPadTB = false;
+                let walkNode: BaseNode | null = node.parent;
+                for (let walkDepth = 0; walkDepth < 3 && walkNode; walkDepth++) {
+                  if (walkNode.type === "FRAME") {
+                    const wf = walkNode as FrameNode;
+                    if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") &&
+                        wf.paddingLeft >= 12 && wf.paddingRight >= 12) {
+                      ancestorHasPadLR = true;
+                    }
+                    if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") &&
+                        wf.paddingTop >= 12 && wf.paddingBottom >= 12) {
+                      ancestorHasPadTB = true;
+                    }
+                  }
+                  walkNode = walkNode.parent;
+                }
+                if (fi.paddingLeft === 0 && fi.paddingRight === 0 && !ancestorHasPadLR) {
                   frame.paddingLeft = 16; fi.paddingLeft = 16;
                   frame.paddingRight = 16; fi.paddingRight = 16;
                   localFixes.push("padLR 0->16 (text flush)");
                 }
-                if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1) {
+                if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1 && !ancestorHasPadTB) {
                   frame.paddingTop = 12; fi.paddingTop = 12;
                   frame.paddingBottom = 12; fi.paddingBottom = 12;
                   localFixes.push("padTB 0->12 (text flush)");
@@ -10188,6 +10187,24 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   ` sizing=${f.sizingH}/${f.sizingV}` +
                   ` clips=${f.clipsContent}` +
                   ` children(${f.childCount}): [${f.childSummary}]`;
+
+                // Add ancestor padding context — helps LLM avoid adding redundant padding
+                const node = figma.getNodeById(f.id) as SceneNode | null;
+                if (node) {
+                  let walk: BaseNode | null = node.parent;
+                  for (let d = 0; d < 2 && walk; d++) {
+                    if (walk.type === "FRAME") {
+                      const wf = walk as FrameNode;
+                      if ((wf.layoutMode === "HORIZONTAL" || wf.layoutMode === "VERTICAL") &&
+                          (wf.paddingLeft >= 8 || wf.paddingRight >= 8 || wf.paddingTop >= 8 || wf.paddingBottom >= 8)) {
+                        desc += ` ancestorPad="${wf.name}":[${wf.paddingTop},${wf.paddingRight},${wf.paddingBottom},${wf.paddingLeft}]`;
+                        break; // Only show nearest ancestor with padding
+                      }
+                    }
+                    walk = walk.parent;
+                  }
+                }
+
                 if (problems.length > 0) {
                   desc += `\n  ** ${problems.join("\n  ** ")}`;
                 }
@@ -10329,7 +10346,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   if (s.itemSpacing !== undefined) frame.itemSpacing = s.itemSpacing;
                   if (s.counterAxisSpacing !== undefined) (frame as any).counterAxisSpacing = s.counterAxisSpacing;
                   if (s.alignment && ["MIN", "CENTER", "MAX", "SPACE_BETWEEN"].includes(s.alignment)) {
-                    frame.primaryAxisAlignItems = s.alignment as any;
+                    // Safety: Only change alignment if frame has <=2 children or was already MIN
+                    // Alignment is almost always intentional (e.g. SPACE_BETWEEN for label+value rows)
+                    if (before.align === "MIN" || frame.children.length <= 2) {
+                      frame.primaryAxisAlignItems = s.alignment as any;
+                    } else {
+                      console.log(`[${passLabel}] Protecting alignment on "${frame.name}" (${before.align} → ${s.alignment} blocked — non-MIN with ${frame.children.length} children)`);
+                    }
                   }
                   if (s.counterAlignment && ["MIN", "CENTER", "MAX"].includes(s.counterAlignment)) {
                     frame.counterAxisAlignItems = s.counterAlignment as any;
@@ -10441,12 +10464,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               `- Padding should be symmetric: paddingLeft = paddingRight, paddingTop = paddingBottom.\n` +
               `- Sibling frames with the SAME NAME must have IDENTICAL padding, spacing, and sizing.\n` +
               `- DO NOT add padding to image/photo/carousel/separator/divider frames.\n` +
+              `- DO NOT add padding to a frame if its parent already has padding >= 12px on that side (padding is inherited visually).\n` +
+              `- DO NOT change alignment unless you are CERTAIN it is wrong. Alignment values like SPACE_BETWEEN are usually intentional (e.g., for label+value rows, headers with actions).\n` +
               `- Round fractional values to nearest multiple of 4 (14.5->16).\n` +
               `- Negative spacing must become 0 or a small positive value.\n` +
               `- NEVER change "layoutMode".\n\n` +
               `Respond ONLY with JSON: {"frames": [{"id": "<frame id>", ...properties to change...}, ...]}\n` +
               `Available properties: paddingTop, paddingRight, paddingBottom, paddingLeft, itemSpacing, counterAxisSpacing, ` +
-              `alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX"), ` +
               `sizingH ("FILL"|"HUG"|"FIXED"), sizingV ("FILL"|"HUG"|"FIXED"), clipsContent (boolean).`;
 
             // ── Cumulative tracking across all passes ──
