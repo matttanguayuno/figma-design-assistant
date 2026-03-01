@@ -284,7 +284,7 @@ export async function callLLMAnalyze(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 4096, apiKey, abort);
+    raw = await callProvider(provider, systemPrompt, prompt, resolvedModel, 8192, apiKey, abort);
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }

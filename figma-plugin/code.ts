@@ -9505,6 +9505,15 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               collectCleanupFrames(node, allFrames, 0);
             }
 
+            // Collect root frame context even if it has NONE layout
+            let rootContext = "";
+            for (const node of [...selection]) {
+              if (node.type === "FRAME") {
+                const rf = node as FrameNode;
+                rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}×${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
+              }
+            }
+
             if (allFrames.length === 0) {
               figma.notify("No frames found. Select a frame to clean up.", { timeout: 3000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No frames to clean up." } as any);
@@ -9514,41 +9523,75 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             sendToUI({ type: "status", message: `Analyzing ${allFrames.length} frame${allFrames.length > 1 ? "s" : ""} for cleanup…` });
 
             // ── Build a rich description of current layout state ──
-            const frameDescriptions = allFrames.map(f =>
-              `• id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}×${f.height}` +
-              ` layout=${f.layoutMode}` +
-              ` padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]` +
-              ` spacing=${f.itemSpacing} counterSpacing=${f.counterAxisSpacing}` +
-              ` align=${f.primaryAxisAlign}/${f.counterAxisAlign}` +
-              ` sizing=${f.sizingH}/${f.sizingV}` +
-              ` children(${f.childCount}): [${f.childSummary}]`
-            ).join("\n");
+            // Flag obvious problems inline to help the LLM
+            const frameDescriptions = allFrames.map(f => {
+              const problems: string[] = [];
+              // Content frames with 0 horizontal padding = text/elements flush against edges
+              if (f.paddingLeft === 0 && f.paddingRight === 0 && f.childCount > 0 && f.width > 100) {
+                problems.push("[ISSUE] NO horizontal padding - content flush against edges");
+              }
+              if (f.paddingTop === 0 && f.paddingBottom === 0 && f.childCount > 1) {
+                problems.push("[ISSUE] NO vertical padding");
+              }
+              // Asymmetric padding (left!=right or top!=bottom)
+              if (f.paddingLeft !== f.paddingRight && f.paddingLeft > 0 && f.paddingRight > 0) {
+                problems.push(`[ISSUE] asymmetric LR padding (${f.paddingLeft} vs ${f.paddingRight})`);
+              }
+              if (f.paddingTop !== f.paddingBottom && f.paddingTop > 0 && f.paddingBottom > 0) {
+                problems.push(`[ISSUE] asymmetric TB padding (${f.paddingTop} vs ${f.paddingBottom})`);
+              }
+              // Fractional values
+              if ([f.paddingTop, f.paddingRight, f.paddingBottom, f.paddingLeft, f.itemSpacing].some(v => v % 1 !== 0)) {
+                problems.push("[ISSUE] fractional values (should be whole numbers)");
+              }
+              // Negative spacing
+              if (f.itemSpacing < 0) {
+                problems.push(`[ISSUE] NEGATIVE spacing (${f.itemSpacing})`);
+              }
+              // Very large spacing
+              if (f.itemSpacing > 48) {
+                problems.push(`[ISSUE] unusually large spacing (${f.itemSpacing})`);
+              }
+
+              let desc =
+                `• id="${f.id}" name="${f.name}" depth=${f.depth} size=${f.width}×${f.height}` +
+                ` layout=${f.layoutMode}` +
+                ` padding=[${f.paddingTop},${f.paddingRight},${f.paddingBottom},${f.paddingLeft}]` +
+                ` spacing=${f.itemSpacing}` +
+                ` align=${f.primaryAxisAlign}/${f.counterAxisAlign}` +
+                ` sizing=${f.sizingH}/${f.sizingV}` +
+                ` children(${f.childCount}): [${f.childSummary}]`;
+              if (problems.length > 0) {
+                desc += `\n  ISSUES: ${problems.join("; ")}`;
+              }
+              return desc;
+            }).join("\n");
 
             const cleanupPrompt =
               `The user said: "${intentText}"\n` +
-              `They want to clean up / tidy a Figma frame and make its layout properties consistent.\n\n` +
-              `Here are the auto-layout frames in the hierarchy with their CURRENT layout properties:\n${frameDescriptions}\n\n` +
-              `Your task: analyze the current padding, spacing, and alignment values and make them CONSISTENT.\n` +
-              `Return cleanup suggestions for EVERY frame that has inconsistent or messy values.\n\n` +
-              `Rules:\n` +
-              `- Look for inconsistencies: e.g., padding [16,24,16,8] should probably be [16,16,16,16] or [16,24,16,24].\n` +
-              `- Sibling frames at the same depth should generally share the same padding and spacing values.\n` +
-              `- Use common UI spacing scales: 0, 4, 8, 12, 16, 20, 24, 32, 40, 48.\n` +
-              `- Root frame (depth=0): typically needs more padding (16-32px) and spacing (16-24px).\n` +
-              `- Inner frames (depth>0): typically less padding (0-16px) with appropriate spacing.\n` +
-              `- NEVER change or set "layoutMode". Do NOT include layoutMode in your response. Only adjust padding, spacing, and alignment.\n` +
-              `- PRESERVE existing layout direction — do not reorganize or reorder content.\n` +
-              `- PRESERVE content — only adjust layout properties, never suggest content changes.\n` +
-              `- Be thorough — include ALL frames that need fixes, not just one.\n\n` +
-              `CRITICAL: You MUST respond with a JSON ARRAY (wrapped in [ ]), even if there is only one frame to fix.\n` +
-              `Do NOT return a single object. Always return an array of objects.\n\n` +
-              `Response format — a JSON array, no markdown, no prose:\n` +
-              `[\n` +
-              `  {"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N},\n` +
-              `  {"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N, "alignment": "CENTER"}\n` +
-              `]\n` +
-              `Optional fields per object: counterAxisSpacing (number), alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").\n` +
-              `Do NOT include "layoutMode" in your response.`;
+              `They want to clean up / tidy a Figma design and make its layout properties consistent and professional.\n\n` +
+              `${rootContext}\n\n` +
+              `Here are the auto-layout frames inside it with their CURRENT layout properties.\n` +
+              `Frames marked with [ISSUE] have detected problems that MUST be fixed:\n${frameDescriptions}\n\n` +
+              `ANALYZE THOROUGHLY before responding. For each frame, consider:\n` +
+              `1. Does it have appropriate horizontal padding? Content frames (with text, buttons, cards) should have 16-24px horizontal padding so content isn't flush against edges.\n` +
+              `2. Does it have appropriate vertical padding? Sections should have 16-24px vertical padding for breathing room.\n` +
+              `3. Is spacing between items reasonable? Negative spacing is almost always wrong. Common values: 4, 8, 12, 16, 20, 24.\n` +
+              `4. Are fractional values present? Round 14.5 to 16, 10.5 to 12, etc.\n` +
+              `5. Are sibling frames (same depth) consistent with each other?\n` +
+              `6. Is the padding symmetric where it should be? Left should typically equal right; top should typically equal bottom.\n\n` +
+              `Common problems to fix:\n` +
+              `- padding=[0,0,0,0] on content frames -> should be [16,16,16,16] or [12,16,12,16]\n` +
+              `- Asymmetric padding like [0,0,20,0] -> should be [16,0,16,0] or [20,0,20,0]\n` +
+              `- Negative spacing like -43 -> should be 0 or 8\n` +
+              `- Fractional values like 14.5 -> round to 16\n` +
+              `- Inconsistent padding across sibling frames\n` +
+              `- Very small padding (1-3px) on content frames -> increase to at least 8\n\n` +
+              `NEVER change or set "layoutMode". Do NOT include layoutMode in your response.\n` +
+              `PRESERVE content and layout direction.\n\n` +
+              `Respond with ONLY a JSON array. Every frame with [ISSUE] markers MUST be included. Include any other frames that need fixes too.\n` +
+              `[{"id": "<frame id>", "paddingTop": N, "paddingRight": N, "paddingBottom": N, "paddingLeft": N, "itemSpacing": N}]\n` +
+              `Optional: counterAxisSpacing, alignment ("MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN"), counterAlignment ("MIN"|"CENTER"|"MAX").`;
 
             const cleanupPayload = {
               intent: cleanupPrompt,
