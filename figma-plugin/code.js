@@ -7472,7 +7472,7 @@ Respond with ONLY a JSON array, no markdown:
                 const parent = node;
                 const parentW = Math.round(parent.width);
                 const parentLM = parent.layoutMode || "NONE";
-                if (parentLM === "NONE" && parent.children.length >= 2) {
+                if (parentLM === "NONE" && parent.children.length >= 2 && parentW >= 48 && Math.round(parent.height) >= 48) {
                   const childInfos = [];
                   for (const child of parent.children) {
                     const cn = child.name || "(unnamed)";
@@ -7567,58 +7567,6 @@ Respond with ONLY a JSON array, no markdown:
                       console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${oldX}->0 (full-width align)`);
                     }
                   }
-                  const sorted = [...childInfos].sort((a, b) => a.y - b.y);
-                  if (sorted.length >= 2) {
-                    const rawGaps = [];
-                    for (let i = 1; i < sorted.length; i++) {
-                      const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
-                      rawGaps.push(gap);
-                    }
-                    const reasonableGaps = rawGaps.filter((g) => g >= 0 && g <= 40).sort((a, b) => a - b);
-                    let targetGap;
-                    if (reasonableGaps.length >= 2) {
-                      targetGap = reasonableGaps[Math.floor(reasonableGaps.length / 2)];
-                    } else if (reasonableGaps.length === 1) {
-                      targetGap = reasonableGaps[0];
-                    } else {
-                      targetGap = 8;
-                    }
-                    targetGap = Math.max(0, Math.min(targetGap, 24));
-                    const hasExcessiveGap = rawGaps.some((g) => g > targetGap * 2.5 || g > 40);
-                    const hasNegativeGap = rawGaps.some((g) => g < -2);
-                    const hasInconsistentGaps = rawGaps.length >= 2 && Math.max(...rawGaps) - Math.min(...rawGaps) > 30;
-                    if (hasExcessiveGap || hasNegativeGap || hasInconsistentGaps) {
-                      let currentY = sorted[0].y;
-                      for (let i = 1; i < sorted.length; i++) {
-                        const prevBottom = currentY + sorted[i - 1].h;
-                        const idealY = prevBottom + targetGap;
-                        const actualY = sorted[i].y;
-                        const delta = Math.abs(actualY - idealY);
-                        if (delta > 4) {
-                          sorted[i].node.y = idealY;
-                          phase0Count++;
-                          phase0Changes.push(`"${sorted[i].name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
-                          console.log(`[Cleanup Phase0b] "${sorted[i].name}" in "${parent.name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
-                          sorted[i].y = idealY;
-                        }
-                        currentY = sorted[i].y;
-                      }
-                      const lastChild = sorted[sorted.length - 1];
-                      const contentBottom = lastChild.y + lastChild.h;
-                      const bottomPad = Math.max(targetGap, 8);
-                      const idealHeight = contentBottom + bottomPad;
-                      if (Math.abs(parent.height - idealHeight) > 10) {
-                        const oldH = Math.round(parent.height);
-                        try {
-                          parent.resize(parentW, idealHeight);
-                          phase0Count++;
-                          phase0Changes.push(`"${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
-                          console.log(`[Cleanup Phase0b] "${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
-                        } catch (_e) {
-                        }
-                      }
-                    }
-                  }
                 }
                 for (const child of parent.children) {
                   if (child.type === "FRAME") {
@@ -7628,6 +7576,98 @@ Respond with ONLY a JSON array, no markdown:
                       if (gc.type === "FRAME") enforceNoneLayoutConsistency2(gc, depth + 1);
                     }
                   }
+                }
+              }, convertNoneToAutoLayout2 = function(node, depth) {
+                if (node.type !== "FRAME") return;
+                if (depth > MAX_CU_DEPTH) return;
+                const frame = node;
+                for (const child of [...frame.children]) {
+                  if (child.type === "FRAME") {
+                    convertNoneToAutoLayout2(child, depth + 1);
+                  } else if (child.type === "GROUP") {
+                    for (const gc of child.children) {
+                      if (gc.type === "FRAME") convertNoneToAutoLayout2(gc, depth + 1);
+                    }
+                  }
+                }
+                const lm = frame.layoutMode || "NONE";
+                if (lm !== "NONE") return;
+                const fw = Math.round(frame.width);
+                const fh = Math.round(frame.height);
+                if (fw < 80 || fh < 80) return;
+                const kids = [...frame.children];
+                if (kids.length < 2) return;
+                const childInfos = kids.map((c) => ({
+                  node: c,
+                  name: c.name || "(unnamed)",
+                  x: Math.round(c.x),
+                  y: Math.round(c.y),
+                  w: Math.round(c.width),
+                  h: Math.round(c.height)
+                }));
+                const sortedByY = [...childInfos].sort((a, b) => a.y - b.y);
+                let isVertical = true;
+                for (let i = 1; i < sortedByY.length; i++) {
+                  const prev = sortedByY[i - 1];
+                  const curr = sortedByY[i];
+                  const overlapY = prev.y + prev.h - curr.y;
+                  const threshold = Math.max(Math.min(prev.h, curr.h) * 0.3, 4);
+                  if (overlapY > threshold) {
+                    isVertical = false;
+                    break;
+                  }
+                }
+                if (!isVertical) return;
+                const xPositions = childInfos.map((c) => c.x);
+                const xRange = Math.max(...xPositions) - Math.min(...xPositions);
+                if (xRange > fw * 0.4) return;
+                const firstChild = sortedByY[0];
+                const lastChild = sortedByY[sortedByY.length - 1];
+                const padTop = Math.max(0, Math.round(firstChild.y));
+                const padBottom = Math.max(0, fh - Math.round(lastChild.y + lastChild.h));
+                const minX = Math.min(...childInfos.map((c) => c.x));
+                const maxRight = Math.max(...childInfos.map((c) => c.x + c.w));
+                const padLeft = Math.max(0, Math.round(minX));
+                const padRight = Math.max(0, fw - Math.round(maxRight));
+                const gaps = [];
+                for (let i = 1; i < sortedByY.length; i++) {
+                  const gap = sortedByY[i].y - (sortedByY[i - 1].y + sortedByY[i - 1].h);
+                  gaps.push(Math.max(0, Math.round(gap)));
+                }
+                const sortedGaps = [...gaps].sort((a, b) => a - b);
+                const medianGap = sortedGaps.length > 0 ? sortedGaps[Math.floor(sortedGaps.length / 2)] : 8;
+                const itemSpacing = Math.min(Math.max(medianGap, 0), 32);
+                for (let i = 0; i < sortedByY.length; i++) {
+                  try {
+                    frame.insertChild(i, sortedByY[i].node);
+                  } catch (_e) {
+                  }
+                }
+                try {
+                  frame.layoutMode = "VERTICAL";
+                  frame.paddingTop = padTop;
+                  frame.paddingBottom = Math.min(padBottom, 32);
+                  frame.paddingLeft = padLeft;
+                  frame.paddingRight = padRight;
+                  frame.itemSpacing = itemSpacing;
+                  frame.primaryAxisSizingMode = "AUTO";
+                  frame.counterAxisSizingMode = "FIXED";
+                  frame.counterAxisAlignItems = "MIN";
+                  const contentWidth = fw - padLeft - padRight;
+                  for (const ci of sortedByY) {
+                    try {
+                      const c = ci.node;
+                      if (ci.w >= contentWidth * 0.85) {
+                        c.layoutSizingHorizontal = "FILL";
+                      }
+                    } catch (_e) {
+                    }
+                  }
+                  phase0cCount++;
+                  phase0Changes.push(`"${frame.name}": NONE\u2192VERTICAL (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                  console.log(`[Cleanup Phase0c] "${frame.name}": NONE\u2192VERTICAL auto-layout (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                } catch (e) {
+                  console.log(`[Cleanup Phase0c] Failed to convert "${frame.name}": ${e}`);
                 }
               }, buildFrameDescriptions2 = function(frames) {
                 var _a2, _b2, _c, _d, _e, _f, _g;
@@ -8066,19 +8106,8 @@ Respond with ONLY a JSON array, no markdown:
                 if (!history || history.size < 2) return false;
                 return history.has(newVal);
               };
-              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2, recordFrameValues = recordFrameValues2, isOscillating = isOscillating2;
+              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2, enforceNoneLayoutConsistency = enforceNoneLayoutConsistency2, convertNoneToAutoLayout = convertNoneToAutoLayout2, buildFrameDescriptions = buildFrameDescriptions2, parseCleanupResponse = parseCleanupResponse2, applyCleanupSettings = applyCleanupSettings2, enforcePostLLMConsistency = enforcePostLLMConsistency2, recordFrameValues = recordFrameValues2, isOscillating = isOscillating2;
               const MAX_CU_DEPTH = 5;
-              const allFrames = [];
-              for (const node of [...selection]) {
-                collectCleanupFrames2(node, allFrames, 0, null, null, null, null);
-              }
-              let rootContext = "";
-              for (const node of [...selection]) {
-                if (node.type === "FRAME") {
-                  const rf = node;
-                  rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
-                }
-              }
               let phase0Count = 0;
               const phase0Changes = [];
               for (const node of [...selection]) {
@@ -8091,7 +8120,25 @@ Respond with ONLY a JSON array, no markdown:
                 enforceNoneLayoutConsistency2(node, 0);
               }
               if (phase0Count > 0) {
-                console.log(`[Cleanup] Phase 0 total: ${phase0Count} fixes`);
+                console.log(`[Cleanup] Phase 0a+0b total: ${phase0Count} fixes`);
+              }
+              let phase0cCount = 0;
+              for (const node of [...selection]) {
+                convertNoneToAutoLayout2(node, 0);
+              }
+              if (phase0cCount > 0) {
+                console.log(`[Cleanup] Phase 0c: Converted ${phase0cCount} NONE\u2192auto-layout frames`);
+              }
+              let rootContext = "";
+              for (const node of [...selection]) {
+                if (node.type === "FRAME") {
+                  const rf = node;
+                  rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
+                }
+              }
+              const allFrames = [];
+              for (const node of [...selection]) {
+                collectCleanupFrames2(node, allFrames, 0, null, null, null, null);
               }
               if (allFrames.length === 0) {
                 figma.notify("No frames found. Select a frame to clean up.", { timeout: 3e3 });

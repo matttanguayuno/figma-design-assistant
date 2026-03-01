@@ -9509,20 +9509,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
             }
 
-            const allFrames: CleanupFrameInfo[] = [];
-            for (const node of [...selection]) {
-              collectCleanupFrames(node, allFrames, 0, null, null, null, null);
-            }
-
-            // Collect root frame context even if it has NONE layout
-            let rootContext = "";
-            for (const node of [...selection]) {
-              if (node.type === "FRAME") {
-                const rf = node as FrameNode;
-                rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
-              }
-            }
-
             // ── PHASE 0: POSITION & BOUNDS FIX (handles NONE-layout parents) ──
             // Children in NONE-layout parents are absolutely positioned.
             // If a child's x/y puts it outside the parent, content gets clipped/truncated.
@@ -9679,7 +9665,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const parentW = Math.round(parent.width);
               const parentLM = parent.layoutMode || "NONE";
 
-              if (parentLM === "NONE" && parent.children.length >= 2) {
+              if (parentLM === "NONE" && parent.children.length >= 2 && parentW >= 48 && Math.round(parent.height) >= 48) {
+                // Size guard above: skip icon/component frames (< 48px)
                 // Gather child positioning info
                 const childInfos: Array<{
                   node: SceneNode;
@@ -9777,70 +9764,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
                 // Narrow same-named children: already handled above in sibling consistency
 
-                // --- Vertical re-stacking with consistent gaps ---
-                // Sort children by y, calculate a target gap, and compact ALL gaps
-                const sorted = [...childInfos].sort((a, b) => a.y - b.y);
-                if (sorted.length >= 2) {
-                  // Calculate gaps between consecutive children
-                  const rawGaps: number[] = [];
-                  for (let i = 1; i < sorted.length; i++) {
-                    const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
-                    rawGaps.push(gap);
-                  }
-
-                  // Determine target gap: use the median of small-to-medium gaps (8-40px range)
-                  const reasonableGaps = rawGaps.filter(g => g >= 0 && g <= 40).sort((a, b) => a - b);
-                  let targetGap: number;
-                  if (reasonableGaps.length >= 2) {
-                    targetGap = reasonableGaps[Math.floor(reasonableGaps.length / 2)];
-                  } else if (reasonableGaps.length === 1) {
-                    targetGap = reasonableGaps[0];
-                  } else {
-                    targetGap = 8; // default: 8px gap
-                  }
-                  // Clamp target gap to 0-24px range
-                  targetGap = Math.max(0, Math.min(targetGap, 24));
-
-                  // Check if ANY gap is excessively different from the target
-                  const hasExcessiveGap = rawGaps.some(g => g > targetGap * 2.5 || g > 40);
-                  const hasNegativeGap = rawGaps.some(g => g < -2);
-                  const hasInconsistentGaps = rawGaps.length >= 2 && (Math.max(...rawGaps) - Math.min(...rawGaps) > 30);
-
-                  if (hasExcessiveGap || hasNegativeGap || hasInconsistentGaps) {
-                    // Re-stack: place each child immediately after the previous one with targetGap
-                    let currentY = sorted[0].y; // Keep the first child's position
-                    for (let i = 1; i < sorted.length; i++) {
-                      const prevBottom = currentY + sorted[i - 1].h;
-                      const idealY = prevBottom + targetGap;
-                      const actualY = sorted[i].y;
-                      const delta = Math.abs(actualY - idealY);
-                      // Only move if the difference is meaningful (>4px)
-                      if (delta > 4) {
-                        sorted[i].node.y = idealY;
-                        phase0Count++;
-                        phase0Changes.push(`"${sorted[i].name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
-                        console.log(`[Cleanup Phase0b] "${sorted[i].name}" in "${parent.name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
-                        sorted[i].y = idealY;
-                      }
-                      currentY = sorted[i].y;
-                    }
-
-                    // Shrink parent height to fit re-stacked content + bottom padding
-                    const lastChild = sorted[sorted.length - 1];
-                    const contentBottom = lastChild.y + lastChild.h;
-                    const bottomPad = Math.max(targetGap, 8); // at least 8px bottom padding
-                    const idealHeight = contentBottom + bottomPad;
-                    if (Math.abs(parent.height - idealHeight) > 10) {
-                      const oldH = Math.round(parent.height);
-                      try {
-                        parent.resize(parentW, idealHeight);
-                        phase0Count++;
-                        phase0Changes.push(`"${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
-                        console.log(`[Cleanup Phase0b] "${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
-                      } catch (_e) {}
-                    }
-                  }
-                }
+                // (Re-stacking removed: Phase 0c auto-layout conversion handles vertical arrangement)
               }
 
               // Recurse
@@ -9860,7 +9784,161 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               enforceNoneLayoutConsistency(node, 0);
             }
             if (phase0Count > 0) {
-              console.log(`[Cleanup] Phase 0 total: ${phase0Count} fixes`);
+              console.log(`[Cleanup] Phase 0a+0b total: ${phase0Count} fixes`);
+            }
+
+            // ── PHASE 0c: NONE → AUTO-LAYOUT CONVERSION ──
+            // Convert qualifying NONE-layout containers to VERTICAL auto-layout.
+            // This is the key structural fix: instead of manually adjusting x/y positions,
+            // let Figma's auto-layout engine handle spacing, alignment, and sizing.
+            // Frames converted here become visible to the LLM for further optimization.
+            let phase0cCount = 0;
+
+            function convertNoneToAutoLayout(node: SceneNode, depth: number): void {
+              if (node.type !== "FRAME") return;
+              if (depth > MAX_CU_DEPTH) return;
+              const frame = node as FrameNode;
+
+              // Recurse FIRST (bottom-up: convert leaf frames before parents)
+              for (const child of [...frame.children]) {
+                if (child.type === "FRAME") {
+                  convertNoneToAutoLayout(child, depth + 1);
+                } else if (child.type === "GROUP") {
+                  for (const gc of (child as GroupNode).children) {
+                    if (gc.type === "FRAME") convertNoneToAutoLayout(gc, depth + 1);
+                  }
+                }
+              }
+
+              const lm = frame.layoutMode || "NONE";
+              if (lm !== "NONE") return; // Already has auto-layout
+
+              // Size guard: skip icons, indicators, small components
+              const fw = Math.round(frame.width);
+              const fh = Math.round(frame.height);
+              if (fw < 80 || fh < 80) return;
+
+              // Need at least 2 children to infer layout direction
+              const kids = [...frame.children];
+              if (kids.length < 2) return;
+
+              // Collect children positions
+              const childInfos = kids.map(c => ({
+                node: c,
+                name: c.name || "(unnamed)",
+                x: Math.round(c.x),
+                y: Math.round(c.y),
+                w: Math.round(c.width),
+                h: Math.round(c.height),
+              }));
+
+              // Sort by Y to detect vertical stacking
+              const sortedByY = [...childInfos].sort((a, b) => a.y - b.y);
+
+              // Check if children are vertically arranged (no significant Y overlap)
+              let isVertical = true;
+              for (let i = 1; i < sortedByY.length; i++) {
+                const prev = sortedByY[i - 1];
+                const curr = sortedByY[i];
+                const overlapY = (prev.y + prev.h) - curr.y;
+                // Allow small overlap (up to 30% of smaller child or 4px)
+                const threshold = Math.max(Math.min(prev.h, curr.h) * 0.3, 4);
+                if (overlapY > threshold) {
+                  isVertical = false;
+                  break;
+                }
+              }
+              if (!isVertical) return;
+
+              // Check children aren't wildly offset horizontally (grid/freeform detection)
+              const xPositions = childInfos.map(c => c.x);
+              const xRange = Math.max(...xPositions) - Math.min(...xPositions);
+              if (xRange > fw * 0.4) return; // Very different x positions → not a simple vertical stack
+
+              // ✅ This frame qualifies for VERTICAL auto-layout conversion
+
+              // Calculate padding from edge distances
+              const firstChild = sortedByY[0];
+              const lastChild = sortedByY[sortedByY.length - 1];
+              const padTop = Math.max(0, Math.round(firstChild.y));
+              const padBottom = Math.max(0, fh - Math.round(lastChild.y + lastChild.h));
+              const minX = Math.min(...childInfos.map(c => c.x));
+              const maxRight = Math.max(...childInfos.map(c => c.x + c.w));
+              const padLeft = Math.max(0, Math.round(minX));
+              const padRight = Math.max(0, fw - Math.round(maxRight));
+
+              // Calculate item spacing (median of gaps between consecutive children)
+              const gaps: number[] = [];
+              for (let i = 1; i < sortedByY.length; i++) {
+                const gap = sortedByY[i].y - (sortedByY[i - 1].y + sortedByY[i - 1].h);
+                gaps.push(Math.max(0, Math.round(gap)));
+              }
+              const sortedGaps = [...gaps].sort((a, b) => a - b);
+              const medianGap = sortedGaps.length > 0
+                ? sortedGaps[Math.floor(sortedGaps.length / 2)]
+                : 8;
+              const itemSpacing = Math.min(Math.max(medianGap, 0), 32);
+
+              // Reorder children by Y position (layer order must match visual order for auto-layout)
+              for (let i = 0; i < sortedByY.length; i++) {
+                try { frame.insertChild(i, sortedByY[i].node); } catch (_e) {}
+              }
+
+              // Convert to auto-layout
+              try {
+                frame.layoutMode = "VERTICAL";
+                frame.paddingTop = padTop;
+                frame.paddingBottom = Math.min(padBottom, 32); // cap excessive bottom padding
+                frame.paddingLeft = padLeft;
+                frame.paddingRight = padRight;
+                frame.itemSpacing = itemSpacing;
+                frame.primaryAxisSizingMode = "AUTO"; // HUG height to fit content
+                frame.counterAxisSizingMode = "FIXED"; // Keep width
+                frame.counterAxisAlignItems = "MIN"; // Left-align
+
+                // Set children sizing
+                const contentWidth = fw - padLeft - padRight;
+                for (const ci of sortedByY) {
+                  try {
+                    const c = ci.node as any;
+                    // Wide children → FILL to stretch to parent width
+                    if (ci.w >= contentWidth * 0.85) {
+                      c.layoutSizingHorizontal = "FILL";
+                    }
+                    // Don't change vertical sizing — let it stay FIXED/HUG as-is
+                  } catch (_e) {}
+                }
+
+                phase0cCount++;
+                phase0Changes.push(`"${frame.name}": NONE→VERTICAL (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+                console.log(`[Cleanup Phase0c] "${frame.name}": NONE→VERTICAL auto-layout (pad=[${padTop},${padRight},${padBottom > 32 ? 32 : padBottom},${padLeft}], gap=${itemSpacing}, ${kids.length} children)`);
+              } catch (e) {
+                console.log(`[Cleanup Phase0c] Failed to convert "${frame.name}": ${e}`);
+              }
+            }
+
+            // Run Phase 0c on all selected frames
+            for (const node of [...selection]) {
+              convertNoneToAutoLayout(node, 0);
+            }
+            if (phase0cCount > 0) {
+              console.log(`[Cleanup] Phase 0c: Converted ${phase0cCount} NONE→auto-layout frames`);
+            }
+
+            // Collect root frame context (after Phase 0c so layoutMode reflects conversions)
+            let rootContext = "";
+            for (const node of [...selection]) {
+              if (node.type === "FRAME") {
+                const rf = node as FrameNode;
+                rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
+              }
+            }
+
+            // ── Collect auto-layout frames for LLM analysis ──
+            // This runs AFTER Phase 0c so newly-converted frames are included.
+            const allFrames: CleanupFrameInfo[] = [];
+            for (const node of [...selection]) {
+              collectCleanupFrames(node, allFrames, 0, null, null, null, null);
             }
 
             if (allFrames.length === 0) {
