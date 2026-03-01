@@ -9529,9 +9529,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               break;
             }
 
-            // ── LOCAL PRE-FIX PASS: deterministic fixes that don't need LLM ──
+            // ── LOCAL PRE-FIX PASS: deterministic fixes — this is the PRIMARY fixer ──
             let preFixCount = 0;
             const preFixChanges: string[] = [];
+
+            // First pass: individual frame fixes
             for (const fi of allFrames) {
               const node = figma.getNodeById(fi.id) as SceneNode | null;
               if (!node || node.type !== "FRAME") continue;
@@ -9541,6 +9543,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               const isCarouselFrame = /carousel|slider|swiper/i.test(nameLower);
               const isSepFrame = /separator|divider|line|rule/i.test(nameLower);
               const isVisualFrame = isImageFrame || isCarouselFrame || isSepFrame;
+              const isButton = /button|btn|cta/i.test(nameLower);
+              const hasText = fi.childSummary.includes("(TEXT)");
+              const hasDeepText = hasText || /labels|content|body|description|title|subtitle|text|paragraph|caption/i.test(fi.childSummary);
               const localFixes: string[] = [];
 
               // Fix 1: FIXED -> FILL for non-visual children in auto-layout parents
@@ -9571,7 +9576,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               if (frame.itemSpacing < 0) { localFixes.push(`spacing ${frame.itemSpacing}->0`); frame.itemSpacing = 0; fi.itemSpacing = 0; }
 
               // Fix 4: Buttons with FIXED height and clipsContent should be HUG
-              if (/button|btn|cta/i.test(nameLower) && fi.sizingV === "FIXED" && frame.clipsContent) {
+              if (isButton && fi.sizingV === "FIXED" && frame.clipsContent) {
                 try {
                   (frame as any).layoutSizingVertical = "HUG";
                   fi.sizingV = "HUG";
@@ -9579,36 +9584,69 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 } catch (_e) { /* ignore */ }
               }
 
-              // Fix 5: Sibling padding normalization — similar-named siblings should match
-              const preFSiblings = allFrames.filter(s => s.parentId === fi.parentId && s.id !== fi.id);
-              const preFPrefix = fi.name.split(" ").slice(0, 2).join(" ");
-              const preFSimilar = preFSiblings.filter(s => preFPrefix.length > 3 && s.name.startsWith(preFPrefix));
-              if (preFSimilar.length > 0 && !isVisualFrame) {
-                // Use the most common padding among similar siblings (including self)
-                const group = [fi, ...preFSimilar];
-                const padCounts = new Map<string, number>();
-                for (const g of group) {
-                  const key = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
-                  padCounts.set(key, (padCounts.get(key) || 0) + 1);
+              // Fix 5: Text content flush against edges — add 16px padding
+              if (!isVisualFrame && !isButton && hasDeepText && fi.width > 80) {
+                if (fi.paddingLeft === 0 && fi.paddingRight === 0) {
+                  frame.paddingLeft = 16; fi.paddingLeft = 16;
+                  frame.paddingRight = 16; fi.paddingRight = 16;
+                  localFixes.push("padLR 0->16 (text flush)");
                 }
-                let bestPad = `${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}`;
-                let bestCount = 0;
-                for (const [key, count] of padCounts) {
-                  if (count > bestCount) { bestCount = count; bestPad = key; }
-                }
-                const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
-                if (fi.paddingTop !== bT || fi.paddingRight !== bR || fi.paddingBottom !== bB || fi.paddingLeft !== bL) {
-                  const oldPad = `[${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}]`;
-                  frame.paddingTop = bT; fi.paddingTop = bT;
-                  frame.paddingRight = bR; fi.paddingRight = bR;
-                  frame.paddingBottom = bB; fi.paddingBottom = bB;
-                  frame.paddingLeft = bL; fi.paddingLeft = bL;
-                  localFixes.push(`pad ${oldPad}->[${bT},${bR},${bB},${bL}] (sibling match)`);
+                if (fi.paddingTop === 0 && fi.paddingBottom === 0 && fi.childCount > 1) {
+                  frame.paddingTop = 12; fi.paddingTop = 12;
+                  frame.paddingBottom = 12; fi.paddingBottom = 12;
+                  localFixes.push("padTB 0->12 (text flush)");
                 }
               }
 
-              // Fix 6: Child wider than parent -> FILL (if in auto-layout parent)
-              // Allow this even for carousel/image frames — overflow must be fixed
+              // Fix 6: One-sided asymmetric padding — make symmetric
+              if (!isSepFrame && !isCarouselFrame) {
+                // Vertical: one side 0, other > 4
+                if (fi.paddingTop === 0 && fi.paddingBottom > 4) {
+                  frame.paddingTop = fi.paddingBottom; fi.paddingTop = fi.paddingBottom;
+                  localFixes.push(`padTop 0->${fi.paddingBottom} (symmetric)`);
+                } else if (fi.paddingBottom === 0 && fi.paddingTop > 4) {
+                  frame.paddingBottom = fi.paddingTop; fi.paddingBottom = fi.paddingTop;
+                  localFixes.push(`padBot 0->${fi.paddingTop} (symmetric)`);
+                }
+                // Horizontal: one side 0, other > 4
+                if (fi.paddingLeft === 0 && fi.paddingRight > 4) {
+                  frame.paddingLeft = fi.paddingRight; fi.paddingLeft = fi.paddingRight;
+                  localFixes.push(`padLeft 0->${fi.paddingRight} (symmetric)`);
+                } else if (fi.paddingRight === 0 && fi.paddingLeft > 4) {
+                  frame.paddingRight = fi.paddingLeft; fi.paddingRight = fi.paddingLeft;
+                  localFixes.push(`padRight 0->${fi.paddingLeft} (symmetric)`);
+                }
+              }
+
+              // Fix 7: Excessive frame height for few children — HUG
+              if (!isVisualFrame && fi.sizingV === "FIXED" && fi.childCount <= 3 && fi.height > 100) {
+                const expectedH = (fi.paddingTop + fi.paddingBottom) + (fi.childCount * 30) + ((fi.childCount - 1) * Math.max(fi.itemSpacing, 0));
+                if (fi.height > expectedH * 2) {
+                  try {
+                    (frame as any).layoutSizingVertical = "HUG";
+                    fi.sizingV = "HUG";
+                    localFixes.push(`sizingV FIXED->HUG (${fi.height}px excessive)`);
+                  } catch (_e) { /* ignore */ }
+                }
+              }
+
+              // Fix 8: Excessive button padding — cap at 16px vertical, 24px horizontal
+              if (isButton) {
+                if (fi.paddingTop > 20) { const nv = 16; localFixes.push(`padTop ${fi.paddingTop}->${nv} (btn)`); frame.paddingTop = nv; fi.paddingTop = nv; }
+                if (fi.paddingBottom > 20) { const nv = 16; localFixes.push(`padBot ${fi.paddingBottom}->${nv} (btn)`); frame.paddingBottom = nv; fi.paddingBottom = nv; }
+                if (fi.paddingLeft > 32) { const nv = 24; localFixes.push(`padLeft ${fi.paddingLeft}->${nv} (btn)`); frame.paddingLeft = nv; fi.paddingLeft = nv; }
+                if (fi.paddingRight > 32) { const nv = 24; localFixes.push(`padRight ${fi.paddingRight}->${nv} (btn)`); frame.paddingRight = nv; fi.paddingRight = nv; }
+              }
+
+              // Fix 9: Excessive section padding (non-button, non-root)
+              if (!isButton && fi.depth > 0 && !isVisualFrame) {
+                if (fi.paddingTop > 48) { const nv = 24; localFixes.push(`padTop ${fi.paddingTop}->${nv}`); frame.paddingTop = nv; fi.paddingTop = nv; }
+                if (fi.paddingBottom > 48) { const nv = 24; localFixes.push(`padBot ${fi.paddingBottom}->${nv}`); frame.paddingBottom = nv; fi.paddingBottom = nv; }
+                if (fi.paddingLeft > 48) { const nv = 24; localFixes.push(`padLeft ${fi.paddingLeft}->${nv}`); frame.paddingLeft = nv; fi.paddingLeft = nv; }
+                if (fi.paddingRight > 48) { const nv = 24; localFixes.push(`padRight ${fi.paddingRight}->${nv}`); frame.paddingRight = nv; fi.paddingRight = nv; }
+              }
+
+              // Fix 10: Child wider than parent -> FILL (even for carousel/image — overflow must be fixed)
               if (fi.parentWidth && fi.width > fi.parentWidth && fi.parentLayoutMode && fi.parentLayoutMode !== "NONE" && fi.depth > 0) {
                 try {
                   if (fi.parentLayoutMode === "VERTICAL") {
@@ -9619,12 +9657,91 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 } catch (_e) { /* ignore */ }
               }
 
+              // Fix 11: clipsContent with FIXED and no auto-layout parent — turn off clip
+              if (fi.clipsContent && fi.sizingH === "FIXED" && (!fi.parentLayoutMode || fi.parentLayoutMode === "NONE") && !isVisualFrame) {
+                frame.clipsContent = false;
+                fi.clipsContent = false;
+                localFixes.push("clipsContent true->false (FIXED+NONE parent)");
+              }
+
               if (localFixes.length > 0) {
                 preFixCount++;
                 preFixChanges.push(`"${fi.name}": ${localFixes.join(", ")}`);
                 console.log(`[Cleanup pre-fix] "${fi.name}": ${localFixes.join(", ")}`);
               }
             }
+
+            // Second pass: same-name sibling consistency (after individual fixes)
+            const siblingGroups = new Map<string, typeof allFrames>();
+            for (const fi of allFrames) {
+              const key = `${fi.parentId}::${fi.name}`;
+              if (!siblingGroups.has(key)) siblingGroups.set(key, []);
+              siblingGroups.get(key)!.push(fi);
+            }
+            for (const [_key, group] of siblingGroups) {
+              if (group.length < 2) continue;
+              // Use the most common padding as the target
+              const padCounts = new Map<string, number>();
+              for (const g of group) {
+                const pk = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
+                padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
+              }
+              let bestPad = ""; let bestCount = 0;
+              for (const [key, count] of padCounts) {
+                if (count > bestCount) { bestCount = count; bestPad = key; }
+              }
+              const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
+              for (const fi of group) {
+                if (fi.paddingTop === bT && fi.paddingRight === bR && fi.paddingBottom === bB && fi.paddingLeft === bL) continue;
+                const node = figma.getNodeById(fi.id) as SceneNode | null;
+                if (!node || node.type !== "FRAME") continue;
+                const frame = node as FrameNode;
+                const oldPad = `[${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}]`;
+                frame.paddingTop = bT; fi.paddingTop = bT;
+                frame.paddingRight = bR; fi.paddingRight = bR;
+                frame.paddingBottom = bB; fi.paddingBottom = bB;
+                frame.paddingLeft = bL; fi.paddingLeft = bL;
+                preFixCount++;
+                preFixChanges.push(`"${fi.name}": pad ${oldPad}->[${bT},${bR},${bB},${bL}] (same-name sibling match)`);
+                console.log(`[Cleanup pre-fix] "${fi.name}": pad ${oldPad}->[${bT},${bR},${bB},${bL}] (same-name sibling match)`);
+              }
+            }
+
+            // Third pass: similar-prefix sibling padding normalization
+            for (const fi of allFrames) {
+              const nameLower = fi.name.toLowerCase();
+              if (/image|photo|thumbnail|hero|banner|avatar|icon|carousel|slider|swiper|separator|divider|line|rule/i.test(nameLower)) continue;
+              const preFSiblings = allFrames.filter(s => s.parentId === fi.parentId && s.id !== fi.id);
+              const preFPrefix = fi.name.split(" ").slice(0, 2).join(" ");
+              const preFSimilar = preFSiblings.filter(s => preFPrefix.length > 3 && s.name.startsWith(preFPrefix) && s.name !== fi.name);
+              if (preFSimilar.length === 0) continue;
+              const group = [fi, ...preFSimilar];
+              const padCounts = new Map<string, number>();
+              for (const g of group) {
+                const key = `${g.paddingTop},${g.paddingRight},${g.paddingBottom},${g.paddingLeft}`;
+                padCounts.set(key, (padCounts.get(key) || 0) + 1);
+              }
+              let bestPad = `${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}`;
+              let bestCount = 0;
+              for (const [key, count] of padCounts) {
+                if (count > bestCount) { bestCount = count; bestPad = key; }
+              }
+              const [bT, bR, bB, bL] = bestPad.split(",").map(Number);
+              if (fi.paddingTop !== bT || fi.paddingRight !== bR || fi.paddingBottom !== bB || fi.paddingLeft !== bL) {
+                const node = figma.getNodeById(fi.id) as SceneNode | null;
+                if (!node || node.type !== "FRAME") continue;
+                const frame = node as FrameNode;
+                const oldPad = `[${fi.paddingTop},${fi.paddingRight},${fi.paddingBottom},${fi.paddingLeft}]`;
+                frame.paddingTop = bT; fi.paddingTop = bT;
+                frame.paddingRight = bR; fi.paddingRight = bR;
+                frame.paddingBottom = bB; fi.paddingBottom = bB;
+                frame.paddingLeft = bL; fi.paddingLeft = bL;
+                preFixCount++;
+                preFixChanges.push(`"${fi.name}": pad ${oldPad}->[${bT},${bR},${bB},${bL}] (similar sibling match)`);
+                console.log(`[Cleanup pre-fix] "${fi.name}": pad ${oldPad}->[${bT},${bR},${bB},${bL}] (similar sibling match)`);
+              }
+            }
+
             if (preFixCount > 0) {
               console.log(`[Cleanup] Pre-fixed ${preFixCount} frames locally before LLM analysis`);
             }
@@ -10094,9 +10211,56 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
             }
 
-            if (appliedCount > 0 || preFixCount > 0) {
-              const totalFixed = appliedCount + preFixCount;
-              const allChanges = [...preFixChanges, ...changes];
+            // ── POST-LLM CONSISTENCY ENFORCEMENT ──
+            // After LLM changes, same-named siblings may have been made inconsistent.
+            // Re-enforce that same-named siblings under the same parent have identical padding.
+            let postFixCount = 0;
+            const postFixChanges: string[] = [];
+            const postSiblingGroups = new Map<string, Array<{ id: string; name: string }>>();
+            for (const fi of allFrames) {
+              const key = `${fi.parentId}::${fi.name}`;
+              if (!postSiblingGroups.has(key)) postSiblingGroups.set(key, []);
+              postSiblingGroups.get(key)!.push({ id: fi.id, name: fi.name });
+            }
+            for (const [_key, group] of postSiblingGroups) {
+              if (group.length < 2) continue;
+              // Read current frame values (post-LLM)
+              const live: Array<{ node: FrameNode; pT: number; pR: number; pB: number; pL: number }> = [];
+              for (const g of group) {
+                const n = figma.getNodeById(g.id) as SceneNode | null;
+                if (!n || n.type !== "FRAME") continue;
+                const f = n as FrameNode;
+                live.push({ node: f, pT: f.paddingTop, pR: f.paddingRight, pB: f.paddingBottom, pL: f.paddingLeft });
+              }
+              if (live.length < 2) continue;
+              // Majority vote on current padding
+              const padCounts = new Map<string, number>();
+              for (const l of live) {
+                const pk = `${l.pT},${l.pR},${l.pB},${l.pL}`;
+                padCounts.set(pk, (padCounts.get(pk) || 0) + 1);
+              }
+              let bestP = ""; let bestC = 0;
+              for (const [pk, cnt] of padCounts) {
+                if (cnt > bestC) { bestC = cnt; bestP = pk; }
+              }
+              const [tT, tR, tB, tL] = bestP.split(",").map(Number);
+              for (const l of live) {
+                if (l.pT === tT && l.pR === tR && l.pB === tB && l.pL === tL) continue;
+                const oldP = `[${l.pT},${l.pR},${l.pB},${l.pL}]`;
+                l.node.paddingTop = tT; l.node.paddingRight = tR;
+                l.node.paddingBottom = tB; l.node.paddingLeft = tL;
+                postFixCount++;
+                postFixChanges.push(`"${l.node.name}": pad ${oldP}->[${tT},${tR},${tB},${tL}] (post-LLM sibling fix)`);
+                console.log(`[Cleanup post-fix] "${l.node.name}": pad ${oldP}->[${tT},${tR},${tB},${tL}]`);
+              }
+            }
+            if (postFixCount > 0) {
+              console.log(`[Cleanup] Post-fixed ${postFixCount} frames for sibling consistency`);
+            }
+
+            const totalFixed = appliedCount + preFixCount + postFixCount;
+            if (totalFixed > 0) {
+              const allChanges = [...preFixChanges, ...changes, ...postFixChanges];
               const summary = `Cleaned up ${totalFixed} frame${totalFixed > 1 ? "s" : ""}: ${allChanges.slice(0, 3).join("; ")}${allChanges.length > 3 ? ` … +${allChanges.length - 3} more` : ""}`;
               figma.notify(summary, { timeout: 5000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary } as any);
