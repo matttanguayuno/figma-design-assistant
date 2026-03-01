@@ -9523,6 +9523,118 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
             }
 
+            // ── PHASE 0: POSITION & BOUNDS FIX (handles NONE-layout parents) ──
+            // Children in NONE-layout parents are absolutely positioned.
+            // If a child's x/y puts it outside the parent, content gets clipped/truncated.
+            let phase0Count = 0;
+            const phase0Changes: string[] = [];
+
+            function fixPositionAndBounds(node: SceneNode, depth: number): void {
+              if (node.type !== "FRAME") return;
+              if (depth > MAX_CU_DEPTH + 1) return; // go one level deeper than auto-layout collection
+              const parent = node as FrameNode;
+              const parentW = Math.round(parent.width);
+              const parentH = Math.round(parent.height);
+              const parentLM = parent.layoutMode || "NONE";
+
+              for (const child of parent.children) {
+                const childW = Math.round(child.width);
+                const childH = Math.round(child.height);
+                const childX = Math.round(child.x);
+                const childY = Math.round(child.y);
+                const childName = child.name || "(unnamed)";
+                const isVisChild = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test(childName.toLowerCase());
+                const fixes: string[] = [];
+
+                if (parentLM === "NONE") {
+                  // NONE-layout parent: children are absolutely positioned
+
+                  // Fix A: child.x < 0 — shift to x=0
+                  if (childX < 0) {
+                    child.x = 0;
+                    fixes.push(`x ${childX}->0`);
+                  }
+
+                  // Fix B: child is wider than parent — resize to fit
+                  if (childW > parentW && !isVisChild) {
+                    try {
+                      child.resize(parentW, childH);
+                      fixes.push(`width ${childW}->${parentW}`);
+                    } catch (_e) { /* resize may fail for some node types */ }
+                  }
+
+                  // Fix C: child.x + child.width > parentWidth — shift left or resize
+                  const currentX = Math.round(child.x);
+                  const currentW = Math.round(child.width);
+                  if (currentX + currentW > parentW) {
+                    if (currentX > 0 && currentW <= parentW) {
+                      // Child fits, just poorly positioned — shift left
+                      child.x = parentW - currentW;
+                      fixes.push(`x ${currentX}->${parentW - currentW} (shift to fit)`);
+                    } else if (currentX >= 0 && currentW > parentW) {
+                      // Child too wide even at x=0 — resize
+                      child.x = 0;
+                      try {
+                        child.resize(parentW, Math.round(child.height));
+                        fixes.push(`x->0, width ${currentW}->${parentW} (resize to fit)`);
+                      } catch (_e) {
+                        fixes.push(`x ${currentX}->0`);
+                      }
+                    }
+                  }
+
+                  // Fix D: child.y < 0 — shift to y=0
+                  if (childY < -2) { // allow tiny negative for anti-aliasing
+                    child.y = 0;
+                    fixes.push(`y ${childY}->0`);
+                  }
+
+                  // Fix E: child is taller than parent and parent clips — resize height
+                  if (parent.clipsContent && childH > parentH && !isVisChild && childY >= 0) {
+                    if (childH - parentH > 5) {
+                      try {
+                        child.resize(Math.round(child.width), parentH - Math.round(child.y));
+                        fixes.push(`height ${childH}->${parentH - Math.round(child.y)} (clip overflow)`);
+                      } catch (_e) { /* ignore */ }
+                    }
+                  }
+                } else {
+                  // Auto-layout parent: children that overflow should be set to FILL
+                  if (child.type === "FRAME" && childW > parentW + 2) {
+                    try {
+                      (child as any).layoutSizingHorizontal = "FILL";
+                      fixes.push(`sizingH->FILL (${childW}>${parentW} in ${parentLM})`);
+                    } catch (_e) { /* ignore */ }
+                  }
+                }
+
+                if (fixes.length > 0) {
+                  phase0Count++;
+                  phase0Changes.push(`"${childName}": ${fixes.join(", ")}`);
+                  console.log(`[Cleanup Phase0] "${childName}" in "${parent.name}": ${fixes.join(", ")}`);
+                }
+
+                // Recurse into frame and group children
+                if (child.type === "FRAME") {
+                  fixPositionAndBounds(child, depth + 1);
+                } else if (child.type === "GROUP") {
+                  for (const gc of (child as GroupNode).children) {
+                    if (gc.type === "FRAME") {
+                      fixPositionAndBounds(gc, depth + 1);
+                    }
+                  }
+                }
+              }
+            }
+
+            // Run Phase 0 on all selected frames
+            for (const node of [...selection]) {
+              fixPositionAndBounds(node, 0);
+            }
+            if (phase0Count > 0) {
+              console.log(`[Cleanup] Phase 0: Fixed position/bounds on ${phase0Count} elements`);
+            }
+
             if (allFrames.length === 0) {
               figma.notify("No frames found. Select a frame to clean up.", { timeout: 3000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No frames to clean up." } as any);
@@ -10258,9 +10370,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               console.log(`[Cleanup] Post-fixed ${postFixCount} frames for sibling consistency`);
             }
 
-            const totalFixed = appliedCount + preFixCount + postFixCount;
+            const totalFixed = appliedCount + preFixCount + postFixCount + phase0Count;
             if (totalFixed > 0) {
-              const allChanges = [...preFixChanges, ...changes, ...postFixChanges];
+              const allChanges = [...phase0Changes, ...preFixChanges, ...changes, ...postFixChanges];
               const summary = `Cleaned up ${totalFixed} frame${totalFixed > 1 ? "s" : ""}: ${allChanges.slice(0, 3).join("; ")}${allChanges.length > 3 ? ` … +${allChanges.length - 3} more` : ""}`;
               figma.notify(summary, { timeout: 5000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary } as any);

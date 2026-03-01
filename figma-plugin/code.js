@@ -7359,8 +7359,88 @@ Respond with ONLY a JSON array, no markdown:
                     collectCleanupFrames2(child, list, depth + 1, f.id, f.name, Math.round(f.width), lm);
                   }
                 }
+              }, fixPositionAndBounds2 = function(node, depth) {
+                if (node.type !== "FRAME") return;
+                if (depth > MAX_CU_DEPTH + 1) return;
+                const parent = node;
+                const parentW = Math.round(parent.width);
+                const parentH = Math.round(parent.height);
+                const parentLM = parent.layoutMode || "NONE";
+                for (const child of parent.children) {
+                  const childW = Math.round(child.width);
+                  const childH = Math.round(child.height);
+                  const childX = Math.round(child.x);
+                  const childY = Math.round(child.y);
+                  const childName = child.name || "(unnamed)";
+                  const isVisChild = /image|photo|thumbnail|hero|banner|avatar|icon|separator|divider|indicator/i.test(childName.toLowerCase());
+                  const fixes = [];
+                  if (parentLM === "NONE") {
+                    if (childX < 0) {
+                      child.x = 0;
+                      fixes.push(`x ${childX}->0`);
+                    }
+                    if (childW > parentW && !isVisChild) {
+                      try {
+                        child.resize(parentW, childH);
+                        fixes.push(`width ${childW}->${parentW}`);
+                      } catch (_e2) {
+                      }
+                    }
+                    const currentX = Math.round(child.x);
+                    const currentW = Math.round(child.width);
+                    if (currentX + currentW > parentW) {
+                      if (currentX > 0 && currentW <= parentW) {
+                        child.x = parentW - currentW;
+                        fixes.push(`x ${currentX}->${parentW - currentW} (shift to fit)`);
+                      } else if (currentX >= 0 && currentW > parentW) {
+                        child.x = 0;
+                        try {
+                          child.resize(parentW, Math.round(child.height));
+                          fixes.push(`x->0, width ${currentW}->${parentW} (resize to fit)`);
+                        } catch (_e2) {
+                          fixes.push(`x ${currentX}->0`);
+                        }
+                      }
+                    }
+                    if (childY < -2) {
+                      child.y = 0;
+                      fixes.push(`y ${childY}->0`);
+                    }
+                    if (parent.clipsContent && childH > parentH && !isVisChild && childY >= 0) {
+                      if (childH - parentH > 5) {
+                        try {
+                          child.resize(Math.round(child.width), parentH - Math.round(child.y));
+                          fixes.push(`height ${childH}->${parentH - Math.round(child.y)} (clip overflow)`);
+                        } catch (_e2) {
+                        }
+                      }
+                    }
+                  } else {
+                    if (child.type === "FRAME" && childW > parentW + 2) {
+                      try {
+                        child.layoutSizingHorizontal = "FILL";
+                        fixes.push(`sizingH->FILL (${childW}>${parentW} in ${parentLM})`);
+                      } catch (_e2) {
+                      }
+                    }
+                  }
+                  if (fixes.length > 0) {
+                    phase0Count++;
+                    phase0Changes.push(`"${childName}": ${fixes.join(", ")}`);
+                    console.log(`[Cleanup Phase0] "${childName}" in "${parent.name}": ${fixes.join(", ")}`);
+                  }
+                  if (child.type === "FRAME") {
+                    fixPositionAndBounds2(child, depth + 1);
+                  } else if (child.type === "GROUP") {
+                    for (const gc of child.children) {
+                      if (gc.type === "FRAME") {
+                        fixPositionAndBounds2(gc, depth + 1);
+                      }
+                    }
+                  }
+                }
               };
-              var collectCleanupFrames = collectCleanupFrames2;
+              var collectCleanupFrames = collectCleanupFrames2, fixPositionAndBounds = fixPositionAndBounds2;
               const MAX_CU_DEPTH = 3;
               const allFrames = [];
               for (const node of [...selection]) {
@@ -7372,6 +7452,14 @@ Respond with ONLY a JSON array, no markdown:
                   const rf = node;
                   rootContext = `Root frame: id="${rf.id}" name="${rf.name}" size=${Math.round(rf.width)}x${Math.round(rf.height)} layoutMode=${rf.layoutMode || "NONE"}`;
                 }
+              }
+              let phase0Count = 0;
+              const phase0Changes = [];
+              for (const node of [...selection]) {
+                fixPositionAndBounds2(node, 0);
+              }
+              if (phase0Count > 0) {
+                console.log(`[Cleanup] Phase 0: Fixed position/bounds on ${phase0Count} elements`);
               }
               if (allFrames.length === 0) {
                 figma.notify("No frames found. Select a frame to clean up.", { timeout: 3e3 });
@@ -8082,9 +8170,9 @@ Fix EVERY visual problem. Return ALL frames that need changes \u2014 typically m
               if (postFixCount > 0) {
                 console.log(`[Cleanup] Post-fixed ${postFixCount} frames for sibling consistency`);
               }
-              const totalFixed = appliedCount + preFixCount + postFixCount;
+              const totalFixed = appliedCount + preFixCount + postFixCount + phase0Count;
               if (totalFixed > 0) {
-                const allChanges = [...preFixChanges, ...changes, ...postFixChanges];
+                const allChanges = [...phase0Changes, ...preFixChanges, ...changes, ...postFixChanges];
                 const summary = `Cleaned up ${totalFixed} frame${totalFixed > 1 ? "s" : ""}: ${allChanges.slice(0, 3).join("; ")}${allChanges.length > 3 ? ` \u2026 +${allChanges.length - 3} more` : ""}`;
                 figma.notify(summary, { timeout: 5e3 });
                 sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary });
