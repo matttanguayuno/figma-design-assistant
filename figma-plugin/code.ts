@@ -9670,9 +9670,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             // ── PHASE 0b: NONE-layout sibling consistency & gap compaction ──
             // After bounds are fixed, enforce same-name sibling consistency
             // and compact excessive vertical gaps within NONE-layout parents.
-            // NOTE: We do NOT invent horizontal margins. If content is flush to
-            // the edge, that's the design intent. We only fix genuine
-            // inconsistencies between same-named siblings and excessive gaps.
+            // ALSO: re-stack children with consistent gaps, snap widths, align horizontally.
 
             function enforceNoneLayoutConsistency(node: SceneNode, depth: number): void {
               if (node.type !== "FRAME") return;
@@ -9741,38 +9739,105 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   }
                 }
 
-                // --- Vertical gap compaction ---
-                // Sort children by y, find excessive gaps, reduce them
-                const sorted = [...childInfos].sort((a, b) => a.y - b.y);
-                const gaps: Array<{ index: number; gap: number }> = [];
-                for (let i = 1; i < sorted.length; i++) {
-                  const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
-                  gaps.push({ index: i, gap });
+                // --- Width snapping: near-full-width children → full parent width ---
+                // If a child is within 85% of parent width, snap it to parent width
+                // (minus optional margin). This fixes elements that should fill the width.
+                const widthMargin = 0; // flush to edges for mobile screens
+                for (const ci of childInfos) {
+                  if (ci.isVisual) continue; // don't resize images/icons
+                  if (ci.w >= parentW * 0.85 && ci.w < parentW) {
+                    const oldW = ci.w;
+                    const newW = parentW - widthMargin;
+                    try {
+                      ci.node.resize(newW, ci.h);
+                      ci.w = newW;
+                      ci.node.x = widthMargin / 2;
+                      ci.x = widthMargin / 2;
+                      phase0Count++;
+                      phase0Changes.push(`"${ci.name}": w ${oldW}->${newW} (snap to parent width)`);
+                      console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": w ${oldW}->${newW} (snap to parent width)`);
+                    } catch (_e) {}
+                  }
                 }
-                if (gaps.length >= 1) {
-                  // Calculate target gap based on available data
-                  const positiveGaps = gaps.map(g => g.gap).filter(g => g > 0).sort((a, b) => a - b);
-                  const medianGap = positiveGaps.length >= 2
-                    ? positiveGaps[Math.floor(positiveGaps.length / 2)]
-                    : 16; // default target gap when only 1 gap exists
-                  const maxAllowedGap = Math.max(medianGap * 2.5, 40);
 
-                  // Compact from top to bottom — shift everything below an excessive gap upward
-                  let totalShift = 0;
-                  for (let i = 0; i < gaps.length; i++) {
-                    const gapInfo = gaps[i];
-                    if (gapInfo.gap > maxAllowedGap) {
-                      const targetGap = Math.max(medianGap, 16);
-                      const reduction = gapInfo.gap - targetGap;
-                      if (reduction > 8) { // only compact if meaningful
-                        totalShift += reduction;
+                // --- Horizontal alignment consistency ---
+                // Group children by similar width (within 20px), align x positions to most common
+                const fullWidthChildren = childInfos.filter(c => c.w >= parentW * 0.95);
+                const narrowChildren = childInfos.filter(c => c.w < parentW * 0.95 && !c.isVisual);
+                // Full-width children: x=0
+                for (const ci of fullWidthChildren) {
+                  if (ci.x !== 0) {
+                    const oldX = ci.x;
+                    ci.node.x = 0;
+                    ci.x = 0;
+                    phase0Count++;
+                    phase0Changes.push(`"${ci.name}": x ${oldX}->0 (full-width align)`);
+                    console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${oldX}->0 (full-width align)`);
+                  }
+                }
+                // Narrow same-named children: already handled above in sibling consistency
+
+                // --- Vertical re-stacking with consistent gaps ---
+                // Sort children by y, calculate a target gap, and compact ALL gaps
+                const sorted = [...childInfos].sort((a, b) => a.y - b.y);
+                if (sorted.length >= 2) {
+                  // Calculate gaps between consecutive children
+                  const rawGaps: number[] = [];
+                  for (let i = 1; i < sorted.length; i++) {
+                    const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
+                    rawGaps.push(gap);
+                  }
+
+                  // Determine target gap: use the median of small-to-medium gaps (8-40px range)
+                  const reasonableGaps = rawGaps.filter(g => g >= 0 && g <= 40).sort((a, b) => a - b);
+                  let targetGap: number;
+                  if (reasonableGaps.length >= 2) {
+                    targetGap = reasonableGaps[Math.floor(reasonableGaps.length / 2)];
+                  } else if (reasonableGaps.length === 1) {
+                    targetGap = reasonableGaps[0];
+                  } else {
+                    targetGap = 8; // default: 8px gap
+                  }
+                  // Clamp target gap to 0-24px range
+                  targetGap = Math.max(0, Math.min(targetGap, 24));
+
+                  // Check if ANY gap is excessively different from the target
+                  const hasExcessiveGap = rawGaps.some(g => g > targetGap * 2.5 || g > 40);
+                  const hasNegativeGap = rawGaps.some(g => g < -2);
+                  const hasInconsistentGaps = rawGaps.length >= 2 && (Math.max(...rawGaps) - Math.min(...rawGaps) > 30);
+
+                  if (hasExcessiveGap || hasNegativeGap || hasInconsistentGaps) {
+                    // Re-stack: place each child immediately after the previous one with targetGap
+                    let currentY = sorted[0].y; // Keep the first child's position
+                    for (let i = 1; i < sorted.length; i++) {
+                      const prevBottom = currentY + sorted[i - 1].h;
+                      const idealY = prevBottom + targetGap;
+                      const actualY = sorted[i].y;
+                      const delta = Math.abs(actualY - idealY);
+                      // Only move if the difference is meaningful (>4px)
+                      if (delta > 4) {
+                        sorted[i].node.y = idealY;
                         phase0Count++;
-                        phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
-                        console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
+                        phase0Changes.push(`"${sorted[i].name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
+                        console.log(`[Cleanup Phase0b] "${sorted[i].name}" in "${parent.name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
+                        sorted[i].y = idealY;
                       }
+                      currentY = sorted[i].y;
                     }
-                    if (totalShift > 0) {
-                      sorted[gapInfo.index].node.y = sorted[gapInfo.index].y - totalShift;
+
+                    // Shrink parent height to fit re-stacked content + bottom padding
+                    const lastChild = sorted[sorted.length - 1];
+                    const contentBottom = lastChild.y + lastChild.h;
+                    const bottomPad = Math.max(targetGap, 8); // at least 8px bottom padding
+                    const idealHeight = contentBottom + bottomPad;
+                    if (Math.abs(parent.height - idealHeight) > 10) {
+                      const oldH = Math.round(parent.height);
+                      try {
+                        parent.resize(parentW, idealHeight);
+                        phase0Count++;
+                        phase0Changes.push(`"${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
+                        console.log(`[Cleanup Phase0b] "${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
+                      } catch (_e) {}
                     }
                   }
                 }
@@ -10392,31 +10457,41 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   });
 
                   // Anti-oscillation: reject any property change that reverts to a previously-seen value
-                  let oscillatingProps: string[] = [];
-                  if (s.paddingTop !== undefined && isOscillating(s.id, 'paddingTop', s.paddingTop, before.pT)) {
-                    oscillatingProps.push(`padTop ${before.pT}→${s.paddingTop}`); delete s.paddingTop;
+                  // Also silently strip no-op changes (same value) without logging
+                  const oscillatingProps: string[] = [];
+                  if (s.paddingTop !== undefined) {
+                    if (s.paddingTop === before.pT) { delete s.paddingTop; }
+                    else if (isOscillating(s.id, 'paddingTop', s.paddingTop, before.pT)) {
+                      oscillatingProps.push(`padTop ${before.pT}→${s.paddingTop}`); delete s.paddingTop;
+                    }
                   }
-                  if (s.paddingRight !== undefined && isOscillating(s.id, 'paddingRight', s.paddingRight, before.pR)) {
-                    oscillatingProps.push(`padRight ${before.pR}→${s.paddingRight}`); delete s.paddingRight;
+                  if (s.paddingRight !== undefined) {
+                    if (s.paddingRight === before.pR) { delete s.paddingRight; }
+                    else if (isOscillating(s.id, 'paddingRight', s.paddingRight, before.pR)) {
+                      oscillatingProps.push(`padRight ${before.pR}→${s.paddingRight}`); delete s.paddingRight;
+                    }
                   }
-                  if (s.paddingBottom !== undefined && isOscillating(s.id, 'paddingBottom', s.paddingBottom, before.pB)) {
-                    oscillatingProps.push(`padBot ${before.pB}→${s.paddingBottom}`); delete s.paddingBottom;
+                  if (s.paddingBottom !== undefined) {
+                    if (s.paddingBottom === before.pB) { delete s.paddingBottom; }
+                    else if (isOscillating(s.id, 'paddingBottom', s.paddingBottom, before.pB)) {
+                      oscillatingProps.push(`padBot ${before.pB}→${s.paddingBottom}`); delete s.paddingBottom;
+                    }
                   }
-                  if (s.paddingLeft !== undefined && isOscillating(s.id, 'paddingLeft', s.paddingLeft, before.pL)) {
-                    oscillatingProps.push(`padLeft ${before.pL}→${s.paddingLeft}`); delete s.paddingLeft;
+                  if (s.paddingLeft !== undefined) {
+                    if (s.paddingLeft === before.pL) { delete s.paddingLeft; }
+                    else if (isOscillating(s.id, 'paddingLeft', s.paddingLeft, before.pL)) {
+                      oscillatingProps.push(`padLeft ${before.pL}→${s.paddingLeft}`); delete s.paddingLeft;
+                    }
                   }
-                  if (s.itemSpacing !== undefined && isOscillating(s.id, 'itemSpacing', s.itemSpacing, before.iS)) {
-                    oscillatingProps.push(`spacing ${before.iS}→${s.itemSpacing}`); delete s.itemSpacing;
+                  if (s.itemSpacing !== undefined) {
+                    if (s.itemSpacing === before.iS) { delete s.itemSpacing; }
+                    else if (isOscillating(s.id, 'itemSpacing', s.itemSpacing, before.iS)) {
+                      oscillatingProps.push(`spacing ${before.iS}→${s.itemSpacing}`); delete s.itemSpacing;
+                    }
                   }
                   if (oscillatingProps.length > 0) {
                     console.log(`[${passLabel}] Blocked oscillation on "${frame.name}": ${oscillatingProps.join(', ')}`);
                   }
-                  // If all proposed changes were oscillating, skip this frame entirely
-                  const hasRemainingChange = s.paddingTop !== undefined || s.paddingRight !== undefined ||
-                    s.paddingBottom !== undefined || s.paddingLeft !== undefined || s.itemSpacing !== undefined ||
-                    s.sizingH !== undefined || s.sizingV !== undefined || s.clipsContent !== undefined ||
-                    s.counterAxisSpacing !== undefined;
-                  if (!hasRemainingChange) continue;
 
                   if (s.paddingTop !== undefined) frame.paddingTop = s.paddingTop;
                   if (s.paddingRight !== undefined) frame.paddingRight = s.paddingRight;
@@ -10570,7 +10645,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
             }
             function isOscillating(frameId: string, prop: string, newVal: number, currentVal: number): boolean {
-              if (newVal === currentVal) return true; // no-op
+              if (newVal === currentVal) return true; // no-op, don't apply or log
               const propMap = frameValueHistory.get(frameId);
               if (!propMap) return false;
               const history = propMap.get(prop);

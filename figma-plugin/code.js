@@ -7537,31 +7537,85 @@ Respond with ONLY a JSON array, no markdown:
                       }
                     }
                   }
-                  const sorted = [...childInfos].sort((a, b) => a.y - b.y);
-                  const gaps = [];
-                  for (let i = 1; i < sorted.length; i++) {
-                    const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
-                    gaps.push({ index: i, gap });
-                  }
-                  if (gaps.length >= 1) {
-                    const positiveGaps = gaps.map((g) => g.gap).filter((g) => g > 0).sort((a, b) => a - b);
-                    const medianGap = positiveGaps.length >= 2 ? positiveGaps[Math.floor(positiveGaps.length / 2)] : 16;
-                    const maxAllowedGap = Math.max(medianGap * 2.5, 40);
-                    let totalShift = 0;
-                    for (let i = 0; i < gaps.length; i++) {
-                      const gapInfo = gaps[i];
-                      if (gapInfo.gap > maxAllowedGap) {
-                        const targetGap = Math.max(medianGap, 16);
-                        const reduction = gapInfo.gap - targetGap;
-                        if (reduction > 8) {
-                          totalShift += reduction;
-                          phase0Count++;
-                          phase0Changes.push(`gap above "${sorted[gapInfo.index].name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
-                          console.log(`[Cleanup Phase0b] gap above "${sorted[gapInfo.index].name}" in "${parent.name}": ${gapInfo.gap}->${gapInfo.gap - reduction}px`);
-                        }
+                  const widthMargin = 0;
+                  for (const ci of childInfos) {
+                    if (ci.isVisual) continue;
+                    if (ci.w >= parentW * 0.85 && ci.w < parentW) {
+                      const oldW = ci.w;
+                      const newW = parentW - widthMargin;
+                      try {
+                        ci.node.resize(newW, ci.h);
+                        ci.w = newW;
+                        ci.node.x = widthMargin / 2;
+                        ci.x = widthMargin / 2;
+                        phase0Count++;
+                        phase0Changes.push(`"${ci.name}": w ${oldW}->${newW} (snap to parent width)`);
+                        console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": w ${oldW}->${newW} (snap to parent width)`);
+                      } catch (_e) {
                       }
-                      if (totalShift > 0) {
-                        sorted[gapInfo.index].node.y = sorted[gapInfo.index].y - totalShift;
+                    }
+                  }
+                  const fullWidthChildren = childInfos.filter((c) => c.w >= parentW * 0.95);
+                  const narrowChildren = childInfos.filter((c) => c.w < parentW * 0.95 && !c.isVisual);
+                  for (const ci of fullWidthChildren) {
+                    if (ci.x !== 0) {
+                      const oldX = ci.x;
+                      ci.node.x = 0;
+                      ci.x = 0;
+                      phase0Count++;
+                      phase0Changes.push(`"${ci.name}": x ${oldX}->0 (full-width align)`);
+                      console.log(`[Cleanup Phase0b] "${ci.name}" in "${parent.name}": x ${oldX}->0 (full-width align)`);
+                    }
+                  }
+                  const sorted = [...childInfos].sort((a, b) => a.y - b.y);
+                  if (sorted.length >= 2) {
+                    const rawGaps = [];
+                    for (let i = 1; i < sorted.length; i++) {
+                      const gap = sorted[i].y - (sorted[i - 1].y + sorted[i - 1].h);
+                      rawGaps.push(gap);
+                    }
+                    const reasonableGaps = rawGaps.filter((g) => g >= 0 && g <= 40).sort((a, b) => a - b);
+                    let targetGap;
+                    if (reasonableGaps.length >= 2) {
+                      targetGap = reasonableGaps[Math.floor(reasonableGaps.length / 2)];
+                    } else if (reasonableGaps.length === 1) {
+                      targetGap = reasonableGaps[0];
+                    } else {
+                      targetGap = 8;
+                    }
+                    targetGap = Math.max(0, Math.min(targetGap, 24));
+                    const hasExcessiveGap = rawGaps.some((g) => g > targetGap * 2.5 || g > 40);
+                    const hasNegativeGap = rawGaps.some((g) => g < -2);
+                    const hasInconsistentGaps = rawGaps.length >= 2 && Math.max(...rawGaps) - Math.min(...rawGaps) > 30;
+                    if (hasExcessiveGap || hasNegativeGap || hasInconsistentGaps) {
+                      let currentY = sorted[0].y;
+                      for (let i = 1; i < sorted.length; i++) {
+                        const prevBottom = currentY + sorted[i - 1].h;
+                        const idealY = prevBottom + targetGap;
+                        const actualY = sorted[i].y;
+                        const delta = Math.abs(actualY - idealY);
+                        if (delta > 4) {
+                          sorted[i].node.y = idealY;
+                          phase0Count++;
+                          phase0Changes.push(`"${sorted[i].name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
+                          console.log(`[Cleanup Phase0b] "${sorted[i].name}" in "${parent.name}": y ${actualY}->${Math.round(idealY)} (re-stack, gap=${targetGap}px)`);
+                          sorted[i].y = idealY;
+                        }
+                        currentY = sorted[i].y;
+                      }
+                      const lastChild = sorted[sorted.length - 1];
+                      const contentBottom = lastChild.y + lastChild.h;
+                      const bottomPad = Math.max(targetGap, 8);
+                      const idealHeight = contentBottom + bottomPad;
+                      if (Math.abs(parent.height - idealHeight) > 10) {
+                        const oldH = Math.round(parent.height);
+                        try {
+                          parent.resize(parentW, idealHeight);
+                          phase0Count++;
+                          phase0Changes.push(`"${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
+                          console.log(`[Cleanup Phase0b] "${parent.name}": h ${oldH}->${Math.round(idealHeight)} (shrink to fit)`);
+                        } catch (_e) {
+                        }
                       }
                     }
                   }
@@ -7834,32 +7888,50 @@ Respond with ONLY a JSON array, no markdown:
                       paddingLeft: before.pL,
                       itemSpacing: before.iS
                     });
-                    let oscillatingProps = [];
-                    if (s.paddingTop !== void 0 && isOscillating2(s.id, "paddingTop", s.paddingTop, before.pT)) {
-                      oscillatingProps.push(`padTop ${before.pT}\u2192${s.paddingTop}`);
-                      delete s.paddingTop;
+                    const oscillatingProps = [];
+                    if (s.paddingTop !== void 0) {
+                      if (s.paddingTop === before.pT) {
+                        delete s.paddingTop;
+                      } else if (isOscillating2(s.id, "paddingTop", s.paddingTop, before.pT)) {
+                        oscillatingProps.push(`padTop ${before.pT}\u2192${s.paddingTop}`);
+                        delete s.paddingTop;
+                      }
                     }
-                    if (s.paddingRight !== void 0 && isOscillating2(s.id, "paddingRight", s.paddingRight, before.pR)) {
-                      oscillatingProps.push(`padRight ${before.pR}\u2192${s.paddingRight}`);
-                      delete s.paddingRight;
+                    if (s.paddingRight !== void 0) {
+                      if (s.paddingRight === before.pR) {
+                        delete s.paddingRight;
+                      } else if (isOscillating2(s.id, "paddingRight", s.paddingRight, before.pR)) {
+                        oscillatingProps.push(`padRight ${before.pR}\u2192${s.paddingRight}`);
+                        delete s.paddingRight;
+                      }
                     }
-                    if (s.paddingBottom !== void 0 && isOscillating2(s.id, "paddingBottom", s.paddingBottom, before.pB)) {
-                      oscillatingProps.push(`padBot ${before.pB}\u2192${s.paddingBottom}`);
-                      delete s.paddingBottom;
+                    if (s.paddingBottom !== void 0) {
+                      if (s.paddingBottom === before.pB) {
+                        delete s.paddingBottom;
+                      } else if (isOscillating2(s.id, "paddingBottom", s.paddingBottom, before.pB)) {
+                        oscillatingProps.push(`padBot ${before.pB}\u2192${s.paddingBottom}`);
+                        delete s.paddingBottom;
+                      }
                     }
-                    if (s.paddingLeft !== void 0 && isOscillating2(s.id, "paddingLeft", s.paddingLeft, before.pL)) {
-                      oscillatingProps.push(`padLeft ${before.pL}\u2192${s.paddingLeft}`);
-                      delete s.paddingLeft;
+                    if (s.paddingLeft !== void 0) {
+                      if (s.paddingLeft === before.pL) {
+                        delete s.paddingLeft;
+                      } else if (isOscillating2(s.id, "paddingLeft", s.paddingLeft, before.pL)) {
+                        oscillatingProps.push(`padLeft ${before.pL}\u2192${s.paddingLeft}`);
+                        delete s.paddingLeft;
+                      }
                     }
-                    if (s.itemSpacing !== void 0 && isOscillating2(s.id, "itemSpacing", s.itemSpacing, before.iS)) {
-                      oscillatingProps.push(`spacing ${before.iS}\u2192${s.itemSpacing}`);
-                      delete s.itemSpacing;
+                    if (s.itemSpacing !== void 0) {
+                      if (s.itemSpacing === before.iS) {
+                        delete s.itemSpacing;
+                      } else if (isOscillating2(s.id, "itemSpacing", s.itemSpacing, before.iS)) {
+                        oscillatingProps.push(`spacing ${before.iS}\u2192${s.itemSpacing}`);
+                        delete s.itemSpacing;
+                      }
                     }
                     if (oscillatingProps.length > 0) {
                       console.log(`[${passLabel}] Blocked oscillation on "${frame.name}": ${oscillatingProps.join(", ")}`);
                     }
-                    const hasRemainingChange = s.paddingTop !== void 0 || s.paddingRight !== void 0 || s.paddingBottom !== void 0 || s.paddingLeft !== void 0 || s.itemSpacing !== void 0 || s.sizingH !== void 0 || s.sizingV !== void 0 || s.clipsContent !== void 0 || s.counterAxisSpacing !== void 0;
-                    if (!hasRemainingChange) continue;
                     if (s.paddingTop !== void 0) frame.paddingTop = s.paddingTop;
                     if (s.paddingRight !== void 0) frame.paddingRight = s.paddingRight;
                     if (s.paddingBottom !== void 0) frame.paddingBottom = s.paddingBottom;
