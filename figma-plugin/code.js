@@ -72,7 +72,7 @@
   }
   var _nextPlaceX = null;
   var MIN_WIDTH = 340;
-  var MIN_HEIGHT = 280;
+  var MIN_HEIGHT = 210;
   figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
   clearAuditBadges();
   function sendToUI(msg) {
@@ -86,6 +86,215 @@
     if (Array.isArray(snap.children)) {
       for (const child of snap.children) assignTempIds(child);
     }
+  }
+  function buildDSSummary(designSystem) {
+    const fillStyles = designSystem.fillStyles || [];
+    const textStyles = designSystem.textStyles || [];
+    function findFill(patterns) {
+      for (const pat of patterns) {
+        const match = fillStyles.find((s) => pat.test(s.name.toLowerCase()) && s.hex);
+        if (match) return { hex: match.hex, styleName: match.name };
+      }
+      return void 0;
+    }
+    const surfaces = {
+      background: findFill([/background/, /surface.*primary/, /bg\b/]),
+      surface: findFill([/\bsurface\b(?!.*container)(?!.*variant)/i, /card.*bg/, /panel/]),
+      surfaceContainer: findFill([/surface.*container/, /surface.*variant/, /control.*secondary/, /fill.*secondary/])
+    };
+    const text = {
+      primary: findFill([/text.*primary/, /on.*surface.*primary/, /label.*primary/, /foreground/]),
+      secondary: findFill([/text.*secondary/, /on.*surface.*secondary/, /label.*secondary/, /text.*subtle/])
+    };
+    const brand = {
+      primary: findFill([/(?:^|\/)primary(?!.*on)/, /brand.*primary/, /accent(?!.*on)/]),
+      secondary: findFill([/(?:^|\/)secondary(?!.*on)/, /brand.*secondary/]),
+      accent: findFill([/accent/, /highlight/]),
+      onPrimary: findFill([/on.*primary/, /primary.*text/, /primary.*foreground/])
+    };
+    const radiiSet = /* @__PURE__ */ new Set();
+    try {
+      for (const child of figma.currentPage.children) {
+        if ("cornerRadius" in child && typeof child.cornerRadius === "number") {
+          radiiSet.add(child.cornerRadius);
+        }
+      }
+    } catch (_) {
+    }
+    const radiiArr = [...radiiSet].filter((r) => r > 0).sort((a, b) => a - b);
+    const radii = {
+      small: radiiArr[0] || 4,
+      medium: radiiArr[Math.floor(radiiArr.length / 2)] || 8,
+      pill: radiiArr[radiiArr.length - 1] || 999
+    };
+    const shadow = {
+      type: "DROP_SHADOW",
+      radius: 8,
+      spread: 0,
+      offsetX: 0,
+      offsetY: 2,
+      color: { r: 0, g: 0, b: 0, a: 0.08 }
+    };
+    const spacingSet = /* @__PURE__ */ new Set();
+    [4, 8, 12, 16, 24, 32, 48].forEach((v) => spacingSet.add(v));
+    try {
+      for (const child of figma.currentPage.children) {
+        if ("itemSpacing" in child && typeof child.itemSpacing === "number") {
+          const s = child.itemSpacing;
+          if (s > 0 && s <= 64) spacingSet.add(s);
+        }
+      }
+    } catch (_) {
+    }
+    const spacingScale = [...spacingSet].sort((a, b) => a - b);
+    const typeRoles = {};
+    const rolePatterns = [
+      ["headline", [/headline|display/i]],
+      ["title", [/title|heading/i]],
+      ["body", [/body/i]],
+      ["label", [/label|button/i]],
+      ["caption", [/caption|small|footnote/i]]
+    ];
+    for (const [role, patterns] of rolePatterns) {
+      for (const pat of patterns) {
+        const match = textStyles.find((s) => pat.test(s.name));
+        if (match) {
+          typeRoles[role] = match.name;
+          break;
+        }
+      }
+    }
+    if (Object.keys(typeRoles).length === 0 && textStyles.length > 0) {
+      const sorted = [...textStyles].sort((a, b) => (b.fontSize || 0) - (a.fontSize || 0));
+      if (sorted[0]) typeRoles["headline"] = sorted[0].name;
+      if (sorted[1]) typeRoles["title"] = sorted[1].name;
+      if (sorted[Math.floor(sorted.length / 2)]) typeRoles["body"] = sorted[Math.floor(sorted.length / 2)].name;
+      if (sorted[sorted.length - 1]) typeRoles["caption"] = sorted[sorted.length - 1].name;
+    }
+    const blockedStyles = [];
+    const blockedPattern = /states|focused|pressed|selected|hover|disabled|dragged|active/i;
+    for (const s of fillStyles) {
+      if (blockedPattern.test(s.name)) {
+        blockedStyles.push(s.name);
+      }
+    }
+    const summary = { surfaces, text, brand, radii, shadow, spacingScale, typeRoles, blockedStyles };
+    console.log(`[buildDSSummary] Built summary: ${Object.keys(typeRoles).length} typeRoles, ${blockedStyles.length} blocked styles, ${spacingScale.length} spacing values`);
+    return summary;
+  }
+  function lintGeneratedSnapshot(snap, dsSummary) {
+    let fixes = 0;
+    function nearestInScale(value, scale) {
+      if (scale.length === 0) return value;
+      let closest = scale[0];
+      let minDist = Math.abs(value - closest);
+      for (const s of scale) {
+        const dist = Math.abs(value - s);
+        if (dist < minDist) {
+          closest = s;
+          minDist = dist;
+        }
+      }
+      return closest;
+    }
+    function snapToRadii(value) {
+      const { small, medium, pill } = dsSummary.radii;
+      const allowed = [0, small, medium, pill];
+      return nearestInScale(value, allowed);
+    }
+    const textStyleCounts = /* @__PURE__ */ new Map();
+    function walk(node) {
+      var _a;
+      if (!node) return;
+      if (node.fillStyleName && dsSummary.blockedStyles.length > 0) {
+        const lower = node.fillStyleName.toLowerCase();
+        const isBlocked = dsSummary.blockedStyles.some((bs) => lower.includes(bs.toLowerCase()) || /states|focused|pressed|selected|hover|disabled/i.test(lower));
+        if (isBlocked) {
+          const fallback = dsSummary.surfaces.surfaceContainer || dsSummary.surfaces.surface || dsSummary.surfaces.background;
+          if (fallback) {
+            console.log(`[lint] Blocked state style "${node.fillStyleName}" on "${node.name}" \u2192 remapped to "${fallback.styleName}"`);
+            node.fillStyleName = fallback.styleName;
+            node.fillColor = fallback.hex;
+            fixes++;
+          }
+        }
+      }
+      const spacingProps = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "itemSpacing", "counterAxisSpacing"];
+      for (const prop of spacingProps) {
+        if (typeof node[prop] === "number" && node[prop] > 0) {
+          const snapped = nearestInScale(node[prop], dsSummary.spacingScale);
+          if (snapped !== node[prop]) {
+            console.log(`[lint] Snapped ${prop} on "${node.name}": ${node[prop]} \u2192 ${snapped}`);
+            node[prop] = snapped;
+            fixes++;
+          }
+        }
+      }
+      if (typeof node.cornerRadius === "number" && node.cornerRadius > 0) {
+        const snapped = snapToRadii(node.cornerRadius);
+        if (snapped !== node.cornerRadius) {
+          console.log(`[lint] Snapped cornerRadius on "${node.name}": ${node.cornerRadius} \u2192 ${snapped}`);
+          node.cornerRadius = snapped;
+          fixes++;
+        }
+      }
+      if (node.type === "FRAME" && ((_a = node.children) == null ? void 0 : _a.length) > 0) {
+        const hasTextChild = node.children.some((c) => c.type === "TEXT");
+        const looksLikeButton = hasTextChild && node.children.length <= 3 && (node.cornerRadius > 0 || node.fillColor);
+        if (looksLikeButton && typeof node.height === "number" && node.height < 44) {
+          console.log(`[lint] Enforced min touch target on "${node.name}": height ${node.height} \u2192 44`);
+          node.height = 44;
+          if ((node.paddingTop || 0) < 8) {
+            node.paddingTop = 10;
+          }
+          if ((node.paddingBottom || 0) < 8) {
+            node.paddingBottom = 10;
+          }
+          fixes++;
+        }
+      }
+      if (!node._lintedRoot) {
+        node._lintedRoot = true;
+        if (node.type === "FRAME" && typeof node.width === "number") {
+          if (node.width > 300 && node.width < 500 && node.width !== 390) {
+            console.log(`[lint] Corrected mobile root width: ${node.width} \u2192 390`);
+            node.width = 390;
+            fixes++;
+          } else if (node.width > 1200 && node.width < 1600 && node.width !== 1440) {
+            console.log(`[lint] Corrected desktop root width: ${node.width} \u2192 1440`);
+            node.width = 1440;
+            fixes++;
+          }
+        }
+      }
+      if (node.type === "TEXT" && node.textStyleName) {
+        textStyleCounts.set(node.textStyleName, (textStyleCounts.get(node.textStyleName) || 0) + 1);
+      }
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) walk(child);
+      }
+    }
+    walk(snap);
+    if (textStyleCounts.size > 6 && Object.keys(dsSummary.typeRoles).length > 0) {
+      let capStyles2 = function(node) {
+        if (node.type === "TEXT" && node.textStyleName && !keepSet.has(node.textStyleName)) {
+          console.log(`[lint] Capped text style on "${node.name}": "${node.textStyleName}" \u2192 "${bodyStyle}"`);
+          node.textStyleName = bodyStyle;
+          fixes++;
+        }
+        if (Array.isArray(node.children)) {
+          for (const child of node.children) capStyles2(child);
+        }
+      };
+      var capStyles = capStyles2;
+      const sorted = [...textStyleCounts.entries()].sort((a, b) => b[1] - a[1]);
+      const keepSet = new Set(sorted.slice(0, 6).map((e) => e[0]));
+      const bodyStyle = dsSummary.typeRoles["body"] || sorted[Math.floor(sorted.length / 2)][0];
+      capStyles2(snap);
+    }
+    delete snap._lintedRoot;
+    console.log(`[lint] Total fixes applied: ${fixes}`);
+    return fixes;
   }
   async function extractStyleTokens(userPrompt) {
     const hasFreshRawCache = _rawTokenCache && Date.now() - _rawTokenCache.ts < CACHE_TTL_MS;
@@ -2456,7 +2665,7 @@
     _fullDesignSystem = fullDS;
     return fullDS;
   }
-  function buildDSSummary(ds) {
+  function buildDSUISummary(ds) {
     var _a, _b, _c, _d;
     const paintStyleColors = ds.colorPalette.filter((c) => c.source === "paintStyle").length;
     const variableColors = ds.colorPalette.filter((c) => {
@@ -2588,7 +2797,7 @@
       }
       sendToUI({
         type: "extract-ds-cached",
-        summary: buildDSSummary(parsed),
+        summary: buildDSUISummary(parsed),
         extractedAt: parsed.extractedAt,
         stale: isStale
       });
@@ -5816,6 +6025,8 @@ RULES:
       console.log(`[job ${job.id}] Extracting design system...`);
       const designSystem = await extractDesignSystemSnapshot();
       console.log(`[job ${job.id}] Design system extracted.`);
+      const dsSummary = buildDSSummary(designSystem);
+      console.log(`[job ${job.id}] DS summary built:`, JSON.stringify(dsSummary).slice(0, 500));
       await yieldToUI();
       if (job.cancelled) {
         sendToUI({ type: "job-cancelled", jobId: job.id });
@@ -5849,6 +6060,7 @@ RULES:
         prompt,
         styleTokens,
         designSystem: trimmedDesignSystem,
+        dsSummary,
         selection: truncatedSelection,
         apiKey: _userApiKey,
         provider: _selectedProvider,
@@ -5878,6 +6090,13 @@ RULES:
         return;
       }
       console.log(`[job ${job.id}] Snapshot received:`, snapshot.name, snapshot.type);
+      console.log(`[job ${job.id}] === FULL SNAPSHOT JSON ===`);
+      console.log(JSON.stringify(snapshot, null, 2));
+      console.log(`[job ${job.id}] === END SNAPSHOT JSON ===`);
+      const lintFixes = lintGeneratedSnapshot(snapshot, dsSummary);
+      if (lintFixes > 0) {
+        console.log(`[job ${job.id}] Lint pass applied ${lintFixes} fixes`);
+      }
       if (job.cancelled) {
         sendToUI({ type: "job-cancelled", jobId: job.id });
         return;
@@ -6082,7 +6301,7 @@ RULES:
     }
   }
   figma.ui.onmessage = async (msg) => {
-    var _a, _b;
+    var _a, _b, _c, _d;
     try {
       switch (msg.type) {
         // ── UI ready handshake ────────────────────────────────
@@ -6296,6 +6515,71 @@ RULES:
           figma.notify("Audit badges cleared.", { timeout: 2e3 });
           break;
         }
+        // ── Layout Audit ──────────────────────────────────────
+        case "audit-layout": {
+          try {
+            sendToUI({ type: "status", message: "Extracting layout data\u2026" });
+            sendToUI({ type: "layout-audit-phase", phase: "extracting" });
+            const sel = figma.currentPage.selection;
+            if (sel.length === 0) {
+              sendToUI({ type: "layout-audit-error", error: "Please select a frame to audit." });
+              break;
+            }
+            const selSnapshot = extractSelectionSnapshot();
+            if (!_userApiKey) {
+              sendToUI({ type: "layout-audit-error", error: "No API key configured. Go to Settings to add one." });
+              break;
+            }
+            let imageBase64;
+            try {
+              const targetNode = sel[0];
+              if ("exportAsync" in targetNode) {
+                sendToUI({ type: "status", message: "Capturing screenshot\u2026" });
+                const pngBytes = await targetNode.exportAsync({
+                  format: "PNG",
+                  constraint: { type: "WIDTH", value: Math.min(1200, Math.round(targetNode.width * 2)) }
+                });
+                imageBase64 = uint8ToBase64(pngBytes);
+                console.log(`[layout-audit] Captured screenshot: ${imageBase64.length} chars base64`);
+              }
+            } catch (imgErr) {
+              console.warn("[layout-audit] Screenshot capture failed, continuing without:", imgErr.message);
+            }
+            sendToUI({ type: "layout-audit-phase", phase: "analyzing" });
+            sendToUI({ type: "status", message: "Analyzing layout with AI\u2026" });
+            const auditBody = {
+              selection: selSnapshot,
+              apiKey: _userApiKey,
+              provider: _selectedProvider,
+              model: _selectedModel,
+              imageBase64
+            };
+            const result = await fetchViaUI("/layout-audit", auditBody);
+            console.log("[layout-audit] Result:", JSON.stringify(result).slice(0, 500));
+            const rootNode = sel[0];
+            const rootY = "absoluteTransform" in rootNode ? rootNode.absoluteTransform[1][2] : 0;
+            if (result && Array.isArray(result.issues)) {
+              for (const issue of result.issues) {
+                if (issue.nodeId) {
+                  try {
+                    const node = figma.getNodeById(issue.nodeId);
+                    if (node && "absoluteTransform" in node) {
+                      issue.nodeY = Math.round(node.absoluteTransform[1][2] - rootY);
+                    }
+                  } catch (_) {
+                  }
+                }
+              }
+            }
+            sendToUI({ type: "layout-audit-results", data: result });
+            const issueCount = ((_a = result == null ? void 0 : result.issues) == null ? void 0 : _a.length) || 0;
+            figma.notify(`Layout audit: ${issueCount} issue(s) found.`, { timeout: 4e3 });
+          } catch (err) {
+            console.error("[layout-audit] Error:", err);
+            sendToUI({ type: "layout-audit-error", error: err.message || "Layout audit failed." });
+          }
+          break;
+        }
         // ── Fix Single Finding ────────────────────────────────
         case "fix-finding": {
           const finding = msg.finding;
@@ -6454,6 +6738,21 @@ RULES:
         }
         // ── Run (plan + apply in one step) ─────────────────────
         case "run": {
+          const targetNodeId = msg.targetNodeId;
+          const isAuditFix = !!msg.isAuditFix;
+          if (targetNodeId) {
+            const targetNode = figma.getNodeById(targetNodeId);
+            if (targetNode) {
+              if (isAuditFix && targetNode.parent && targetNode.parent.type !== "PAGE") {
+                const parentNode = targetNode.parent;
+                figma.currentPage.selection = [parentNode];
+                figma.viewport.scrollAndZoomIntoView([parentNode]);
+              } else {
+                figma.currentPage.selection = [targetNode];
+                figma.viewport.scrollAndZoomIntoView([targetNode]);
+              }
+            }
+          }
           const intentText = msg.intent || "";
           const intentLower = intentText.toLowerCase();
           const hasVariantKeyword = /\bvariants?\b/i.test(intentText) || /\bstates?\b/i.test(intentText);
@@ -6467,6 +6766,20 @@ RULES:
           const isFlattenIntent = /\b(flatten)\b.+\b(selection|selected|these|nodes?|layers?|elements?)\b/i.test(intentText) || /\bflatten\s+(this|it)\b/i.test(intentText);
           const isAutoLayoutIntent = /\bauto[\s-]?layout\b/i.test(intentText) || /\b(add|apply|set|enable|convert|turn\s+on)\b/i.test(intentText) && /\b(layout|auto[\s-]?layout)\b/i.test(intentText);
           const isCleanupIntent = /\b(clean\s*up|cleanup|tidy\s*(up)?|neaten|straighten)\b/i.test(intentText) || /\b(consistent|normalize|standardize|even\s*out|fix|align|regularize)\b/i.test(intentText) && /\b(padding|margins?|spacing|gaps?|layout|alignment|indentation)\b/i.test(intentText);
+          if (isAuditFix) {
+            const selectionSnapshot = extractSelectionSnapshot();
+            const jobId2 = ++_nextJobId;
+            const job2 = { id: jobId2, cancelled: false };
+            _activeJobs.set(jobId2, job2);
+            sendToUI({ type: "job-started", jobId: jobId2, prompt: intentText });
+            runEditJob(job2, intentText, selectionSnapshot).catch((err) => {
+              if (!job2.cancelled) {
+                sendToUI({ type: "job-error", jobId: jobId2, error: `Fix failed: ${err.message}` });
+              }
+              _activeJobs.delete(jobId2);
+            });
+            break;
+          }
           if (isCreateComponentIntent) {
             const selection = figma.currentPage.selection;
             if (selection.length === 0) {
@@ -7257,8 +7570,8 @@ Respond with ONLY a JSON array, no markdown:
                 const frame = node;
                 const settings = settingsMap.get(frameInfo.id);
                 const dir = (settings == null ? void 0 : settings.direction) || "VERTICAL";
-                const spacing = (_a = settings == null ? void 0 : settings.spacing) != null ? _a : 0;
-                const pad = (_b = settings == null ? void 0 : settings.padding) != null ? _b : 0;
+                const spacing = (_b = settings == null ? void 0 : settings.spacing) != null ? _b : 0;
+                const pad = (_c = settings == null ? void 0 : settings.padding) != null ? _c : 0;
                 const align = (settings == null ? void 0 : settings.alignment) || "MIN";
                 const counterAlign = (settings == null ? void 0 : settings.counterAlignment) || "MIN";
                 const origWidth = frame.width;
@@ -7311,7 +7624,7 @@ Respond with ONLY a JSON array, no markdown:
             sendToUI({ type: "job-started", jobId: nativeJobIdCU, prompt: intentText });
             try {
               let collectCleanupFrames2 = function(node, list, depth, parentId, parentName, parentWidth, parentLayoutMode) {
-                var _a2, _b2, _c, _d, _e, _f, _g;
+                var _a2, _b2, _c2, _d2, _e, _f, _g;
                 if (node.type !== "FRAME") return;
                 if (depth > MAX_CU_DEPTH) return;
                 const f = node;
@@ -7342,8 +7655,8 @@ Respond with ONLY a JSON array, no markdown:
                   layoutMode: hasAutoLayout ? lm : "NONE",
                   paddingTop: (_a2 = f.paddingTop) != null ? _a2 : 0,
                   paddingRight: (_b2 = f.paddingRight) != null ? _b2 : 0,
-                  paddingBottom: (_c = f.paddingBottom) != null ? _c : 0,
-                  paddingLeft: (_d = f.paddingLeft) != null ? _d : 0,
+                  paddingBottom: (_c2 = f.paddingBottom) != null ? _c2 : 0,
+                  paddingLeft: (_d2 = f.paddingLeft) != null ? _d2 : 0,
                   itemSpacing: (_e = f.itemSpacing) != null ? _e : 0,
                   counterAxisSpacing: (_f = f.counterAxisSpacing) != null ? _f : 0,
                   primaryAxisAlign: f.primaryAxisAlignItems || "MIN",
@@ -7688,7 +8001,7 @@ Respond with ONLY a JSON array, no markdown:
                 }
                 return { lr, tb };
               }, buildFrameDescriptions2 = function(frames) {
-                var _a2, _b2, _c, _d, _e, _f, _g;
+                var _a2, _b2, _c2, _d2, _e, _f, _g;
                 for (const f of frames) {
                   const node = figma.getNodeById(f.id);
                   if (!node || node.type !== "FRAME") continue;
@@ -7697,8 +8010,8 @@ Respond with ONLY a JSON array, no markdown:
                   f.height = Math.round(fr.height);
                   f.paddingTop = (_a2 = fr.paddingTop) != null ? _a2 : 0;
                   f.paddingRight = (_b2 = fr.paddingRight) != null ? _b2 : 0;
-                  f.paddingBottom = (_c = fr.paddingBottom) != null ? _c : 0;
-                  f.paddingLeft = (_d = fr.paddingLeft) != null ? _d : 0;
+                  f.paddingBottom = (_c2 = fr.paddingBottom) != null ? _c2 : 0;
+                  f.paddingLeft = (_d2 = fr.paddingLeft) != null ? _d2 : 0;
                   f.itemSpacing = (_e = fr.itemSpacing) != null ? _e : 0;
                   f.counterAxisSpacing = (_f = fr.counterAxisSpacing) != null ? _f : 0;
                   f.primaryAxisAlign = fr.primaryAxisAlignItems || "MIN";
@@ -7818,7 +8131,7 @@ Respond with ONLY a JSON array, no markdown:
                   return desc;
                 }).join("\n");
               }, parseCleanupResponse2 = function(rawResult) {
-                var _a2, _b2, _c, _d;
+                var _a2, _b2, _c2, _d2;
                 let result = [];
                 if (Array.isArray(rawResult)) {
                   result = rawResult;
@@ -7862,7 +8175,7 @@ Respond with ONLY a JSON array, no markdown:
                     delete raw.paddingX;
                     delete raw.paddingHorizontal;
                   }
-                  const vPad = (_d = (_c = raw.paddingV) != null ? _c : raw.paddingY) != null ? _d : raw.paddingVertical;
+                  const vPad = (_d2 = (_c2 = raw.paddingV) != null ? _c2 : raw.paddingY) != null ? _d2 : raw.paddingVertical;
                   if (vPad !== void 0) {
                     if (s.paddingTop === void 0) s.paddingTop = vPad;
                     if (s.paddingBottom === void 0) s.paddingBottom = vPad;
@@ -7877,7 +8190,7 @@ Respond with ONLY a JSON array, no markdown:
                 }
                 return result;
               }, applyCleanupSettings2 = function(settings, frames, passLabel) {
-                var _a2, _b2, _c;
+                var _a2, _b2, _c2;
                 const frameDepthMap = /* @__PURE__ */ new Map();
                 for (const f of frames) frameDepthMap.set(f.id, f.depth);
                 const sorted = [...settings].sort(
@@ -8041,7 +8354,7 @@ Respond with ONLY a JSON array, no markdown:
                       pB: frame.paddingBottom,
                       pL: frame.paddingLeft,
                       iS: frame.itemSpacing,
-                      cS: (_c = frame.counterAxisSpacing) != null ? _c : 0,
+                      cS: (_c2 = frame.counterAxisSpacing) != null ? _c2 : 0,
                       align: frame.primaryAxisAlignItems || "MIN",
                       crossAlign: frame.counterAxisAlignItems || "MIN",
                       sizH: frame.layoutSizingHorizontal || "FIXED",
@@ -8685,6 +8998,55 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
                 figma.notify("No layout changes were needed.", { timeout: 3e3 });
                 sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No changes applied." });
               }
+              try {
+                sendToUI({ type: "status", message: "Running post-cleanup audit\u2026" });
+                sendToUI({ type: "layout-audit-phase", phase: "extracting" });
+                const auditSel = figma.currentPage.selection;
+                if (auditSel.length > 0 && _userApiKey) {
+                  const auditSnapshot = extractSelectionSnapshot();
+                  let auditImageBase64;
+                  try {
+                    const auditTarget = auditSel[0];
+                    if ("exportAsync" in auditTarget) {
+                      const auditPng = await auditTarget.exportAsync({
+                        format: "PNG",
+                        constraint: { type: "WIDTH", value: Math.min(1200, Math.round(auditTarget.width * 2)) }
+                      });
+                      auditImageBase64 = uint8ToBase64(auditPng);
+                    }
+                  } catch (_imgErr) {
+                  }
+                  sendToUI({ type: "layout-audit-phase", phase: "analyzing" });
+                  const auditBody = {
+                    selection: auditSnapshot,
+                    apiKey: _userApiKey,
+                    provider: _selectedProvider,
+                    model: _selectedModel,
+                    imageBase64: auditImageBase64
+                  };
+                  const auditResult = await fetchViaUI("/layout-audit", auditBody);
+                  const auditRootNode = auditSel[0];
+                  const auditRootY = "absoluteTransform" in auditRootNode ? auditRootNode.absoluteTransform[1][2] : 0;
+                  if (auditResult && Array.isArray(auditResult.issues)) {
+                    for (const issue of auditResult.issues) {
+                      if (issue.nodeId) {
+                        try {
+                          const node = figma.getNodeById(issue.nodeId);
+                          if (node && "absoluteTransform" in node) {
+                            issue.nodeY = Math.round(node.absoluteTransform[1][2] - auditRootY);
+                          }
+                        } catch (_) {
+                        }
+                      }
+                    }
+                  }
+                  const auditCount = ((_d = auditResult == null ? void 0 : auditResult.issues) == null ? void 0 : _d.length) || 0;
+                  sendToUI({ type: "layout-audit-results", data: auditResult, autoTriggered: true });
+                  sendToUI({ type: "status", message: `Cleanup done. Audit found ${auditCount} remaining issue${auditCount === 1 ? "" : "s"}.` });
+                }
+              } catch (auditErr) {
+                console.warn("[cleanup] Post-cleanup audit failed:", auditErr.message);
+              }
             } catch (err) {
               figma.notify(`Failed to clean up layout: ${err.message}`, { timeout: 4e3 });
               sendToUI({ type: "job-error", jobId: nativeJobIdCU, error: `Failed: ${err.message}` });
@@ -8966,7 +9328,7 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
             const ds = await extractFullDocumentDesignSystem();
             sendToUI({
               type: "extract-ds-complete",
-              summary: buildDSSummary(ds)
+              summary: buildDSUISummary(ds)
             });
             figma.notify(`Design system extracted: ${ds.colorPalette.length} colors, ${ds.components.length} components, ${ds.variables.length} variables`, { timeout: 4e3 });
           } catch (err) {

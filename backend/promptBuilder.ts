@@ -373,64 +373,84 @@ Return the operation batch JSON now.`;
 
 // ── Generation System Prompt ────────────────────────────────────────
 
-export const GENERATE_SYSTEM_PROMPT = `You are a Figma frame generator. Return ONLY valid JSON (no markdown, no prose).
+export const GENERATE_SYSTEM_PROMPT = `You are an expert UI designer generating production-quality Figma frames as JSON. Return ONLY valid JSON — no markdown, no prose, no explanation.
 
-Return a single NodeSnapshot object: a root FRAME with nested children. For component sets, return a root COMPONENT_SET containing COMPONENT children.
+═══ OUTPUT FORMAT ═══
+Return a single NodeSnapshot object: a root FRAME with nested children.
+For component sets, return a root COMPONENT_SET containing COMPONENT children.
 
-NodeSnapshot fields:
-- FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX" (NEVER use "STRETCH" — it is not valid), paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", fillStyleName:"StyleName", strokeColor:"#HEX", strokeWeight:number, strokeTopWeight:number, strokeRightWeight:number, strokeBottomWeight:number, strokeLeftWeight:number, cornerRadius, clipsContent, opacity, effects[], children[]
-- TEXT: name, type:"TEXT", characters, fontSize, fontFamily (use the font from style tokens), fontStyle:"Regular"|"Medium"|"Semi Bold"|"Bold", fillColor, fillStyleName:"StyleName", textStyleName:"StyleName", textAlignHorizontal:"LEFT"|"CENTER"|"RIGHT", textDecoration:"UNDERLINE"|"STRIKETHROUGH", layoutSizingHorizontal, layoutSizingVertical:"HUG"
-- RECTANGLE: name, type:"RECTANGLE", width, height, fillColor, fillStyleName:"StyleName", cornerRadius, layoutSizingHorizontal, layoutSizingVertical
-- COMPONENT: name, type:"COMPONENT" — same properties as FRAME. Used as a variant child inside COMPONENT_SET. The name MUST follow Figma variant naming: "Property1=Value1, Property2=Value2" (e.g. "State=Active", "State=Loading, Size=Large").
-- COMPONENT_SET: name, type:"COMPONENT_SET", children[] — container for COMPONENT variants. Children MUST all be type:"COMPONENT". The component set name is the component family name (e.g. "FileChip", "Button"). Do NOT set fillColor, strokeColor, or cornerRadius on the COMPONENT_SET itself — Figma renders component sets with a transparent background and dashed purple border automatically. Only set fills/strokes on the COMPONENT children inside.
-
-Style-by-Name fields (MANDATORY — not optional):
-- fillStyleName: Exact name of a local paint style (e.g. "Light/Primary", "Dark/Surface"). MUST be set on EVERY node that has a fillColor. The plugin uses this to bind the node to the design system.
-- textStyleName: Exact name of a local text style (e.g. "Body/Medium", "Heading/Large"). MUST be set on EVERY TEXT node. The plugin uses this to bind font/size/weight to the design system. Without textStyleName, text nodes will not match the design system typography.
+═══ NODE TYPES & FIELDS ═══
+FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX", paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", fillStyleName:"StyleName", strokeColor:"#HEX", strokeWeight, strokeTopWeight, strokeRightWeight, strokeBottomWeight, strokeLeftWeight, cornerRadius, clipsContent, opacity, effects[], children[]
+TEXT: name, type:"TEXT", characters, fontSize, fontFamily, fontStyle:"Regular"|"Medium"|"Semi Bold"|"Bold", fillColor, fillStyleName, textStyleName:"StyleName", textAlignHorizontal:"LEFT"|"CENTER"|"RIGHT", textDecoration:"UNDERLINE"|"STRIKETHROUGH", layoutSizingHorizontal, layoutSizingVertical:"HUG"
+RECTANGLE: name, type:"RECTANGLE", width, height, fillColor, fillStyleName, cornerRadius, layoutSizingHorizontal, layoutSizingVertical
+COMPONENT: name (MUST use "Property=Value" Figma variant syntax), type:"COMPONENT" — same fields as FRAME.
+COMPONENT_SET: name, type:"COMPONENT_SET", children[] of COMPONENTs only. Do NOT set fillColor/strokeColor on COMPONENT_SET itself.
 
 Effects: [{"type":"DROP_SHADOW","radius":8,"spread":0,"offset":{"x":0,"y":2},"color":{"r":0,"g":0,"b":0,"a":0.08}}]
 
-Rules:
-- MANDATORY STYLE BINDING (HIGHEST PRIORITY RULE): Every node that has a color MUST include fillStyleName. Every TEXT node MUST include textStyleName. These fields bind the node to the design system. Raw hex values alone are NOT acceptable — you MUST ALWAYS set the named style field. Example of a correct TEXT node:
-  {"type":"TEXT","characters":"Active","fontSize":14,"fontFamily":"Segoe UI Variable","fontStyle":"Regular","fillColor":"#000000","fillStyleName":"Light/Fill Color/Text/Secondary","textStyleName":"Live/Body/Small-Trimm"}
-  Example of a correct FRAME with fill:
-  {"type":"FRAME","fillColor":"#F9F9F9","fillStyleName":"Light/Fill Color/Control/Secondary"}
-  Example of a correct RECTANGLE (icon placeholder):
-  {"type":"RECTANGLE","width":14,"height":14,"fillColor":"#000000","fillStyleName":"Light/Fill Color/Text/Secondary"}
-  NEVER output a fillColor without a corresponding fillStyleName. NEVER output a TEXT node without textStyleName. Match the style name to the semantic purpose of the element.
-- USER-SPECIFIED STYLE NAMES: When the user’s prompt contains style names in square brackets like [Light/Fill Color/Text/Secondary] or [Live/Body/Small-Trimm], you MUST use those EXACT style names verbatim in your output. The user has already looked up the correct style — do NOT substitute a different style name. Copy the name character-for-character into fillStyleName or textStyleName.- USER-SPECIFIED NUMERIC VALUES: When the user's prompt specifies exact numeric values for spacing, gap, padding, border radius, width, height, or size (e.g. "4px gap", "8px radius", "16px padding"), you MUST use those EXACT numbers in your JSON output. Set itemSpacing for gap, cornerRadius for border radius, paddingTop/paddingBottom/paddingLeft/paddingRight for padding, width/height for size. Do NOT ignore or override user-specified dimensions — they take priority over any default or inferred values.- Root: layoutMode:"VERTICAL", layoutSizingVertical:"HUG", width 390 (mobile) or 1440 (desktop)
-- Use layoutMode on ALL frames. Use FILL for full-width children, HUG for content-fit
-- COMPONENT SET CREATION: When asked to create a component set, component, or variants:
-  * Root node type: "COMPONENT_SET"
-  * Each variant is a child with type: "COMPONENT"
-  * Component names MUST use Figma variant syntax: "Property=Value" (e.g. "State=Default", "State=Hover", "State=Disabled", "Size=Small, State=Active"). If unsure what property to use, default to "State=..."
-  * CRITICAL: Each COMPONENT variant MUST contain FULL children[] with the actual UI content (text nodes, shapes, icons, frames, etc.). Do NOT create empty/blank component variants — they must have the same visual richness as a regular FRAME. Each variant should be a complete, fully-designed UI element.
-  * STYLE BINDING (MANDATORY): Every COMPONENT child and ALL of its descendants MUST have fillStyleName on every colored node and textStyleName on every TEXT node. There are NO exceptions. Raw hex without a style name is a broken output.
-  * All variants should have the same dimensions and layout structure
-- Buttons: replicate the exact cornerRadius, alignment (primaryAxisAlignItems, counterAxisAlignItems), text color, font, fillColor, and layoutSizingHorizontal from the provided button style tokens. CRITICAL SIZING: buttons must look visually substantial and tappable. Set the button FRAME height to FIXED at the height from the style tokens (e.g. height:36 means the frame is 36px tall). Add vertical padding so the text is centered: paddingTop and paddingBottom should each be at least 8. If the button tokens show layoutSizingVertical:"HUG" with 0 padding, IGNORE the 0 padding — set paddingTop:10, paddingBottom:10 instead, and use layoutSizingVertical:"HUG" so the button grows to fit. The button text must be vertically and horizontally centered (primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER"). For full-width mobile buttons (width close to the root frame width), use layoutSizingHorizontal:"FILL" so they stretch to fill the parent container.
-- Do NOT include phone status bar elements (time, battery, signal icons). Start directly with the actual screen UI content.
-- Do NOT create colored circles or shapes as icon placeholders. For social login buttons (Google, Apple), just use a FRAME with a text label. No icon shapes.
-- Create COMPLETE screens (15-25+ nodes). Login = title, subtitle, inputs, button, forgot pwd, divider, social login, signup link
-- CRITICAL: You MUST match the existing design's style tokens exactly. Use the provided button cornerRadius, alignment, text color/font, input fillColor/strokeColor, font family, font sizes, colors, and spacing values. Do not invent your own — replicate the existing design system precisely.
-- Input fields: match the EXACT style from tokens — fillColor, strokeColor, strokeWeight, cornerRadius, placeholder text color/font, alignment. If input tokens show bottomBorderOnly:true, use individual stroke weights (set strokeBottomWeight to the border weight and strokeTopWeight/strokeRightWeight/strokeLeftWeight to 0) instead of uniform strokeWeight.
-- Links and underlined text: use textDecoration:"UNDERLINE" when the style tokens or context indicates underlined text (e.g. "Forgot password?" links).
-- REFERENCE SNAPSHOTS: When reference frame snapshots are provided, they show the EXACT node structure of existing screens. This is the HIGHEST PRIORITY style source. Study every property and replicate the same styling for equivalent elements in your output. This includes fillColor, strokeColor, strokeWeight, individual stroke weights, cornerRadius, padding, spacing, alignment, font family/size/style, textDecoration, and textAlignHorizontal. If the reference snapshot shows different values than the button/input style tokens, ALWAYS follow the reference snapshot.
-- DESIGN SYSTEM COLORS: When a color palette is provided, you MUST use ONLY hex values from that palette. Do NOT invent new hex colors. The plugin will automatically bind your hex values to the file's paint styles (e.g. Light/Surface, Dark/Primary). For dark mode screens, prefer colors labeled as Dark/ mode. For light mode, prefer Light/ mode colors. Using exact hex values from the palette ensures proper paint style binding.
+═══ DESIGN RECIPE — THINK IN BLOCKS ═══
+Before generating JSON, mentally decompose the screen into semantic blocks:
+  Header → hero/summary → controls/filters → content list/grid → CTA → footer
+Each block is a FRAME (layoutMode:VERTICAL or HORIZONTAL) with its own padding, spacing, background.
 
-DESKTOP LAYOUT ADAPTATION (when converting a mobile screen to desktop):
-- The root FRAME width MUST be exactly 1440. No exceptions. Do not use 720, 800, or any other width.
-- NEVER simply place the mobile-width content into a 1440px frame unchanged.
-- PREFERRED LAYOUT — horizontal split with two child FRAMEs inside the root:
-  * Root: type:"FRAME", width:1440, layoutMode:"HORIZONTAL", layoutSizingVertical:"HUG"
-  * Left panel: type:"FRAME", width:720, layoutSizingHorizontal:"FIXED", layoutSizingVertical:"FILL", layoutMode:"VERTICAL", primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER". Contains brand name, tagline text, and uses the app's primary/accent fillColor as background.
-  * Right panel: type:"FRAME", width:720, layoutSizingHorizontal:"FIXED", layoutSizingVertical:"HUG", layoutMode:"VERTICAL", counterAxisAlignItems:"CENTER", paddingTop:80, paddingBottom:60, paddingLeft:100, paddingRight:100. Contains a form wrapper FRAME (width:440, layoutMode:"VERTICAL", itemSpacing:20).
-  * Inside the form wrapper: all form elements (title, subtitle, inputs, buttons, links, divider, social login, signup) with layoutSizingHorizontal:"FILL".
-- ALTERNATIVE — centered single-column:
-  * Root: width:1440, layoutMode:"VERTICAL", counterAxisAlignItems:"CENTER", paddingTop:80, paddingBottom:60
-  * Form container: width:440, layoutMode:"VERTICAL", itemSpacing:20, with all elements using layoutSizingHorizontal:"FILL".
-- CRITICAL: Every input and button inside the form wrapper must use layoutSizingHorizontal:"FILL" so they stretch to 440px, NOT stay at mobile widths like 347px.
-- The right panel (or centered wrapper) background should match the mobile screen's background color.
-- Keep ALL content from the mobile screen — do NOT omit any text, links, inputs, or buttons.`;
+Card pattern — a common building block:
+  FRAME with subtle fillColor (surfaceContainer), cornerRadius (8-16), padding (16-24), DROP_SHADOW, children: title TEXT, subtitle TEXT, detail FRAME(s).
+
+Grid/list: outer FRAME (layoutMode:VERTICAL, itemSpacing:12-16) containing row FRAMEs (layoutMode:HORIZONTAL, itemSpacing:12-16) each containing card FRAMEs.
+
+═══ VISUAL HIERARCHY RULES ═══
+1. USE 3+ LEVELS of text size: headings (20-32px bold), body (14-16px regular), captions/labels (10-12px regular).
+2. USE CONTRAST to create depth: background surface → card surfaces → accent highlights.
+3. EVERY section/card MUST have distinct padding (16-24px typically) and itemSpacing (8-16px).
+4. Star ratings: use filled/empty star characters (e.g. "★★★★☆"), NOT placeholder text.
+5. Icons: use small (16-24px) RECTANGLE nodes with appropriate fillStyleName as icon placeholders. Name them descriptively (e.g. "icon-star", "icon-arrow").
+
+═══ DENSITY & SIZE ═══
+- Mobile root: width 390, layoutSizingVertical:"HUG"
+- Desktop root: width 1440, layoutSizingVertical:"HUG"
+- Minimum node counts: 30-50 nodes for a section, 50-80 for a full screen.
+- Buttons: minimum height 44px (touch target). paddingTop:10, paddingBottom:10 minimum. primaryAxisAlignItems:"CENTER", counterAxisAlignItems:"CENTER".
+- Input fields: minimum height 44px.
+- Full-width mobile buttons/inputs: layoutSizingHorizontal:"FILL".
+
+═══ SPACING RHYTHM ═══
+Use an 8px base grid. Common values: 4, 8, 12, 16, 24, 32, 48.
+- Between sibling text lines: 4-8px
+- Between form fields: 12-16px
+- Section internal padding: 16-24px
+- Between major sections: 24-32px
+
+═══ STYLE BINDING (MANDATORY) ═══
+- EVERY node with a fillColor MUST also have fillStyleName (exact name of a local paint style).
+- EVERY TEXT node MUST have textStyleName (exact name of a local text style).
+- Use the curated palette provided in the user prompt — do NOT invent hex colors.
+- If a dsSummary is provided, use its surface/text/brand roles to pick correct styles.
+- When the user specifies style names in [brackets], use them EXACTLY verbatim.
+- When the user specifies numeric values (e.g. "4px gap"), use those EXACT numbers.
+
+═══ ANTI-PATTERNS (NEVER DO THESE) ═══
+- NEVER use state/interaction paint styles (hover, pressed, focused, disabled, selected, dragged, active) as DEFAULT fills. These are in dsSummary.blockedStyles.
+- NEVER create a flat layout with only 1-2 background shades. Use card surfaces, subtle fills, dividers.
+- NEVER make all text the same size. Use hierarchy.
+- NEVER omit cornerRadius on cards, buttons, inputs.
+- NEVER use "STRETCH" for counterAxisAlignItems — invalid.
+- NEVER include phone status bar elements (time, battery, signal).
+- NEVER produce fewer than 25 nodes for any request.
+
+═══ COMPONENT SETS ═══
+- Each COMPONENT variant MUST have FULL children[] with actual UI content.
+- All variants: same dimensions, full style binding on every descendant.
+
+═══ DESKTOP LAYOUT ═══
+When creating or converting to desktop (1440px):
+- HORIZONTAL split: left brand panel (720px FIXED, accent bg, centered brand text) + right content panel (720px FIXED, padding 80/60/100/100, inner form wrapper 440px VERTICAL).
+- Or centered single-column: counterAxisAlignItems:"CENTER", content wrapper 440-800px.
+- All inputs/buttons in wrapper: layoutSizingHorizontal:"FILL".
+
+═══ REFERENCE SNAPSHOTS ═══
+When provided, reference snapshots are HIGHEST PRIORITY. Replicate their fillColor, strokeColor, cornerRadius, padding, spacing, fonts exactly.
+
+Generate the JSON now.`;
 
 
 // ── Generation User Prompt ──────────────────────────────────────────
@@ -440,14 +460,69 @@ export function buildGeneratePrompt(
   styleTokens: any,
   designSystem: DesignSystemSnapshot,
   selection?: any,
-  fullDesignSystem?: any
+  fullDesignSystem?: any,
+  dsSummary?: any
 ): string {
   const parts: string[] = [
     "## User Request",
     prompt,
   ];
 
-  // Include the currently selected frame so the LLM knows what "this frame" refers to
+  // ── 1. DSSummary (curated palette — preferred over raw tokens) ──
+  if (dsSummary) {
+    parts.push("", "## Design System Summary (USE THESE STYLES)");
+
+    // Surface colors
+    if (dsSummary.surfaces?.length > 0) {
+      parts.push("### Surface Colors (for backgrounds, cards, containers)");
+      for (const c of dsSummary.surfaces) {
+        parts.push(`- ${c.name}: ${c.hex} → fillStyleName: "${c.name}"  role: ${c.role}`);
+      }
+    }
+
+    // Text colors
+    if (dsSummary.textColors?.length > 0) {
+      parts.push("### Text Colors");
+      for (const c of dsSummary.textColors) {
+        parts.push(`- ${c.name}: ${c.hex} → fillStyleName: "${c.name}"  role: ${c.role}`);
+      }
+    }
+
+    // Brand/accent colors
+    if (dsSummary.brandColors?.length > 0) {
+      parts.push("### Brand / Accent Colors (for buttons, links, highlights)");
+      for (const c of dsSummary.brandColors) {
+        parts.push(`- ${c.name}: ${c.hex} → fillStyleName: "${c.name}"  role: ${c.role}`);
+      }
+    }
+
+    // Typography roles
+    if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
+      parts.push("### Typography Roles (MANDATORY: set textStyleName on EVERY TEXT node)");
+      for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
+        parts.push(`- ${role}: textStyleName="${styleName}"`);
+      }
+    }
+
+    // Spacing + Radii + Shadow
+    if (dsSummary.spacingScale?.length > 0) {
+      parts.push(`### Spacing Scale: ${dsSummary.spacingScale.join(", ")}`);
+    }
+    if (dsSummary.radii?.length > 0) {
+      parts.push(`### Corner Radii: ${dsSummary.radii.join(", ")}`);
+    }
+    if (dsSummary.shadow) {
+      parts.push(`### Default Shadow: ${JSON.stringify(dsSummary.shadow)}`);
+    }
+
+    // Blocked styles
+    if (dsSummary.blockedStyles?.length > 0) {
+      parts.push("### BLOCKED STYLES (do NOT use these as default fills — they are state/interaction styles)");
+      parts.push(dsSummary.blockedStyles.slice(0, 20).join(", "));
+    }
+  }
+
+  // ── 2. Selected frame context ──
   if (selection && selection.nodes && selection.nodes.length > 0) {
     const selectedNode = selection.nodes[0];
     const selectedWidth = selectedNode.width || 0;
@@ -455,38 +530,28 @@ export function buildGeneratePrompt(
     const promptLower = prompt.toLowerCase();
     const wantsDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
 
-    parts.push("", "## Currently Selected Frame (THIS is what the user is referring to)");
-    parts.push(`The user has selected the following frame (name: "${selectedNode.name || 'unknown'}", width: ${selectedWidth}px, height: ${selectedNode.height || 0}px). When they say 'this frame', 'this screen', or 'this', they mean this frame.`);
-    parts.push("", "Keep ALL the same UI elements (text, inputs, buttons, links, dividers, etc.) from this frame. Replicate the same text content, colors, fonts, and styling.");
-    parts.push("", `CRITICAL DIMENSION RULE: The generated frame MUST have EXACTLY the same dimensions as the source frame: width:${selectedWidth}, height:${selectedNode.height || 0}. Use layoutSizingVertical:"FIXED" (not HUG) and set the height explicitly. This ensures the variant matches the original screen size perfectly.`);
+    parts.push("", "## Currently Selected Frame");
+    parts.push(`Name: "${selectedNode.name || 'unknown'}", ${selectedWidth}×${selectedNode.height || 0}px`);
+    parts.push("Keep ALL UI elements from this frame. Replicate text, colors, fonts, styling.");
+    parts.push(`DIMENSION RULE: width:${selectedWidth}, height:${selectedNode.height || 0}, layoutSizingVertical:"FIXED".`);
 
     if (isMobile && wantsDesktop) {
-      parts.push("", "IMPORTANT — DESKTOP ADAPTATION REQUIRED:");
-      parts.push("The selected frame is a MOBILE screen (" + selectedWidth + "px wide). The user wants a DESKTOP version.");
-      parts.push("The root frame width MUST be exactly 1440px. NOT 720, NOT 800.");
-      parts.push("Use a HORIZONTAL split layout:");
-      parts.push("- Left panel (width:720, FIXED): branded area with app name/tagline, accent background color, centered content.");
-      parts.push("- Right panel (width:720, FIXED): contains a centered form wrapper (width:440) with ALL the form elements from the mobile screen.");
-      parts.push("- Every input and button in the form wrapper MUST use layoutSizingHorizontal:FILL to stretch to 440px.");
-      parts.push("- The right panel's background should match the mobile screen's background color.");
-      parts.push("- Do NOT just dump the mobile layout at " + selectedWidth + "px width into a bigger frame.");
+      parts.push("", "DESKTOP ADAPTATION: Source is mobile (" + selectedWidth + "px). Output MUST be 1440px wide.");
+      parts.push("Use HORIZONTAL split: left brand panel (720px) + right form panel (720px, inner wrapper 440px).");
     }
 
     parts.push("", "### Selected Frame Node Tree");
-    // Safety cap: truncate the JSON to max 200K chars to stay within token budget
     const nodeJson = JSON.stringify(selectedNode);
     if (nodeJson.length > 200000) {
       parts.push(nodeJson.slice(0, 200000) + '... (truncated)');
-      console.log(`[buildGeneratePrompt] Selected node JSON truncated from ${nodeJson.length} to 200000 chars`);
     } else {
       parts.push(nodeJson);
     }
   }
 
-  // Include extracted style tokens — these are the actual design values to match
-  // Trim lists to keep under rate limit
-  if (styleTokens && Object.keys(styleTokens).length > 0) {
-    parts.push("", "## Design Style Tokens (YOU MUST USE THESE EXACT VALUES)");
+  // ── 3. Fallback: raw style tokens (when no dsSummary) ──
+  if (!dsSummary && styleTokens && Object.keys(styleTokens).length > 0) {
+    parts.push("", "## Design Style Tokens");
     if (styleTokens.fontFamilies?.length > 0) {
       parts.push("Font families: " + styleTokens.fontFamilies.slice(0, 3).join(", "));
     }
@@ -494,7 +559,6 @@ export function buildGeneratePrompt(
       parts.push("Font sizes: " + styleTokens.fontSizes.slice(0, 8).join(", "));
     }
     if (styleTokens.colors?.length > 0) {
-      // Annotate raw hex colors with their paint style names when available
       const hexToStyleName: Record<string, string> = {};
       if (designSystem.fillStyles?.length > 0) {
         for (const s of designSystem.fillStyles as any[]) {
@@ -505,85 +569,62 @@ export function buildGeneratePrompt(
         const styleName = hexToStyleName[hex.toUpperCase()];
         return styleName ? `${hex} (fillStyleName: "${styleName}")` : hex;
       });
-      parts.push("Colors (use fillStyleName when shown): " + annotatedColors.join(", "));
+      parts.push("Colors: " + annotatedColors.join(", "));
     }
     if (styleTokens.cornerRadii?.length > 0) {
       parts.push("Corner radii: " + styleTokens.cornerRadii.join(", "));
     }
     if (styleTokens.buttonStyles?.length > 0) {
-      parts.push("Button styles (REPLICATE THESE exactly): " + JSON.stringify(styleTokens.buttonStyles.slice(0, 3)));
+      parts.push("Button styles: " + JSON.stringify(styleTokens.buttonStyles.slice(0, 3)));
     }
     if (styleTokens.inputStyles?.length > 0) {
-      parts.push("Input field styles (REPLICATE THESE exactly — cornerRadius, fill/stroke, text color/font, alignment): " + JSON.stringify(styleTokens.inputStyles));
+      parts.push("Input styles: " + JSON.stringify(styleTokens.inputStyles));
     }
-    if (styleTokens.rootFrameLayouts?.length > 0) {
-      // Just send 1 layout for dimension reference
-      parts.push("Root frame layout: " + JSON.stringify(styleTokens.rootFrameLayouts[0]));
+  }
+
+  // ── 4. Reference snapshots (highest priority style source) ──
+  if (styleTokens?.referenceSnapshots?.length > 0) {
+    parts.push("", "## Reference Frame (REPLICATE these styles exactly)");
+    const refJson = JSON.stringify(styleTokens.referenceSnapshots[0]);
+    if (refJson.length > 80000) {
+      parts.push(refJson.slice(0, 80000) + '... (truncated)');
+    } else {
+      parts.push(refJson);
+    }
+  }
+
+  // ── 5. Text + paint styles (fallback when dsSummary lacks them) ──
+  if (!dsSummary) {
+    if (designSystem.textStyles.length > 0) {
+      const trimmed = designSystem.textStyles.slice(0, 8).map((s: any) => ({
+        name: s.name, fontFamily: s.fontFamily, fontStyle: s.fontStyle, fontSize: s.fontSize
+      }));
+      parts.push("", "## Text Styles (set textStyleName on EVERY TEXT node)");
+      for (const s of trimmed) {
+        parts.push(`- ${s.name} (${s.fontFamily}, ${s.fontStyle}, ${s.fontSize}px)`);
+      }
     }
 
-    // Reference snapshots — the most important context for style matching
-    if (styleTokens.referenceSnapshots?.length > 0) {
-      parts.push("", "## Reference Frame (CRITICAL — replicate these styles EXACTLY)");
-      parts.push("This is an actual node tree from an existing frame. Match the same fillColor, strokeColor, strokeWeight, cornerRadius, padding, alignment, font, and text properties for equivalent elements.");
-      const refJson = JSON.stringify(styleTokens.referenceSnapshots[0]);
-      if (refJson.length > 80000) {
-        parts.push(refJson.slice(0, 80000) + '... (truncated)');
-        console.log(`[buildGeneratePrompt] Reference snapshot truncated from ${refJson.length} to 80000 chars`);
-      } else {
-        parts.push(refJson);
+    if (designSystem.fillStyles?.length > 0) {
+      const styleNames = designSystem.fillStyles.slice(0, 60).map((s: any) => {
+        let label = s.name;
+        if (s.hex) label += ` → ${s.hex}`;
+        return label;
+      });
+      parts.push("", "## Paint Styles (use fillStyleName to bind)");
+      for (const name of styleNames) {
+        parts.push(`- ${name}`);
       }
     }
   }
 
-  // Include text styles — just the first 8 to save tokens
-  if (designSystem.textStyles.length > 0) {
-    const trimmed = designSystem.textStyles.slice(0, 8).map((s: any) => ({
-      name: s.name, fontFamily: s.fontFamily, fontStyle: s.fontStyle, fontSize: s.fontSize
-    }));
-    parts.push("", "## Text Styles (MANDATORY: set textStyleName on EVERY TEXT node to one of these)");
-    parts.push("Available text styles:");
-    for (const s of trimmed) {
-      parts.push(`- ${s.name} (${s.fontFamily}, ${s.fontStyle}, ${s.fontSize}px)`);
-    }
-    parts.push("CRITICAL: Every TEXT node in your output MUST have a textStyleName field set to one of the names above. A TEXT node without textStyleName is BROKEN output.");
-  }
-
-  // Include paint style names for style-by-name binding
-  if (designSystem.fillStyles?.length > 0) {
-    // Build a hex->name lookup so the LLM can correlate raw colors with style names
-    const styleNames = designSystem.fillStyles.slice(0, 60).map((s: any) => {
-      let label = s.name;
-      if (s.hex) label += ` → ${s.hex}`;
-      return label;
-    });
-    parts.push("", "## Paint Styles (use fillStyleName to bind by name — ALWAYS prefer fillStyleName over raw fillColor when a matching style exists)");
-    parts.push("The style NAMES are semantic and encode design decisions. Use the names to determine which color is appropriate for each purpose:");
-    parts.push("- Names containing 'Primary' → primary/accent elements");
-    parts.push("- Names containing 'Secondary' → secondary/subtle elements");
-    parts.push("- Names containing 'System/Critical' or 'Error' → error/critical states");
-    parts.push("- Names containing 'Surface' or 'Background' → container backgrounds");
-    parts.push("- Names containing 'Label' or 'Text' → text/icon colors");
-    parts.push("- Names containing 'Disabled' or 'Control/Secondary' → disabled/inactive states");
-    parts.push("");
-    parts.push("Available styles:");
-    for (const name of styleNames) {
-      parts.push(`- ${name}`);
-    }
-    parts.push("", "CRITICAL REMINDERS:");
-    parts.push("1. Every fillColor MUST have a corresponding fillStyleName from the list above.");
-    parts.push("2. Every TEXT node MUST have a textStyleName from the Text Styles section.");
-    parts.push("3. When the user specifies [StyleName] in their prompt, use that EXACT name.");
-    parts.push("4. Do NOT invent hex colors — look up the hex from the style list above.");
-  }
-
-  // Include full design system if available (cross-page colors, variables, etc.)
+  // ── 6. Full design system (cross-page data) ──
   if (fullDesignSystem) {
     parts.push("", formatFullDesignSystemSection(fullDesignSystem));
   }
 
-  parts.push("", "Generate the complete NodeSnapshot JSON now. Use the exact style token values above.");
+  parts.push("", "Generate the complete NodeSnapshot JSON now.");
 
-  // Final safety: log total prompt size
   const fullPrompt = parts.join("\n");
   console.log(`[buildGeneratePrompt] Total prompt size: ${fullPrompt.length} chars`);
   return fullPrompt;

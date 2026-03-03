@@ -310,7 +310,7 @@
 
     .status-bar {
       font-size: 10px;
-      padding: 4px 0;
+      padding: 4px 8px;
       border-radius: 0;
       background: transparent;
       color: var(--text-muted);
@@ -321,6 +321,14 @@
       justify-content: center;
       gap: 6px;
       border-top: 1px solid var(--border);
+      overflow: hidden;
+      min-width: 0;
+    }
+    .status-bar #status-bar-text {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      min-width: 0;
     }
     .status-bar::before {
       content: "";
@@ -354,7 +362,7 @@
       display: none;
       align-items: center;
       gap: 4px;
-      padding: 5px 6px 5px 8px;
+      padding: 5px 10px 5px 8px;
       font-size: 11px;
       background: rgba(255, 152, 0, 0.08);
       border-top: 1px solid rgba(255, 152, 0, 0.3);
@@ -385,13 +393,12 @@
     }
     .key-warning-banner .warn-dismiss {
       flex: 0 0 auto;
-      margin-left: auto;
       background: none;
       border: none;
       color: var(--fg);
       cursor: pointer;
-      font-size: 11px;
-      padding: 0 2px;
+      font-size: 12px;
+      padding: 2px 4px;
       opacity: 0.5;
       min-width: auto;
       line-height: 1;
@@ -1182,7 +1189,276 @@
       font-weight: 600;
     }
 
-    /* ── Resize handle ─────────────────────────────────── */
+    /* ── Layout Audit Panel (findings list) ────────────── */
+    .layout-audit-findings {
+      overflow-y: auto;
+      flex: 1;
+      padding: 4px 0;
+    }
+    .layout-audit-sort-bar {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .layout-sort-btn {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .layout-sort-btn:hover { background: rgba(255,255,255,0.06); }
+    .layout-sort-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    /* Fix All bar */
+    .layout-fix-all-bar {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .layout-fix-all-bar.visible { display: flex; }
+    .layout-fix-all-bar .layout-fix-all-btn {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      transition: opacity 0.12s;
+    }
+    .layout-fix-all-bar .layout-fix-all-btn:hover { opacity: 0.85; }
+    .layout-fix-all-bar .layout-fix-all-btn.secondary {
+      background: transparent;
+      color: var(--accent);
+    }
+    .layout-fix-all-bar .layout-fix-all-btn.secondary:hover { background: rgba(255,255,255,0.06); }
+    .layout-fix-all-bar .layout-fix-all-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+    .layout-fix-all-progress {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin-left: auto;
+    }
+    .layout-fix-all-notes-row {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 14px 6px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .layout-fix-all-notes-row.open { display: flex; }
+    .layout-fix-all-notes-row input {
+      flex: 1;
+      font-size: 11px;
+      padding: 4px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-input);
+      color: var(--text);
+      outline: none;
+    }
+    .layout-fix-all-notes-row input:focus { border-color: var(--accent); }
+    .layout-fix-all-notes-row button {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+    }
+    .layout-issue {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.12s;
+    }
+    .layout-issue:last-child { border-bottom: none; }
+    .layout-issue:hover { background: rgba(255,255,255,0.04); }
+    .layout-issue-fixed {
+      opacity: 0.45;
+    }
+    .layout-issue-fixed .layout-issue-actions { display: none; }
+    .layout-issue-fixed .layout-fix-prompt-input { display: none !important; }
+    .layout-issue-fixed-badge {
+      font-size: 8px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--success);
+      border: 1px solid var(--success);
+      border-radius: 3px;
+      padding: 1px 5px;
+      flex-shrink: 0;
+    }
+    .layout-issue-dismiss {
+      flex-shrink: 0;
+      margin-left: auto;
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      color: var(--text-muted);
+      background: none;
+      border: none;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.12s, color 0.12s;
+      padding: 0;
+      line-height: 1;
+    }
+    .layout-issue:hover .layout-issue-dismiss { opacity: 0.6; }
+    .layout-issue-dismiss:hover { opacity: 1 !important; color: var(--danger); }
+    .layout-issue-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .layout-issue-severity {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .layout-issue-severity.error { background: var(--danger); }
+    .layout-issue-severity.warning { background: #f39c12; }
+    .layout-issue-severity.info { background: var(--accent); }
+    .layout-issue-category {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .layout-issue-node {
+      font-size: 10px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex: 1;
+      min-width: 0;
+    }
+    .layout-issue-desc {
+      font-size: 11px;
+      color: var(--text);
+      line-height: 1.4;
+      margin-left: 16px;
+      margin-top: 2px;
+    }
+    .layout-issue-actions {
+      display: flex;
+      gap: 4px;
+      margin-left: 16px;
+      margin-top: 6px;
+    }
+    .layout-fix-btn {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .layout-fix-btn:hover {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .layout-fix-btn.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .layout-fix-btn.primary:hover {
+      filter: brightness(1.15);
+    }
+    .layout-fix-btn:disabled {
+      opacity: 0.4;
+      cursor: default;
+      pointer-events: none;
+    }
+    .layout-fix-prompt-input {
+      display: none;
+      margin-left: 16px;
+      margin-top: 4px;
+    }
+    .layout-fix-prompt-input.open {
+      display: flex;
+      gap: 4px;
+    }
+    .layout-fix-prompt-input input {
+      flex: 1;
+      font-size: 10px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      outline: none;
+    }
+    .layout-fix-prompt-input input:focus {
+      border-color: var(--accent);
+    }
+    .layout-fix-prompt-input button {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+    }
+    .layout-issue-suggestion {
+      font-size: 10px;
+      color: var(--success);
+      line-height: 1.3;
+      margin-top: 4px;
+      margin-left: 16px;
+    }
+    .layout-issue-suggestion::before {
+      content: "\1F4A1 ";
+    }
+    .layout-audit-summary-text {
+      line-height: 1.4;
+    }
+
+    /* ── Resize handles ─────────────────────────────────── */
+    .resize-bar-bottom {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 16px;
+      height: 6px;
+      cursor: ns-resize;
+      z-index: 9998;
+    }
     .resize-handle {
       position: fixed;
       bottom: 0;
@@ -1234,6 +1510,8 @@
       align-items: center;
       gap: 6px;
       overflow: hidden;
+      flex: 1 1 0;
+      min-width: 0;
     }
     .ds-status-icon {
       flex-shrink: 0;
@@ -1396,11 +1674,15 @@
             <div class="menu-separator"></div>
             <button class="menu-item" id="menu-audit-a11y">
               <svg viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" stroke-width="1.2"/><path d="M8 4.5v1.75M5.5 8.5h5M6.5 11c.4.3.9.5 1.5.5s1.1-.2 1.5-.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-              Accessibility Audit
+              Accessibility
             </button>
             <button class="menu-item" id="menu-audit-states">
               <svg viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              UI State Audit
+              UI State
+            </button>
+            <button class="menu-item" id="menu-audit-layout">
+              <svg viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="13" height="13" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M1.5 5.5h13M5.5 5.5v9" stroke="currentColor" stroke-width="1.2"/><path d="M8 9h4M8 11.5h3" stroke="currentColor" stroke-width="1" stroke-linecap="round" opacity="0.5"/></svg>
+              Layout
             </button>
             <div class="menu-separator"></div>
             <button class="menu-item" id="menu-clear-a11y">
@@ -1576,6 +1858,45 @@
     <div id="state-audit-findings" class="state-audit-findings"></div>
   </div>
 
+  <!-- Layout Audit panel -->
+  <div id="layout-audit-panel" class="audit-panel" style="display:none;">
+    <div class="audit-header">
+      <span class="audit-title">Layout Audit</span>
+      <div class="audit-header-actions">
+        <button id="btn-close-layout-audit" class="btn-close-audit" title="Close panel">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+    <div id="layout-audit-progress" class="audit-progress hidden">
+      <div class="audit-progress-segments">
+        <div class="audit-progress-seg" data-layout-step="extracting">
+          <div class="seg-track"><div class="seg-fill"></div></div>
+          <div class="seg-label">Extracting</div>
+        </div>
+        <div class="audit-progress-seg" data-layout-step="analyzing">
+          <div class="seg-track"><div class="seg-fill"></div></div>
+          <div class="seg-label">Analyzing</div>
+        </div>
+      </div>
+    </div>
+    <div id="layout-audit-summary" class="audit-summary"></div>
+    <div id="layout-audit-sort-bar" class="layout-audit-sort-bar" style="display:none;">
+      <button class="layout-sort-btn active" data-sort="severity">By Severity</button>
+      <button class="layout-sort-btn" data-sort="location">By Location</button>
+    </div>
+    <div id="layout-fix-all-bar" class="layout-fix-all-bar">
+      <button id="btn-fix-all-layout" class="layout-fix-all-btn">Fix All</button>
+      <button id="btn-fix-all-notes-layout" class="layout-fix-all-btn secondary">Fix All with Notes…</button>
+      <span id="layout-fix-all-progress" class="layout-fix-all-progress"></span>
+    </div>
+    <div id="layout-fix-all-notes-row" class="layout-fix-all-notes-row">
+      <input type="text" id="layout-fix-all-notes-input" placeholder="Additional guidance for all fixes…" />
+      <button id="layout-fix-all-notes-go">Go</button>
+    </div>
+    <div id="layout-audit-findings" class="layout-audit-findings"></div>
+  </div>
+
   <!-- Startup key validation warning -->
   <div id="key-warning-banner" class="key-warning-banner">
     <span class="warn-icon">&#9888;</span>
@@ -1584,9 +1905,10 @@
     <button class="warn-dismiss" id="key-warning-dismiss" title="Dismiss">&#10005;</button>
   </div>
 
-  <div id="status-bar" class="status-bar">Nothing selected — will generate new frame</div>
+  <div id="status-bar" class="status-bar"><span id="status-bar-text">Nothing selected — will generate new frame</span></div>
 
-  <!-- Resize handle -->
+  <!-- Resize handles -->
+  <div id="resize-bar-bottom" class="resize-bar-bottom"></div>
   <div id="resize-handle" class="resize-handle">
     <svg viewBox="0 0 10 10" fill="none">
       <path d="M8 2L2 8" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
@@ -1600,55 +1922,103 @@
 
   <script>
     // ── Minimum-size enforcement ──────────────────────────────────
-    const MIN_W = 340, MIN_H = 280;
-    const JOB_CARD_H = 46;   // approximate height of one job card + gap
+    const MIN_W = 340;
+    const BARE_MIN_H = 210;   // just: label + textarea + button + status bar
+    const MIN_H = BARE_MIN_H; // alias for resize-handle clamping
+    const BANNER_H_DS = 34;   // DS banner height (single line + padding)
+    const BANNER_H_KEY = 30;  // Key-warning banner height
+    const BANNER_GAP = 12;    // body flex gap between items
+    const JOB_CARD_H = 46;    // approximate height of one job card + gap
     const MAX_PLUGIN_H = 600;
     var _userWidth = MIN_W;
-    var _userHeight = MIN_H;
+    var _userHeight = BARE_MIN_H;
+    var _hasManualResize = false; // true once user drags resize handle upward
 
-    /** Resize plugin to fit current job count, or shrink back when done */
-    function requestPluginResize() {
+    /** Compute the auto-fit height based on visible banners, jobs, etc. */
+    function computeAutoHeight() {
+      var h = BARE_MIN_H;
+      var dsBannerEl = document.getElementById('ds-status-banner');
+      var kwBannerEl = document.getElementById('key-warning-banner');
+      if (dsBannerEl && dsBannerEl.style.display !== 'none') {
+        h += BANNER_H_DS + BANNER_GAP;
+      }
+      if (kwBannerEl && kwBannerEl.style.display !== 'none') {
+        h += BANNER_H_KEY + BANNER_GAP;
+      }
+      h += (_dsExpandedExtra || 0);
       var jobCount = document.getElementById('job-list').children.length;
-      var baseH = _userHeight || MIN_H;
-      var targetH;
-      if (jobCount > 0) {
-        targetH = Math.min(baseH + jobCount * JOB_CARD_H + (_dsExpandedExtra || 0), MAX_PLUGIN_H);
-      } else {
-        targetH = Math.min(baseH + (_dsExpandedExtra || 0), MAX_PLUGIN_H);
+      if (jobCount > 0) h += jobCount * JOB_CARD_H;
+      return Math.min(h, MAX_PLUGIN_H);
+    }
+
+    /** Resize plugin to current auto-fit height (for job count changes) */
+    function requestPluginResize() {
+      var targetH = computeAutoHeight();
+      // If user manually resized larger, use their height as base instead
+      if (_hasManualResize && _userHeight > targetH) {
+        targetH = Math.min(_userHeight + (_dsExpandedExtra || 0), MAX_PLUGIN_H);
       }
       var w = _userWidth || MIN_W;
       parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(targetH) } }, '*');
     }
 
-    // ── Custom drag-to-resize handle ───────────────────────────
+    /**
+     * Shrink (or grow) the plugin to fit visible content.
+     * Skips shrinking if user has manually resized the window larger.
+     */
+    function autoFitHeight() {
+      var target = computeAutoHeight();
+      var w = _userWidth || MIN_W;
+      if (_hasManualResize && _userHeight > target) {
+        // User manually enlarged — don't shrink below their preferred height
+        return;
+      }
+      parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(target) } }, '*');
+    }
+
+    // ── Custom drag-to-resize handles ──────────────────────────
     (function() {
       const handle = document.getElementById('resize-handle');
-      let dragging = false, startX, startY, startW, startH;
+      const bottomBar = document.getElementById('resize-bar-bottom');
+      let dragging = false, dragMode = '', startX, startY, startW, startH;
 
-      handle.addEventListener('pointerdown', function(e) {
+      function onDown(mode, e) {
         dragging = true;
+        dragMode = mode;
         startX = e.clientX;
         startY = e.clientY;
         startW = document.documentElement.clientWidth;
         startH = document.documentElement.clientHeight;
-        handle.setPointerCapture(e.pointerId);
+        e.target.setPointerCapture(e.pointerId);
         e.preventDefault();
-      });
+      }
 
-      handle.addEventListener('pointermove', function(e) {
+      function onMove(e) {
         if (!dragging) return;
-        var newW = Math.max(startW + (e.clientX - startX), MIN_W);
-        var newH = Math.max(startH + (e.clientY - startY), MIN_H);
+        var minH = computeAutoHeight();
+        var newH = Math.max(startH + (e.clientY - startY), minH);
+        var newW = (dragMode === 'corner')
+          ? Math.max(startW + (e.clientX - startX), MIN_W)
+          : startW;
         parent.postMessage({ pluginMessage: { type: 'resize', width: Math.round(newW), height: Math.round(newH) } }, '*');
-      });
+      }
 
-      handle.addEventListener('pointerup', function(e) {
+      function onUp(e) {
         dragging = false;
-        handle.releasePointerCapture(e.pointerId);
-        // Remember user's manual base size (before any job-based expansion)
+        e.target.releasePointerCapture(e.pointerId);
         _userWidth = document.documentElement.clientWidth;
         _userHeight = document.documentElement.clientHeight;
-      });
+        var autoH = computeAutoHeight();
+        _hasManualResize = (_userHeight > autoH + 10);
+      }
+
+      handle.addEventListener('pointerdown', function(e) { onDown('corner', e); });
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
+
+      bottomBar.addEventListener('pointerdown', function(e) { onDown('bottom', e); });
+      bottomBar.addEventListener('pointermove', onMove);
+      bottomBar.addEventListener('pointerup', onUp);
     })();
 
     // ── DOM References ────────────────────────────────────────────
@@ -1656,6 +2026,7 @@
     const btnApply = document.getElementById("btn-apply");
     const btnCancel = document.getElementById("btn-cancel");
     const statusBar = document.getElementById("status-bar");
+    const statusBarText = document.getElementById("status-bar-text");
     const menuToggle = document.getElementById("menu-toggle");
     const menuDropdown = document.getElementById("menu-dropdown");
     const menuExportJson = document.getElementById("menu-export-json");
@@ -1678,6 +2049,7 @@
     const menuAuditA11y = document.getElementById("menu-audit-a11y");
     const menuClearA11y = document.getElementById("menu-clear-a11y");
     const menuAuditStates = document.getElementById("menu-audit-states");
+    const menuAuditLayout = document.getElementById("menu-audit-layout");
     const menuAnalyzeDrill = document.getElementById("menu-analyze-drill");
     const menuImportExportDrill = document.getElementById("menu-importexport-drill");
     const menuBack = document.getElementById("menu-back");
@@ -1703,6 +2075,12 @@
     const btnFixAll = document.getElementById("btn-fix-all");
     const btnCancelA11yAudit = document.getElementById("btn-cancel-a11y-audit");
     const btnCancelStateAudit = document.getElementById("btn-cancel-state-audit");
+    const layoutAuditPanel = document.getElementById("layout-audit-panel");
+    const layoutAuditSummary = document.getElementById("layout-audit-summary");
+    const layoutAuditFindings = document.getElementById("layout-audit-findings");
+    const btnCloseLayoutAudit = document.getElementById("btn-close-layout-audit");
+    const layoutAuditProgressEl = document.getElementById("layout-audit-progress");
+    const layoutAuditSortBar = document.getElementById("layout-audit-sort-bar");
     const menuExtractDS = document.getElementById("menu-extract-ds");
     const dsBanner = document.getElementById("ds-status-banner");
     const dsDismissBtn = document.getElementById("ds-status-dismiss");
@@ -1721,13 +2099,8 @@
       const expanding = !dsBanner.classList.contains("expanded");
       dsBanner.classList.toggle("expanded");
       _dsExpandedExtra = expanding ? DS_EXPAND_H : 0;
-      // Resize the plugin window
-      const w = _userWidth || MIN_W;
-      const baseH = _userHeight || MIN_H;
-      const jobCount = document.getElementById('job-list').children.length;
-      let targetH = baseH + (jobCount > 0 ? jobCount * JOB_CARD_H : 0) + _dsExpandedExtra;
-      targetH = Math.min(targetH, MAX_PLUGIN_H);
-      parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(targetH) } }, '*');
+      // Resize the plugin window using the auto-fit system
+      requestPluginResize();
     });
 
     // Dismiss X button on DS banner
@@ -1736,6 +2109,7 @@
       dsBanner.classList.remove("expanded");
       if (_dsExpandedExtra) { _dsExpandedExtra = 0; }
       dsBanner.style.display = "none";
+      autoFitHeight();
     });
 
     function renderDSDetails(s) {
@@ -2036,7 +2410,8 @@
 
     // ── Helpers ───────────────────────────────────────────────────
     function setStatus(msg, type) {
-      statusBar.textContent = msg;
+      statusBarText.textContent = msg;
+      statusBar.title = msg;
       statusBar.className = "status-bar" + (type ? " " + type : "");
     }
 
@@ -2046,22 +2421,31 @@
       _selectionLabel = msg;
       // Only update if we're not showing a transient status (success/error)
       if (!statusBar.classList.contains("success") && !statusBar.classList.contains("error")) {
-        statusBar.textContent = msg;
+        statusBarText.textContent = msg;
+        statusBar.title = msg; // tooltip shows full text if truncated
         statusBar.className = "status-bar";
       }
     }
 
     // Override setStatus to auto-revert to selection label after success/error
     const _origSetStatus = setStatus;
-    function setStatus(msg, type) {
-      statusBar.textContent = msg;
+    function setStatus(msg, type, isHtml) {
+      if (isHtml) {
+        statusBarText.innerHTML = msg;
+      } else {
+        statusBarText.textContent = msg;
+      }
+      statusBar.title = isHtml ? statusBarText.textContent : msg;
       statusBar.className = "status-bar" + (type ? " " + type : "");
       // Revert to selection status after a few seconds for success/error
-      if (type === "success" || type === "error") {
+      // Don't auto-revert HTML status messages (they contain clickable links)
+      if (!isHtml && (type === "success" || type === "error")) {
+        var revertMsg = statusBarText.textContent;
         setTimeout(() => {
           // Only revert if it's still showing the same message
-          if (statusBar.textContent === msg) {
-            statusBar.textContent = _selectionLabel;
+          if (statusBarText.textContent === revertMsg) {
+            statusBarText.textContent = _selectionLabel;
+            statusBar.title = _selectionLabel;
             statusBar.className = "status-bar";
           }
         }, 4000);
@@ -2074,6 +2458,30 @@
     }
 
     // ── Menu Toggle (with drill-down support) ─────────────────────
+    var _menuHeightOverride = 0; // extra height needed while menu is open
+
+    /** Measure the open dropdown and resize the plugin if it would be clipped */
+    function ensureMenuFits() {
+      requestAnimationFrame(function() {
+        var rect = menuDropdown.getBoundingClientRect();
+        var needed = Math.ceil(rect.bottom) + 8; // 8px breathing room
+        var current = document.documentElement.clientHeight;
+        if (needed > current) {
+          _menuHeightOverride = needed;
+          var w = _userWidth || MIN_W;
+          parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.min(needed, MAX_PLUGIN_H) } }, '*');
+        }
+      });
+    }
+
+    /** Restore plugin height after menu closes */
+    function restoreMenuHeight() {
+      if (_menuHeightOverride) {
+        _menuHeightOverride = 0;
+        requestPluginResize();
+      }
+    }
+
     function closeMenu() {
       menuDropdown.classList.remove("show");
       menuToggle.classList.remove("open");
@@ -2081,6 +2489,7 @@
       menuPageRoot.style.display = "";
       menuPageAnalyze.style.display = "none";
       menuPageImportExport.style.display = "none";
+      restoreMenuHeight();
     }
 
     menuToggle.addEventListener("click", (e) => {
@@ -2092,6 +2501,9 @@
         menuPageRoot.style.display = "";
         menuPageAnalyze.style.display = "none";
         menuPageImportExport.style.display = "none";
+        ensureMenuFits();
+      } else {
+        restoreMenuHeight();
       }
     });
 
@@ -2100,6 +2512,7 @@
       e.stopPropagation();
       menuPageRoot.style.display = "none";
       menuPageImportExport.style.display = "";
+      ensureMenuFits();
     });
 
     // Back from Import/Export
@@ -2107,6 +2520,7 @@
       e.stopPropagation();
       menuPageImportExport.style.display = "none";
       menuPageRoot.style.display = "";
+      ensureMenuFits();
     });
 
     // Drill into Analyze submenu
@@ -2114,6 +2528,7 @@
       e.stopPropagation();
       menuPageRoot.style.display = "none";
       menuPageAnalyze.style.display = "";
+      ensureMenuFits();
     });
 
     // Back to root menu
@@ -2121,6 +2536,7 @@
       e.stopPropagation();
       menuPageAnalyze.style.display = "none";
       menuPageRoot.style.display = "";
+      ensureMenuFits();
     });
 
     // Close menu when clicking outside
@@ -2189,6 +2605,7 @@
           text.title = invalidKeys.map(k => (PROVIDER_DISPLAY_NAMES[k.provider] || k.provider) + ": " + k.error).join("\n");
         }
         banner.style.display = "flex";
+        autoFitHeight();
       }
     }
 
@@ -2199,9 +2616,11 @@
       }
       openSettings();
       banner.style.display = "none";
+      autoFitHeight();
     });
     document.getElementById("key-warning-dismiss").addEventListener("click", () => {
       document.getElementById("key-warning-banner").style.display = "none";
+      autoFitHeight();
     });
 
     btnSaveKey.addEventListener("click", async () => {
@@ -2278,6 +2697,7 @@
       dsBanner.className = "ds-status-banner extracting";
       dsStatusText.textContent = "Starting extraction…";
       dsCancelBtn.style.display = "inline-flex";
+      autoFitHeight();
       postToPlugin({ type: "extract-design-system" });
     });
     dsCancelBtn.addEventListener("click", () => {
@@ -2322,6 +2742,399 @@
     // ── State Audit panel: Close ────────────────────────────────
     btnCloseStateAudit.addEventListener("click", () => {
       stateAuditPanel.style.display = "none";
+    });
+
+    // ── Menu: Layout Audit ──────────────────────────────────────
+    var _layoutAuditTimer = null;
+    function startLayoutAuditProgress() {
+      layoutAuditProgressEl.classList.remove("hidden");
+      var segs = layoutAuditProgressEl.querySelectorAll(".audit-progress-seg");
+      segs.forEach(function(s) { s.classList.remove("active", "done"); s.querySelector(".seg-fill").style.width = "0%"; });
+      // Start extracting phase
+      var extractSeg = layoutAuditProgressEl.querySelector('[data-layout-step="extracting"]');
+      if (extractSeg) { extractSeg.classList.add("active"); }
+      var progress = 0;
+      clearInterval(_layoutAuditTimer);
+      _layoutAuditTimer = setInterval(function() {
+        progress = Math.min(progress + 2, 90);
+        var activeSeg = layoutAuditProgressEl.querySelector(".audit-progress-seg.active .seg-fill");
+        if (activeSeg) activeSeg.style.width = progress + "%";
+      }, 200);
+    }
+    function advanceLayoutPhase(phase) {
+      clearInterval(_layoutAuditTimer);
+      var segs = layoutAuditProgressEl.querySelectorAll(".audit-progress-seg");
+      if (phase === "analyzing") {
+        segs[0].classList.remove("active");
+        segs[0].classList.add("done");
+        segs[1].classList.add("active");
+        var progress = 0;
+        _layoutAuditTimer = setInterval(function() {
+          progress = Math.min(progress + 1, 90);
+          segs[1].querySelector(".seg-fill").style.width = progress + "%";
+        }, 300);
+      } else if (phase === "done") {
+        segs.forEach(function(s) { s.classList.remove("active"); s.classList.add("done"); });
+        clearInterval(_layoutAuditTimer);
+      }
+    }
+    function stopLayoutAuditProgress() {
+      clearInterval(_layoutAuditTimer);
+      layoutAuditProgressEl.classList.add("hidden");
+    }
+
+    // ── Layout audit state ──────────────────────────────────
+    var _layoutAuditIssues = [];
+    var _layoutAuditSort = "severity"; // "severity" | "location"
+
+    function renderLayoutAuditResults(data) {
+      layoutAuditFindings.innerHTML = "";
+      var summary = data.summary || "Analysis complete.";
+      var issues = data.issues || [];
+      _layoutAuditIssues = issues;
+
+      layoutAuditSummary.innerHTML = '<div class="layout-audit-summary-text">' + escapeHtml(summary) +
+        (issues.length > 0 ? ' <strong>' + issues.length + ' issue' + (issues.length === 1 ? '' : 's') + '</strong> found.' : '') +
+        '</div>';
+
+      if (issues.length === 0) {
+        layoutAuditFindings.innerHTML = '<div style="padding:20px 14px;text-align:center;color:var(--success);font-size:12px;">No layout issues found!</div>';
+        layoutAuditSortBar.style.display = "none";
+        layoutFixAllBar.classList.remove("visible");
+        layoutFixAllNotesRow.classList.remove("open");
+        return;
+      }
+
+      layoutAuditSortBar.style.display = "flex";
+      updateFixAllBarVisibility();
+      renderLayoutIssueList(issues, _layoutAuditSort);
+    }
+
+    function sortLayoutIssues(issues, mode) {
+      var sorted = issues.slice();
+      if (mode === "location") {
+        sorted.sort(function(a, b) {
+          var ay = typeof a.nodeY === "number" ? a.nodeY : 999999;
+          var by = typeof b.nodeY === "number" ? b.nodeY : 999999;
+          return ay - by;
+        });
+      } else {
+        // severity
+        var sevOrder = { error: 0, warning: 1, info: 2 };
+        sorted.sort(function(a, b) {
+          return (sevOrder[a.severity] || 2) - (sevOrder[b.severity] || 2);
+        });
+      }
+      return sorted;
+    }
+
+    function renderLayoutIssueList(issues, mode) {
+      layoutAuditFindings.innerHTML = "";
+      var sorted = sortLayoutIssues(issues, mode);
+
+      sorted.forEach(function(iss, idx) {
+        // Skip dismissed issues
+        if (iss._dismissed) return;
+
+        var el = document.createElement("div");
+        el.className = "layout-issue";
+
+        if (iss._fixed) el.classList.add("layout-issue-fixed");
+
+        // Header row: severity dot + badge + category + node name + dismiss btn
+        var headerEl = document.createElement("div");
+        headerEl.className = "layout-issue-header";
+        headerEl.innerHTML =
+          '<span class="layout-issue-severity ' + (iss.severity || 'info') + '"></span>' +
+          (iss._fixed ? '<span class="layout-issue-fixed-badge">APPLIED</span>' : '') +
+          '<span class="layout-issue-category">' + escapeHtml((iss.category || '').replace(/_/g, ' ')) + '</span>' +
+          '<span class="layout-issue-node">' + escapeHtml(iss.nodeName || '') + '</span>';
+
+        // Dismiss button (X) — always visible, top-right
+        var dismissBtn = document.createElement("button");
+        dismissBtn.className = "layout-issue-dismiss";
+        dismissBtn.title = "Dismiss this issue";
+        dismissBtn.innerHTML = '&#10005;';
+        dismissBtn.addEventListener("click", function(e) {
+          e.stopPropagation();
+          dismissLayoutIssue(iss);
+        });
+        headerEl.appendChild(dismissBtn);
+
+        // Click header to select/focus the node
+        if (iss.nodeId) {
+          headerEl.addEventListener("click", function(e) {
+            if (e.target.closest && e.target.closest('.layout-issue-dismiss')) return;
+            postToPlugin({ type: "select-node", nodeId: iss.nodeId });
+          });
+        }
+        el.appendChild(headerEl);
+
+        // Description — also clickable to focus node
+        var descEl = document.createElement("div");
+        descEl.className = "layout-issue-desc";
+        descEl.textContent = iss.description || '';
+        if (iss.nodeId) {
+          descEl.style.cursor = "pointer";
+          descEl.addEventListener("click", function() {
+            postToPlugin({ type: "select-node", nodeId: iss.nodeId });
+          });
+        }
+        el.appendChild(descEl);
+
+        if (iss._fixed) {
+          // Fixed state: show Revert button instead of Fix buttons
+          var revertActionsEl = document.createElement("div");
+          revertActionsEl.className = "layout-issue-actions";
+          var revertBtn = document.createElement("button");
+          revertBtn.className = "layout-fix-btn";
+          revertBtn.textContent = "Revert";
+          revertBtn.addEventListener("click", function() {
+            revertLayoutFix(iss);
+          });
+          revertActionsEl.appendChild(revertBtn);
+          el.appendChild(revertActionsEl);
+        } else {
+          // Action buttons: Fix + Fix with notes
+          var actionsEl = document.createElement("div");
+          actionsEl.className = "layout-issue-actions";
+
+          var fixBtn = document.createElement("button");
+          fixBtn.className = "layout-fix-btn primary";
+          fixBtn.textContent = "Fix";
+          fixBtn.addEventListener("click", function() {
+            fixLayoutIssue(iss, null, fixBtn);
+          });
+          actionsEl.appendChild(fixBtn);
+
+          var fixPromptBtn = document.createElement("button");
+          fixPromptBtn.className = "layout-fix-btn";
+          fixPromptBtn.textContent = "Fix with notes\u2026";
+          fixPromptBtn.addEventListener("click", function() {
+            var promptRow = el.querySelector(".layout-fix-prompt-input");
+            if (promptRow) {
+              promptRow.classList.toggle("open");
+              if (promptRow.classList.contains("open")) {
+                promptRow.querySelector("input").focus();
+              }
+            }
+          });
+          actionsEl.appendChild(fixPromptBtn);
+
+          el.appendChild(actionsEl);
+
+          // Prompt input row (hidden by default)
+          var promptRow = document.createElement("div");
+          promptRow.className = "layout-fix-prompt-input";
+          var promptInput = document.createElement("input");
+          promptInput.type = "text";
+          promptInput.placeholder = "Additional guidance\u2026";
+          promptInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") {
+              fixLayoutIssue(iss, promptInput.value.trim(), fixBtn);
+              promptRow.classList.remove("open");
+            }
+          });
+          var promptSendBtn = document.createElement("button");
+          promptSendBtn.textContent = "Go";
+          promptSendBtn.addEventListener("click", function() {
+            fixLayoutIssue(iss, promptInput.value.trim(), fixBtn);
+            promptRow.classList.remove("open");
+          });
+          promptRow.appendChild(promptInput);
+          promptRow.appendChild(promptSendBtn);
+          el.appendChild(promptRow);
+        }
+
+        layoutAuditFindings.appendChild(el);
+      });
+    }
+
+    var _fixFromAudit = false;  // true when a fix was triggered from audit panel
+    var _lastFixedIssueIdx = -1; // index of the issue we just fixed
+
+    // ── Fix All queue ──────────────────────────────────────
+    var _fixAllQueue = [];        // remaining issues to fix
+    var _fixAllRunning = false;   // true while Fix All is in progress
+    var _fixAllNotes = null;      // shared extra notes for "Fix All with Notes"
+    var _fixAllTotal = 0;         // total issues queued
+    var _fixAllDone = 0;          // issues completed so far
+
+    var layoutFixAllBar = document.getElementById("layout-fix-all-bar");
+    var btnFixAllLayout = document.getElementById("btn-fix-all-layout");
+    var btnFixAllNotesLayout = document.getElementById("btn-fix-all-notes-layout");
+    var layoutFixAllProgress = document.getElementById("layout-fix-all-progress");
+    var layoutFixAllNotesRow = document.getElementById("layout-fix-all-notes-row");
+    var layoutFixAllNotesInput = document.getElementById("layout-fix-all-notes-input");
+    var layoutFixAllNotesGo = document.getElementById("layout-fix-all-notes-go");
+
+    function getFixableIssues() {
+      return _layoutAuditIssues.filter(function(i) { return !i._fixed && !i._dismissed; });
+    }
+
+    function updateFixAllBarVisibility() {
+      var fixable = getFixableIssues();
+      if (fixable.length > 0 && !_fixAllRunning) {
+        layoutFixAllBar.classList.add("visible");
+        btnFixAllLayout.disabled = false;
+        btnFixAllNotesLayout.disabled = false;
+        layoutFixAllProgress.textContent = "";
+      } else if (_fixAllRunning) {
+        layoutFixAllBar.classList.add("visible");
+        btnFixAllLayout.disabled = true;
+        btnFixAllNotesLayout.disabled = true;
+      } else {
+        layoutFixAllBar.classList.remove("visible");
+      }
+    }
+
+    function startFixAll(notes) {
+      var fixable = getFixableIssues();
+      if (fixable.length === 0) return;
+      _fixAllQueue = fixable.slice();
+      _fixAllRunning = true;
+      _fixAllNotes = notes || null;
+      _fixAllTotal = fixable.length;
+      _fixAllDone = 0;
+      layoutFixAllNotesRow.classList.remove("open");
+      updateFixAllBarVisibility();
+      layoutFixAllProgress.textContent = "Fixing 1 of " + _fixAllTotal + "…";
+      fixNextInQueue();
+    }
+
+    function fixNextInQueue() {
+      if (_fixAllQueue.length === 0) {
+        // All done
+        _fixAllRunning = false;
+        layoutFixAllProgress.textContent = "";
+        updateFixAllBarVisibility();
+        // Show the audit panel with updated results
+        layoutAuditPanel.style.display = "flex";
+        renderLayoutIssueList(_layoutAuditIssues, _layoutAuditSort);
+        resizeForAuditPanel();
+        var remaining = getFixableIssues().length;
+        setStatus("Fix All complete — " + _fixAllDone + " processed, " + remaining + " remaining", remaining > 0 ? "warning" : "success");
+        return;
+      }
+      var issue = _fixAllQueue.shift();
+      fixLayoutIssue(issue, _fixAllNotes, null);
+    }
+
+    btnFixAllLayout.addEventListener("click", function() {
+      startFixAll(null);
+    });
+
+    btnFixAllNotesLayout.addEventListener("click", function() {
+      layoutFixAllNotesRow.classList.toggle("open");
+      if (layoutFixAllNotesRow.classList.contains("open")) {
+        layoutFixAllNotesInput.focus();
+      }
+    });
+
+    layoutFixAllNotesGo.addEventListener("click", function() {
+      startFixAll(layoutFixAllNotesInput.value.trim());
+    });
+
+    layoutFixAllNotesInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") {
+        startFixAll(layoutFixAllNotesInput.value.trim());
+      }
+    });
+
+    function fixLayoutIssue(issue, extraNotes, btnEl) {
+      // Build a surgical prompt — tell the LLM to ONLY fix this specific issue
+      var prompt = 'IMPORTANT: Make ONLY this one specific change, do NOT alter any other elements or properties.\n';
+      prompt += 'On the node named "' + (issue.nodeName || 'selected element') + '" (id: ' + (issue.nodeId || 'unknown') + '), fix this layout issue: ';
+      prompt += (issue.description || '');
+      if (issue.suggestion) {
+        prompt += '\nSuggested fix: ' + issue.suggestion;
+      }
+      if (extraNotes) {
+        prompt += '\nAdditional guidance: ' + extraNotes;
+      }
+
+      // Track which issue we're fixing so we can mark it afterwards
+      _fixFromAudit = true;
+      _lastFixedIssueIdx = _layoutAuditIssues.indexOf(issue);
+
+      // Close the audit panel and restore plugin height
+      layoutAuditPanel.style.display = "none";
+      stopLayoutAuditProgress();
+      restoreFromAuditPanel();
+
+      // Send run message directly with targetNodeId and isAuditFix flag
+      // This bypasses btnApply to avoid intent detection (cleanup, etc.)
+      intentEl.value = "";
+      postToPlugin({
+        type: "run",
+        intent: prompt,
+        targetNodeId: issue.nodeId || null,
+        isAuditFix: true
+      });
+    }
+
+    function dismissLayoutIssue(issue) {
+      var idx = _layoutAuditIssues.indexOf(issue);
+      if (idx >= 0) {
+        _layoutAuditIssues[idx]._dismissed = true;
+      }
+      renderLayoutIssueList(_layoutAuditIssues, _layoutAuditSort);
+    }
+
+    function revertLayoutFix(issue) {
+      // Trigger the existing revert mechanism
+      postToPlugin({ type: "revert" });
+      // Un-mark as fixed
+      var idx = _layoutAuditIssues.indexOf(issue);
+      if (idx >= 0) {
+        _layoutAuditIssues[idx]._fixed = false;
+      }
+      renderLayoutIssueList(_layoutAuditIssues, _layoutAuditSort);
+    }
+
+    // Sort toggle handler
+    layoutAuditSortBar.querySelectorAll(".layout-sort-btn").forEach(function(btn) {
+      btn.addEventListener("click", function() {
+        var mode = btn.getAttribute("data-sort");
+        _layoutAuditSort = mode;
+        layoutAuditSortBar.querySelectorAll(".layout-sort-btn").forEach(function(b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        renderLayoutIssueList(_layoutAuditIssues, mode);
+      });
+    });
+
+    function resizeForAuditPanel() {
+      var auditH = Math.min(MAX_PLUGIN_H, BARE_MIN_H + 200);
+      var w = _userWidth || MIN_W;
+      var curH = document.documentElement.clientHeight;
+      if (auditH > curH) {
+        parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: auditH } }, '*');
+      }
+    }
+    function restoreFromAuditPanel() {
+      autoFitHeight();
+    }
+
+    menuAuditLayout.addEventListener("click", () => {
+      closeMenu();
+      layoutAuditPanel.style.display = "flex";
+      layoutAuditSummary.textContent = "";
+      layoutAuditFindings.innerHTML = "";
+      startLayoutAuditProgress();
+      setStatus("Running layout audit…");
+      postToPlugin({ type: "audit-layout" });
+    });
+
+    btnCloseLayoutAudit.addEventListener("click", () => {
+      layoutAuditPanel.style.display = "none";
+      stopLayoutAuditProgress();
+      // Cancel any in-progress Fix All
+      _fixAllQueue = [];
+      _fixAllRunning = false;
+      _fixAllNotes = null;
+      layoutFixAllProgress.textContent = "";
+      layoutFixAllNotesRow.classList.remove("open");
+      restoreFromAuditPanel();
     });
 
     // ── Audit panel: Close ──────────────────────────────────────
@@ -3557,6 +4370,55 @@
           }
           break;
         }
+
+        // ── Layout Audit Messages ──────────────────────────────
+        case "layout-audit-phase": {
+          advanceLayoutPhase(msg.phase);
+          break;
+        }
+        case "layout-audit-results": {
+          advanceLayoutPhase("done");
+          var layoutData = msg.data || {};
+          var layoutCount = (layoutData.issues) ? layoutData.issues.length : 0;
+          // Store the results for rendering
+          renderLayoutAuditResults(layoutData);
+
+          if (msg.autoTriggered) {
+            // Auto-triggered from cleanup — don't show panel, show a link in status bar
+            if (layoutCount > 0) {
+              setStatus('Audit found ' + layoutCount + ' remaining issue' + (layoutCount === 1 ? '' : 's') + '. <a href="#" id="status-audit-link" style="color:var(--accent);text-decoration:underline;cursor:pointer;">View Audit</a>', "warning", true);
+              setTimeout(function() {
+                var link = document.getElementById("status-audit-link");
+                if (link) {
+                  link.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    layoutAuditPanel.style.display = "flex";
+                    resizeForAuditPanel();
+                  });
+                }
+              }, 50);
+            } else {
+              setStatus("Cleanup complete — no remaining layout issues!", "success");
+            }
+          } else {
+            // Manual audit — show the panel
+            layoutAuditPanel.style.display = "flex";
+            setStatus("Layout audit complete: " + layoutCount + " issue" + (layoutCount === 1 ? "" : "s") + " found", layoutCount > 0 ? "warning" : "success");
+            // Resize plugin taller to show audit results
+            if (layoutCount > 0) {
+              resizeForAuditPanel();
+            }
+          }
+          break;
+        }
+        case "layout-audit-error": {
+          stopLayoutAuditProgress();
+          layoutAuditSummary.textContent = "";
+          layoutAuditFindings.innerHTML = '<div style="padding:14px;color:var(--danger);font-size:11px;">' + escapeHtml(msg.error) + '</div>';
+          setStatus(msg.error, "error");
+          break;
+        }
+
         case "import-json-success": {
           setStatus(msg.summary, "success");
           break;
@@ -3604,12 +4466,71 @@
         }
         case "job-complete": {
           completeJob(msg.jobId, msg.summary);
-          setStatus(msg.summary, "success");
+          if (_fixFromAudit && _layoutAuditIssues.length > 0) {
+            // Mark the fixed issue
+            if (_lastFixedIssueIdx >= 0 && _lastFixedIssueIdx < _layoutAuditIssues.length) {
+              _layoutAuditIssues[_lastFixedIssueIdx]._fixed = true;
+            }
+            _fixFromAudit = false;
+            _lastFixedIssueIdx = -1;
+
+            // If Fix All is running, continue to next issue
+            if (_fixAllRunning) {
+              _fixAllDone++;
+              var nextNum = _fixAllDone + 1;
+              layoutFixAllProgress.textContent = "Fixing " + nextNum + " of " + _fixAllTotal + "\u2026";
+              fixNextInQueue();
+            } else {
+              var remaining = _layoutAuditIssues.filter(function(i) { return !i._fixed && !i._dismissed; }).length;
+              var statusMsg = msg.summary + ' <a href="#" id="status-back-audit" style="color:var(--accent);text-decoration:underline;cursor:pointer;">Back to Audit (' + remaining + ' remaining)</a>';
+              setStatus(statusMsg, "success", true);
+              setTimeout(function() {
+                var backLink = document.getElementById("status-back-audit");
+                if (backLink) {
+                  backLink.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    layoutAuditPanel.style.display = "flex";
+                    renderLayoutIssueList(_layoutAuditIssues, _layoutAuditSort);
+                    resizeForAuditPanel();
+                  });
+                }
+              }, 50);
+            }
+          } else {
+            setStatus(msg.summary, "success");
+          }
           break;
         }
         case "job-error": {
           errorJob(msg.jobId, msg.error);
-          setStatus(msg.error, "error");
+          if (_fixFromAudit) {
+            _fixFromAudit = false;
+            _lastFixedIssueIdx = -1;
+
+            // If Fix All is running, skip this one and continue
+            if (_fixAllRunning) {
+              _fixAllDone++;
+              var nextNum = _fixAllDone + 1;
+              layoutFixAllProgress.textContent = "Fixing " + nextNum + " of " + _fixAllTotal + "\u2026";
+              fixNextInQueue();
+            } else {
+              var errRemaining = _layoutAuditIssues.filter(function(i) { return !i._fixed && !i._dismissed; }).length;
+              setStatus(msg.error + ' <a href="#" id="status-back-audit" style="color:var(--accent);text-decoration:underline;cursor:pointer;">Back to Audit (' + errRemaining + ' remaining)</a>', "error", true);
+              setTimeout(function() {
+                var backLink = document.getElementById("status-back-audit");
+                if (backLink) {
+                  backLink.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    layoutAuditPanel.style.display = "flex";
+                    renderLayoutIssueList(_layoutAuditIssues, _layoutAuditSort);
+                    resizeForAuditPanel();
+                  });
+                }
+              }, 50);
+            }
+          } else {
+            setStatus(msg.error, "error");
+          }
           break;
         }
         case "job-cancelled": {
@@ -3674,6 +4595,7 @@
           dsChevron.style.display = "none";
           if (_dsExpandedExtra) { _dsExpandedExtra = 0; requestPluginResize(); }
           dsStatusText.textContent = `Scanning page ${(msg.pageIndex || 0) + 1}/${msg.totalPages}: ${msg.page || ""}`;
+          autoFitHeight();
           break;
         }
         case "extract-ds-complete": {
@@ -3685,6 +4607,7 @@
           const s = msg.summary || {};
           dsStatusText.textContent = `Design system: ${s.colors || 0} colors, ${s.typography || 0} types, ${s.components || 0} components, ${s.variables || 0} variables`;
           renderDSDetails(s);
+          autoFitHeight();
           break;
         }
         case "extract-ds-error": {
@@ -3694,7 +4617,8 @@
           dsChevron.style.display = "none";
           if (_dsExpandedExtra) { _dsExpandedExtra = 0; requestPluginResize(); }
           dsStatusText.textContent = msg.error === "Cancelled" ? "Extraction cancelled" : `Extraction failed: ${msg.error}`;
-          setTimeout(() => { if (dsBanner.classList.contains("error")) dsBanner.style.display = "none"; }, 5000);
+          setTimeout(() => { if (dsBanner.classList.contains("error")) { dsBanner.style.display = "none"; autoFitHeight(); } }, 5000);
+          autoFitHeight();
           break;
         }
         case "extract-ds-cached": {
@@ -3708,6 +4632,7 @@
           const staleNote = msg.stale ? " · may be outdated" : "";
           dsStatusText.textContent = `Design system loaded (${cs.colors || 0} colors, ${cs.components || 0} comp${when ? ", " + when : ""}${staleNote})`;
           renderDSDetails(cs);
+          autoFitHeight();
           break;
         }
       }

@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 
 const app = express();
@@ -325,7 +325,7 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -412,7 +412,8 @@ app.post("/generate", async (req: Request, res: Response) => {
       resolvedProvider,
       model,
       safeSelection,
-      safeFullDS
+      safeFullDS,
+      dsSummary
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));
@@ -532,6 +533,58 @@ app.post("/audit-states", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /layout-audit ───────────────────────────────────────────────────
+
+app.post("/layout-audit", async (req: Request, res: Response) => {
+  try {
+    const { selection, apiKey, provider, model, imageBase64 } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key." });
+      return;
+    }
+
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+
+    if (!selection || !selection.nodes || selection.nodes.length === 0) {
+      res.status(400).json({ error: "No nodes to audit. Please select a frame." });
+      return;
+    }
+
+    // Truncate if too large
+    const selJson = JSON.stringify(selection.nodes);
+    if (selJson.length > 80000) {
+      console.warn(`[layout-audit] Selection too large (${selJson.length} chars), truncating`);
+      let accumulated = 0;
+      const trimmed: any[] = [];
+      for (const node of selection.nodes) {
+        const nodeJson = JSON.stringify(node);
+        if (accumulated + nodeJson.length > 80000 && trimmed.length > 0) break;
+        trimmed.push(node);
+        accumulated += nodeJson.length;
+      }
+      selection.nodes = trimmed;
+    }
+
+    console.log(`[layout-audit] provider=${resolvedProvider}, model=${model || "default"}, nodes=${selection.nodes.length}, size=${JSON.stringify(selection.nodes).length}`);
+    if (imageBase64) {
+      console.log(`[layout-audit] Including screenshot (${imageBase64.length} chars base64)`);
+    }
+
+    const result = await callLLMLayoutAudit(selection, apiKey, resolvedProvider, model, imageBase64);
+    console.log(`[layout-audit] LLM returned:`, JSON.stringify(result).slice(0, 500));
+
+    res.json(result);
+  } catch (err: any) {
+    console.error("[layout-audit] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ───────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
@@ -541,5 +594,6 @@ app.listen(PORT, () => {
   console.log(`  POST /audit         — accessibility audit enrichment`);
   console.log(`  POST /audit-fix     — LLM-assisted audit fix`);
   console.log(`  POST /audit-states  — UI state completeness audit`);
+  console.log(`  POST /layout-audit  — layout quality audit`);
   console.log(`  GET  /health        — health check`);
 });

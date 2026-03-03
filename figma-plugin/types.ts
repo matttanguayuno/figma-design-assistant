@@ -112,6 +112,7 @@ export type UIToPluginMessage =
   | { type: "cancel-job"; jobId: number }
   | { type: "audit-a11y" }
   | { type: "audit-states" }
+  | { type: "audit-layout" }
   | { type: "clear-audit" }
   | { type: "select-node"; nodeId: string }
   | { type: "fix-finding"; finding: AuditFinding }
@@ -148,7 +149,10 @@ export type PluginToUIMessage =
   | { type: "extract-ds-progress"; page: string; pageIndex: number; totalPages: number }
   | { type: "extract-ds-complete"; summary: { colors: number; typography: number; components: number; variables: number; pages: number } }
   | { type: "extract-ds-error"; error: string }
-  | { type: "extract-ds-cached"; summary: { colors: number; typography: number; components: number; variables: number; pages: number }; extractedAt: number };
+  | { type: "extract-ds-cached"; summary: { colors: number; typography: number; components: number; variables: number; pages: number }; extractedAt: number }
+  | { type: "layout-audit-phase"; phase: string }
+  | { type: "layout-audit-results"; data: { summary?: string; issues?: LayoutAuditIssue[] } }
+  | { type: "layout-audit-error"; error: string };
 
 // ── Accessibility Audit Types ────────────────────────────────────────
 
@@ -171,6 +175,18 @@ export type StateAuditItem = {
   itemType: "component" | "screen";
   presentStates: string[];
   missingStates: { name: string; reason: string }[];
+};
+
+// ── Layout Audit Types ───────────────────────────────────────────────
+
+export type LayoutAuditIssue = {
+  category: string;
+  severity: "error" | "warning" | "info";
+  nodeId: string;
+  nodeName: string;
+  nodeY?: number;
+  description: string;
+  suggestion?: string;
 };
 
 // ── Audit Log Entry ─────────────────────────────────────────────────
@@ -234,6 +250,47 @@ export type FullDesignSystem = {
   variables: FullDesignSystemVariable[];
   buttonStyles: any[];
   inputStyles: any[];
+};
+
+// ── Canonical Design System Summary (for V2 generation pipeline) ────
+
+export type DSSummaryColorToken = {
+  hex: string;
+  styleName: string;
+};
+
+export type DSSummary = {
+  surfaces: {
+    background?: DSSummaryColorToken;
+    surface?: DSSummaryColorToken;
+    surfaceContainer?: DSSummaryColorToken;
+  };
+  text: {
+    primary?: DSSummaryColorToken;
+    secondary?: DSSummaryColorToken;
+  };
+  brand: {
+    primary?: DSSummaryColorToken;
+    secondary?: DSSummaryColorToken;
+    accent?: DSSummaryColorToken;
+    onPrimary?: DSSummaryColorToken;
+  };
+  radii: {
+    small: number;
+    medium: number;
+    pill: number;
+  };
+  shadow: {
+    type: string;
+    radius: number;
+    spread: number;
+    offsetX: number;
+    offsetY: number;
+    color: { r: number; g: number; b: number; a: number };
+  };
+  spacingScale: number[];
+  typeRoles: Record<string, string>;  // role → textStyleName
+  blockedStyles: string[];            // style names that must NOT be used as default fills
 };
 
 // ── Revert State ────────────────────────────────────────────────────

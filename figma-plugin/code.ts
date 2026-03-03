@@ -23,6 +23,8 @@ import {
   FullDesignSystemComponent,
   FullDesignSystemVariable,
   FullDesignSystemTypography,
+  DSSummary,
+  DSSummaryColorToken,
 } from "./types";
 import { Operation, OperationBatch } from "../shared/operationSchema";
 
@@ -123,7 +125,7 @@ let _nextPlaceX: number | null = null;
 // ── Show UI ─────────────────────────────────────────────────────────
 
 const MIN_WIDTH = 340;
-const MIN_HEIGHT = 280;
+const MIN_HEIGHT = 210;
 figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
 
 // Clean up any leftover audit badges from a previous session
@@ -164,6 +166,269 @@ function assignTempIds(snap: any): void {
   if (Array.isArray(snap.children)) {
     for (const child of snap.children) assignTempIds(child);
   }
+}
+
+// ── Canonical DS Summary Builder ────────────────────────────────────
+
+/**
+ * Build a small, role-annotated design system summary from the extracted
+ * design system snapshot. This replaces raw token dumping in the generate
+ * prompt with a curated, actionable object.
+ */
+function buildDSSummary(designSystem: DesignSystemSnapshot): DSSummary {
+  const fillStyles = (designSystem.fillStyles || []) as Array<{ id: string; name: string; hex?: string; opacity?: number }>;
+  const textStyles = (designSystem.textStyles || []) as Array<{ id: string; name: string; fontFamily?: string; fontStyle?: string; fontSize?: number }>;
+
+  // Helper: find first fill style matching a pattern, return as DSSummaryColorToken
+  function findFill(patterns: RegExp[]): DSSummaryColorToken | undefined {
+    for (const pat of patterns) {
+      const match = fillStyles.find(s => pat.test(s.name.toLowerCase()) && s.hex);
+      if (match) return { hex: match.hex!, styleName: match.name };
+    }
+    return undefined;
+  }
+
+  // ── Surfaces ──
+  const surfaces: DSSummary["surfaces"] = {
+    background: findFill([/background/, /surface.*primary/, /bg\b/]),
+    surface: findFill([/\bsurface\b(?!.*container)(?!.*variant)/i, /card.*bg/, /panel/]),
+    surfaceContainer: findFill([/surface.*container/, /surface.*variant/, /control.*secondary/, /fill.*secondary/]),
+  };
+
+  // ── Text colors ──
+  const text: DSSummary["text"] = {
+    primary: findFill([/text.*primary/, /on.*surface.*primary/, /label.*primary/, /foreground/]),
+    secondary: findFill([/text.*secondary/, /on.*surface.*secondary/, /label.*secondary/, /text.*subtle/]),
+  };
+
+  // ── Brand colors ──
+  const brand: DSSummary["brand"] = {
+    primary: findFill([/(?:^|\/)primary(?!.*on)/, /brand.*primary/, /accent(?!.*on)/]),
+    secondary: findFill([/(?:^|\/)secondary(?!.*on)/, /brand.*secondary/]),
+    accent: findFill([/accent/, /highlight/]),
+    onPrimary: findFill([/on.*primary/, /primary.*text/, /primary.*foreground/]),
+  };
+
+  // ── Corner radii ──
+  // Collect from existing page frames
+  const radiiSet = new Set<number>();
+  try {
+    for (const child of figma.currentPage.children) {
+      if ("cornerRadius" in child && typeof (child as any).cornerRadius === "number") {
+        radiiSet.add((child as any).cornerRadius);
+      }
+    }
+  } catch (_) {}
+  const radiiArr = [...radiiSet].filter(r => r > 0).sort((a, b) => a - b);
+  const radii: DSSummary["radii"] = {
+    small: radiiArr[0] || 4,
+    medium: radiiArr[Math.floor(radiiArr.length / 2)] || 8,
+    pill: radiiArr[radiiArr.length - 1] || 999,
+  };
+
+  // ── Default card shadow ──
+  const shadow: DSSummary["shadow"] = {
+    type: "DROP_SHADOW",
+    radius: 8,
+    spread: 0,
+    offsetX: 0,
+    offsetY: 2,
+    color: { r: 0, g: 0, b: 0, a: 0.08 },
+  };
+
+  // ── Spacing scale ──
+  const spacingSet = new Set<number>();
+  [4, 8, 12, 16, 24, 32, 48].forEach(v => spacingSet.add(v)); // base scale
+  try {
+    for (const child of figma.currentPage.children) {
+      if ("itemSpacing" in child && typeof (child as any).itemSpacing === "number") {
+        const s = (child as any).itemSpacing;
+        if (s > 0 && s <= 64) spacingSet.add(s);
+      }
+    }
+  } catch (_) {}
+  const spacingScale = [...spacingSet].sort((a, b) => a - b);
+
+  // ── Type roles → textStyleName mapping ──
+  const typeRoles: Record<string, string> = {};
+  const rolePatterns: [string, RegExp[]][] = [
+    ["headline", [/headline|display/i]],
+    ["title", [/title|heading/i]],
+    ["body", [/body/i]],
+    ["label", [/label|button/i]],
+    ["caption", [/caption|small|footnote/i]],
+  ];
+  for (const [role, patterns] of rolePatterns) {
+    for (const pat of patterns) {
+      const match = textStyles.find(s => pat.test(s.name));
+      if (match) {
+        typeRoles[role] = match.name;
+        break;
+      }
+    }
+  }
+  // Fallback: if no roles matched by name, assign by font size ordering
+  if (Object.keys(typeRoles).length === 0 && textStyles.length > 0) {
+    const sorted = [...textStyles].sort((a, b) => ((b as any).fontSize || 0) - ((a as any).fontSize || 0));
+    if (sorted[0]) typeRoles["headline"] = sorted[0].name;
+    if (sorted[1]) typeRoles["title"] = sorted[1].name;
+    if (sorted[Math.floor(sorted.length / 2)]) typeRoles["body"] = sorted[Math.floor(sorted.length / 2)].name;
+    if (sorted[sorted.length - 1]) typeRoles["caption"] = sorted[sorted.length - 1].name;
+  }
+
+  // ── Blocked styles (state/interaction styles) ──
+  const blockedStyles: string[] = [];
+  const blockedPattern = /states|focused|pressed|selected|hover|disabled|dragged|active/i;
+  for (const s of fillStyles) {
+    if (blockedPattern.test(s.name)) {
+      blockedStyles.push(s.name);
+    }
+  }
+
+  const summary: DSSummary = { surfaces, text, brand, radii, shadow, spacingScale, typeRoles, blockedStyles };
+  console.log(`[buildDSSummary] Built summary: ${Object.keys(typeRoles).length} typeRoles, ${blockedStyles.length} blocked styles, ${spacingScale.length} spacing values`);
+  return summary;
+}
+
+// ── Deterministic Lint Pass for Generated Snapshots ────────────────
+
+/**
+ * Lint and auto-fix a generated snapshot BEFORE it's turned into Figma nodes.
+ * Catches common LLM mistakes: state brushes as default fills, off-grid spacing,
+ * missing touch targets, etc. Returns the number of fixes applied.
+ */
+function lintGeneratedSnapshot(snap: any, dsSummary: DSSummary): number {
+  let fixes = 0;
+
+  function nearestInScale(value: number, scale: number[]): number {
+    if (scale.length === 0) return value;
+    let closest = scale[0];
+    let minDist = Math.abs(value - closest);
+    for (const s of scale) {
+      const dist = Math.abs(value - s);
+      if (dist < minDist) { closest = s; minDist = dist; }
+    }
+    return closest;
+  }
+
+  function snapToRadii(value: number): number {
+    const { small, medium, pill } = dsSummary.radii;
+    const allowed = [0, small, medium, pill];
+    return nearestInScale(value, allowed);
+  }
+
+  // Collect all distinct textStyleNames in the tree for variety capping
+  const textStyleCounts = new Map<string, number>();
+
+  function walk(node: any): void {
+    if (!node) return;
+
+    // 1. Block state/interaction styles as default fills
+    if (node.fillStyleName && dsSummary.blockedStyles.length > 0) {
+      const lower = node.fillStyleName.toLowerCase();
+      const isBlocked = dsSummary.blockedStyles.some(bs => lower.includes(bs.toLowerCase()) ||
+        /states|focused|pressed|selected|hover|disabled/i.test(lower));
+      if (isBlocked) {
+        const fallback = dsSummary.surfaces.surfaceContainer || dsSummary.surfaces.surface || dsSummary.surfaces.background;
+        if (fallback) {
+          console.log(`[lint] Blocked state style "${node.fillStyleName}" on "${node.name}" → remapped to "${fallback.styleName}"`);
+          node.fillStyleName = fallback.styleName;
+          node.fillColor = fallback.hex;
+          fixes++;
+        }
+      }
+    }
+
+    // 2. Snap spacing values to the spacing scale
+    const spacingProps = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "itemSpacing", "counterAxisSpacing"];
+    for (const prop of spacingProps) {
+      if (typeof node[prop] === "number" && node[prop] > 0) {
+        const snapped = nearestInScale(node[prop], dsSummary.spacingScale);
+        if (snapped !== node[prop]) {
+          console.log(`[lint] Snapped ${prop} on "${node.name}": ${node[prop]} → ${snapped}`);
+          node[prop] = snapped;
+          fixes++;
+        }
+      }
+    }
+
+    // 3. Snap corner radius to known radii tokens
+    if (typeof node.cornerRadius === "number" && node.cornerRadius > 0) {
+      const snapped = snapToRadii(node.cornerRadius);
+      if (snapped !== node.cornerRadius) {
+        console.log(`[lint] Snapped cornerRadius on "${node.name}": ${node.cornerRadius} → ${snapped}`);
+        node.cornerRadius = snapped;
+        fixes++;
+      }
+    }
+
+    // 4. Enforce minimum touch targets for interactive-looking elements
+    if (node.type === "FRAME" && node.children?.length > 0) {
+      const hasTextChild = node.children.some((c: any) => c.type === "TEXT");
+      const looksLikeButton = hasTextChild && node.children.length <= 3 && (node.cornerRadius > 0 || node.fillColor);
+      if (looksLikeButton && typeof node.height === "number" && node.height < 44) {
+        console.log(`[lint] Enforced min touch target on "${node.name}": height ${node.height} → 44`);
+        node.height = 44;
+        // Also ensure vertical padding if too small
+        if ((node.paddingTop || 0) < 8) { node.paddingTop = 10; }
+        if ((node.paddingBottom || 0) < 8) { node.paddingBottom = 10; }
+        fixes++;
+      }
+    }
+
+    // 5. Ensure root dimensions
+    if (!node._lintedRoot) {
+      node._lintedRoot = true;
+      if (node.type === "FRAME" && typeof node.width === "number") {
+        if (node.width > 300 && node.width < 500 && node.width !== 390) {
+          console.log(`[lint] Corrected mobile root width: ${node.width} → 390`);
+          node.width = 390;
+          fixes++;
+        } else if (node.width > 1200 && node.width < 1600 && node.width !== 1440) {
+          console.log(`[lint] Corrected desktop root width: ${node.width} → 1440`);
+          node.width = 1440;
+          fixes++;
+        }
+      }
+    }
+
+    // 6. Track text style usage for variety capping
+    if (node.type === "TEXT" && node.textStyleName) {
+      textStyleCounts.set(node.textStyleName, (textStyleCounts.get(node.textStyleName) || 0) + 1);
+    }
+
+    // Recurse into children
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) walk(child);
+    }
+  }
+
+  walk(snap);
+
+  // 7. Cap text style variety — if more than 6 distinct styles, downgrade least-used
+  if (textStyleCounts.size > 6 && Object.keys(dsSummary.typeRoles).length > 0) {
+    const sorted = [...textStyleCounts.entries()].sort((a, b) => b[1] - a[1]);
+    const keepSet = new Set(sorted.slice(0, 6).map(e => e[0]));
+    const bodyStyle = dsSummary.typeRoles["body"] || sorted[Math.floor(sorted.length / 2)][0];
+
+    function capStyles(node: any): void {
+      if (node.type === "TEXT" && node.textStyleName && !keepSet.has(node.textStyleName)) {
+        console.log(`[lint] Capped text style on "${node.name}": "${node.textStyleName}" → "${bodyStyle}"`);
+        node.textStyleName = bodyStyle;
+        fixes++;
+      }
+      if (Array.isArray(node.children)) {
+        for (const child of node.children) capStyles(child);
+      }
+    }
+    capStyles(snap);
+  }
+
+  // Clean up internal lint marker
+  delete snap._lintedRoot;
+
+  console.log(`[lint] Total fixes applied: ${fixes}`);
+  return fixes;
 }
 
 /**
@@ -3043,7 +3308,7 @@ async function extractFullDocumentDesignSystem(): Promise<FullDesignSystem> {
 }
 
 /** Build a rich summary object for the UI. */
-function buildDSSummary(ds: FullDesignSystem): any {
+function buildDSUISummary(ds: FullDesignSystem): any {
   const paintStyleColors = ds.colorPalette.filter(c => c.source === "paintStyle").length;
   const variableColors = ds.colorPalette.filter(c => c.source?.startsWith("variable:")).length;
   const scrapedColors = ds.colorPalette.filter(c => c.source?.startsWith("page:")).length;
@@ -3203,7 +3468,7 @@ async function loadCachedFullDesignSystem(): Promise<void> {
 
     sendToUI({
       type: "extract-ds-cached",
-      summary: buildDSSummary(parsed),
+      summary: buildDSUISummary(parsed),
       extractedAt: parsed.extractedAt,
       stale: isStale,
     } as any);
@@ -7320,6 +7585,7 @@ setTimeout(async () => {
       allKeys,
     } as any);
     console.log(`[startup] Loaded provider=${_selectedProvider}, model=${_selectedModel}, key=${_userApiKey ? "set" : "empty"}`);
+
   } catch (e) {
     console.warn("[startup] Failed to load API key/provider:", e);
   }
@@ -7611,6 +7877,10 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
     const designSystem = await extractDesignSystemSnapshot();
     console.log(`[job ${job.id}] Design system extracted.`);
 
+    // Build canonical DS summary for V2 generation pipeline
+    const dsSummary = buildDSSummary(designSystem);
+    console.log(`[job ${job.id}] DS summary built:`, JSON.stringify(dsSummary).slice(0, 500));
+
     await yieldToUI();
     if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
 
@@ -7651,6 +7921,7 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
       prompt,
       styleTokens,
       designSystem: trimmedDesignSystem,
+      dsSummary,
       selection: truncatedSelection,
       apiKey: _userApiKey,
       provider: _selectedProvider,
@@ -7685,6 +7956,15 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
     }
 
     console.log(`[job ${job.id}] Snapshot received:`, snapshot.name, snapshot.type);
+    console.log(`[job ${job.id}] === FULL SNAPSHOT JSON ===`);
+    console.log(JSON.stringify(snapshot, null, 2));
+    console.log(`[job ${job.id}] === END SNAPSHOT JSON ===`);
+
+    // ── Deterministic lint pass: fix common LLM mistakes before node creation ──
+    const lintFixes = lintGeneratedSnapshot(snapshot, dsSummary);
+    if (lintFixes > 0) {
+      console.log(`[job ${job.id}] Lint pass applied ${lintFixes} fixes`);
+    }
 
     if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
 
@@ -8155,6 +8435,84 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         break;
       }
 
+      // ── Layout Audit ──────────────────────────────────────
+      case "audit-layout" as any: {
+        try {
+          sendToUI({ type: "status", message: "Extracting layout data…" });
+          sendToUI({ type: "layout-audit-phase", phase: "extracting" } as any);
+
+          // Need a selected frame
+          const sel = figma.currentPage.selection;
+          if (sel.length === 0) {
+            sendToUI({ type: "layout-audit-error", error: "Please select a frame to audit." } as any);
+            break;
+          }
+
+          // Extract snapshot of selected frame(s)
+          const selSnapshot = extractSelectionSnapshot();
+
+          if (!_userApiKey) {
+            sendToUI({ type: "layout-audit-error", error: "No API key configured. Go to Settings to add one." } as any);
+            break;
+          }
+
+          // Optionally capture a screenshot for vision-assisted audit
+          let imageBase64: string | undefined;
+          try {
+            const targetNode = sel[0];
+            if ("exportAsync" in targetNode) {
+              sendToUI({ type: "status", message: "Capturing screenshot…" });
+              const pngBytes = await (targetNode as any).exportAsync({
+                format: "PNG",
+                constraint: { type: "WIDTH", value: Math.min(1200, Math.round(targetNode.width * 2)) },
+              });
+              imageBase64 = uint8ToBase64(pngBytes);
+              console.log(`[layout-audit] Captured screenshot: ${imageBase64.length} chars base64`);
+            }
+          } catch (imgErr: any) {
+            console.warn("[layout-audit] Screenshot capture failed, continuing without:", imgErr.message);
+          }
+
+          sendToUI({ type: "layout-audit-phase", phase: "analyzing" } as any);
+          sendToUI({ type: "status", message: "Analyzing layout with AI…" });
+
+          const auditBody = {
+            selection: selSnapshot,
+            apiKey: _userApiKey,
+            provider: _selectedProvider,
+            model: _selectedModel,
+            imageBase64,
+          };
+
+          const result = await fetchViaUI("/layout-audit", auditBody);
+          console.log("[layout-audit] Result:", JSON.stringify(result).slice(0, 500));
+
+          // Enrich issues with nodeY from actual Figma node positions (for sort-by-location)
+          const rootNode = sel[0];
+          const rootY = ("absoluteTransform" in rootNode) ? (rootNode as any).absoluteTransform[1][2] : 0;
+          if (result && Array.isArray(result.issues)) {
+            for (const issue of result.issues) {
+              if (issue.nodeId) {
+                try {
+                  const node = figma.getNodeById(issue.nodeId);
+                  if (node && "absoluteTransform" in node) {
+                    issue.nodeY = Math.round((node as any).absoluteTransform[1][2] - rootY);
+                  }
+                } catch (_) { /* node not found, skip */ }
+              }
+            }
+          }
+
+          sendToUI({ type: "layout-audit-results", data: result } as any);
+          const issueCount = result?.issues?.length || 0;
+          figma.notify(`Layout audit: ${issueCount} issue(s) found.`, { timeout: 4000 });
+        } catch (err: any) {
+          console.error("[layout-audit] Error:", err);
+          sendToUI({ type: "layout-audit-error", error: err.message || "Layout audit failed." } as any);
+        }
+        break;
+      }
+
       // ── Fix Single Finding ────────────────────────────────
       case "fix-finding" as any: {
         const finding = (msg as any).finding as AuditFinding;
@@ -8344,8 +8702,29 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
       // ── Run (plan + apply in one step) ─────────────────────
       case "run": {
+        // If a targetNodeId was provided (e.g. from audit fix), select its PARENT
+        // so the LLM sees all sibling nodes (needed for overlap/spacing fixes).
+        // Fall back to the target node itself if it has no usable parent.
+        const targetNodeId = (msg as any).targetNodeId;
+        const isAuditFix = !!(msg as any).isAuditFix;
+        if (targetNodeId) {
+          const targetNode = figma.getNodeById(targetNodeId) as SceneNode;
+          if (targetNode) {
+            if (isAuditFix && targetNode.parent && targetNode.parent.type !== "PAGE") {
+              // Select parent so the LLM snapshot includes siblings
+              const parentNode = targetNode.parent as SceneNode;
+              figma.currentPage.selection = [parentNode];
+              figma.viewport.scrollAndZoomIntoView([parentNode]);
+            } else {
+              figma.currentPage.selection = [targetNode];
+              figma.viewport.scrollAndZoomIntoView([targetNode]);
+            }
+          }
+        }
+
         const intentText = ((msg as any).intent || "");
         const intentLower = intentText.toLowerCase();
+        // isAuditFix already declared above
 
         // ── Native Actions (no LLM needed) ──────────────────
         // Detect common Figma operations that should be handled directly
@@ -8392,6 +8771,22 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           /\b(clean\s*up|cleanup|tidy\s*(up)?|neaten|straighten)\b/i.test(intentText) ||
           (/\b(consistent|normalize|standardize|even\s*out|fix|align|regularize)\b/i.test(intentText) &&
            /\b(padding|margins?|spacing|gaps?|layout|alignment|indentation)\b/i.test(intentText));
+
+        if (isAuditFix) {
+          // Audit fix — go straight to edit flow, skip all native intent detection
+          const selectionSnapshot = extractSelectionSnapshot();
+          const jobId = ++_nextJobId;
+          const job: GenerateJobState = { id: jobId, cancelled: false };
+          _activeJobs.set(jobId, job);
+          sendToUI({ type: "job-started", jobId, prompt: intentText } as any);
+          runEditJob(job, intentText, selectionSnapshot).catch((err: any) => {
+            if (!job.cancelled) {
+              sendToUI({ type: "job-error", jobId, error: `Fix failed: ${err.message}` } as any);
+            }
+            _activeJobs.delete(jobId);
+          });
+          break;
+        }
 
         if (isCreateComponentIntent) {
           const selection = figma.currentPage.selection;
@@ -10959,6 +11354,61 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               figma.notify("No layout changes were needed.", { timeout: 3000 });
               sendToUI({ type: "job-complete", jobId: nativeJobIdCU, summary: "No changes applied." } as any);
             }
+
+            // ── Auto-run layout audit after cleanup ──
+            // Run in background so the user sees results without manually triggering
+            try {
+              sendToUI({ type: "status", message: "Running post-cleanup audit…" });
+              sendToUI({ type: "layout-audit-phase", phase: "extracting" } as any);
+              const auditSel = figma.currentPage.selection;
+              if (auditSel.length > 0 && _userApiKey) {
+                const auditSnapshot = extractSelectionSnapshot();
+                let auditImageBase64: string | undefined;
+                try {
+                  const auditTarget = auditSel[0];
+                  if ("exportAsync" in auditTarget) {
+                    const auditPng = await (auditTarget as any).exportAsync({
+                      format: "PNG",
+                      constraint: { type: "WIDTH", value: Math.min(1200, Math.round(auditTarget.width * 2)) },
+                    });
+                    auditImageBase64 = uint8ToBase64(auditPng);
+                  }
+                } catch (_imgErr) { /* continue without screenshot */ }
+
+                sendToUI({ type: "layout-audit-phase", phase: "analyzing" } as any);
+                const auditBody = {
+                  selection: auditSnapshot,
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel,
+                  imageBase64: auditImageBase64,
+                };
+                const auditResult = await fetchViaUI("/layout-audit", auditBody);
+
+                // Enrich issues with nodeY from actual Figma node positions
+                const auditRootNode = auditSel[0];
+                const auditRootY = ("absoluteTransform" in auditRootNode) ? (auditRootNode as any).absoluteTransform[1][2] : 0;
+                if (auditResult && Array.isArray(auditResult.issues)) {
+                  for (const issue of auditResult.issues) {
+                    if (issue.nodeId) {
+                      try {
+                        const node = figma.getNodeById(issue.nodeId);
+                        if (node && "absoluteTransform" in node) {
+                          issue.nodeY = Math.round((node as any).absoluteTransform[1][2] - auditRootY);
+                        }
+                      } catch (_) { /* skip */ }
+                    }
+                  }
+                }
+
+                const auditCount = auditResult?.issues?.length || 0;
+                sendToUI({ type: "layout-audit-results", data: auditResult, autoTriggered: true } as any);
+                sendToUI({ type: "status", message: `Cleanup done. Audit found ${auditCount} remaining issue${auditCount === 1 ? "" : "s"}.` });
+              }
+            } catch (auditErr: any) {
+              console.warn("[cleanup] Post-cleanup audit failed:", auditErr.message);
+              // Non-fatal — cleanup already succeeded
+            }
           } catch (err: any) {
             figma.notify(`Failed to clean up layout: ${err.message}`, { timeout: 4000 });
             sendToUI({ type: "job-error", jobId: nativeJobIdCU, error: `Failed: ${err.message}` } as any);
@@ -11327,7 +11777,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           const ds = await extractFullDocumentDesignSystem();
           sendToUI({
             type: "extract-ds-complete",
-            summary: buildDSSummary(ds),
+            summary: buildDSUISummary(ds),
           } as any);
           figma.notify(`Design system extracted: ${ds.colorPalette.length} colors, ${ds.components.length} components, ${ds.variables.length} variables`, { timeout: 4000 });
         } catch (err: any) {

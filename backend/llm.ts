@@ -135,17 +135,20 @@ async function callAnthropic(
   model: string,
   maxTokens: number,
   apiKey: string,
-  abort: AbortController
+  abort: AbortController,
+  temperature?: number
 ): Promise<string> {
   const client = getAnthropicClient(apiKey);
   // Use streaming to avoid Anthropic's "Streaming is required for long requests" error
+  const streamParams: any = {
+    model,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+  };
+  if (typeof temperature === "number") streamParams.temperature = temperature;
   const stream = client.messages.stream(
-    {
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    },
+    streamParams,
     { signal: abort.signal as any }
   );
   const message = await stream.finalMessage();
@@ -165,7 +168,8 @@ async function callOpenAI(
   maxTokens: number,
   apiKey: string,
   abort: AbortController,
-  jsonMode: boolean = true
+  jsonMode: boolean = true,
+  temperature?: number
 ): Promise<string> {
   const client = getOpenAIClient(apiKey);
   const params: any = {
@@ -176,6 +180,7 @@ async function callOpenAI(
       { role: "user", content: userPrompt },
     ],
   };
+  if (typeof temperature === "number") params.temperature = temperature;
   if (jsonMode) {
     params.response_format = { type: "json_object" };
   }
@@ -199,13 +204,15 @@ async function callGemini(
   _maxTokens: number,
   apiKey: string,
   abort: AbortController,
-  jsonMode: boolean = true
+  jsonMode: boolean = true,
+  temperature?: number
 ): Promise<string> {
   const client = getGeminiClient(apiKey);
   const genConfig: any = {};
   if (jsonMode) {
     genConfig.responseMimeType = "application/json";
   }
+  if (typeof temperature === "number") genConfig.temperature = temperature;
   const genModel = client.getGenerativeModel({
     model,
     systemInstruction: systemPrompt,
@@ -232,15 +239,16 @@ async function callProvider(
   maxTokens: number,
   apiKey: string,
   abort: AbortController,
-  jsonMode: boolean = true
+  jsonMode: boolean = true,
+  temperature?: number
 ): Promise<string> {
   switch (provider) {
     case "anthropic":
-      return callAnthropic(systemPrompt, userPrompt, model, maxTokens, apiKey, abort);
+      return callAnthropic(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, temperature);
     case "openai":
-      return callOpenAI(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, jsonMode);
+      return callOpenAI(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, jsonMode, temperature);
     case "gemini":
-      return callGemini(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, jsonMode);
+      return callGemini(systemPrompt, userPrompt, model, maxTokens, apiKey, abort, jsonMode, temperature);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
@@ -522,9 +530,10 @@ export async function callLLMGenerate(
   provider: Provider = "anthropic",
   model?: string,
   selection?: any,
-  fullDesignSystem?: any
+  fullDesignSystem?: any,
+  dsSummary?: any
 ): Promise<unknown> {
-  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem);
+  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary);
   console.log(`[callLLMGenerate] System prompt: ${GENERATE_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
 
   // Hard safety: if the user prompt exceeds ~500K chars (~125K tokens), truncate it
@@ -542,7 +551,7 @@ export async function callLLMGenerate(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, GENERATE_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort);
+    raw = await callProvider(provider, GENERATE_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }
@@ -704,4 +713,225 @@ export async function callLLMAuditFix(
   }
 
   return parseJsonResponse(raw, "llm-audit-fix");
+}
+
+// ── Call LLM for Layout Audit ───────────────────────────────────────
+
+const LAYOUT_AUDIT_SYSTEM_PROMPT = `You are a senior UI/UX design reviewer performing a comprehensive layout audit. You receive BOTH a screenshot of a Figma frame AND its JSON node tree. Your job is to find EVERY layout issue — structural AND visual. Err heavily on over-reporting. A typical complex frame has 15-30+ issues.
+
+## CRITICAL: DUAL-PASS METHODOLOGY
+
+You MUST perform TWO separate analysis passes and combine the results:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## PASS 1: VISUAL SCAN (screenshot-first)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Look at the screenshot AS A DESIGNER would — with fresh eyes. Before touching the JSON, answer these questions visually:
+
+### 1A. Proportional sanity check
+Scan every element and ask: "Does this look the right SIZE for what it is?"
+- **Buttons**: A standard button is 36-48px tall. If any button looks like it could fit 2-3 lines of text inside, it is TOO TALL. Flag it.
+- **Input fields**: Standard height is 36-44px. Oversized inputs look unprofessional.
+- **Icons / icon containers**: Standard is 16-24px for inline icons, 32-48px for feature icons. Anything larger is suspect.
+- **Cards**: Are cards disproportionately tall or wide for their content? Is there excessive empty space inside?
+- **Sections**: Does any section take up way more vertical space than its content warrants?
+- **IMPORTANT**: Do NOT flag the root frame, its direct full-width child container, or any frame that serves as the main scrollable content area. A tall frame (even 2000px+) that is genuinely filled with diverse content (images, text blocks, buttons, cards, reviews, etc.) is a normal scrollable page — NOT a proportion issue. Only flag a frame as disproportionate if it has significant EMPTY/WASTED space relative to its actual content.
+- **Images / media**: Are they stretched, squished, or comically large/small?
+- **RULE**: If any element looks like it's 2x or more the expected size for its role, that is a severity "error".
+
+### 1B. Spacing & rhythm check (visual)
+Look at the overall vertical and horizontal rhythm:
+- Are there sections where elements feel cramped together?
+- Are there sections with weirdly large gaps between elements?
+- Is the spacing between items in a list/grid consistent to your eye?
+- Do different sections of the page use wildly different spacing scales?
+- Are there areas that feel "off" even if you can't immediately say why? → Investigate in the JSON pass.
+
+### 1C. Visual weight & hierarchy
+- Can you instantly tell what the primary action is?
+- Do headings, subheadings, body text create a clear visual hierarchy?
+- Are there elements competing for attention that shouldn't be?
+- Are decorative elements (dividers, backgrounds) distracting from content?
+
+### 1D. Content-container fit
+- Does any text look truncated, clipped, or run off its container?
+- Are there containers that are mostly empty space with tiny content inside?
+- Are there elements that look pushed to weird positions (e.g., a label stuck to the very top-left corner with no padding)?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## PASS 2: STRUCTURAL ANALYSIS (JSON tree)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Now verify and extend your visual findings with precise measurements from the JSON:
+
+### 2A. Compute absolute bounds
+For every node, compute its absolute bounding box (x, y, width, height) relative to the root frame. This enables global overlap and bounds detection.
+
+### 2B. For each PARENT frame, analyze children systematically
+
+a) **Compute actual gaps** between consecutive siblings:
+   - VERTICAL layout: gap = child[n+1].y - (child[n].y + child[n].height)
+   - HORIZONTAL layout: gap = child[n+1].x - (child[n].x + child[n].width)
+   - Compare to declared \`itemSpacing\`. Any difference = spacing bug.
+   - Compare all sibling gaps to each other. Any variance = inconsistency.
+
+b) **Check for overlaps** — for every pair of siblings:
+   - Two rects overlap if: A.x < B.x + B.width AND A.x + A.width > B.x AND A.y < B.y + B.height AND A.y + A.height > B.y
+
+c) **Check child-within-parent bounds** — for every child:
+   - child.x < 0, child.x + child.width > parent.width, child.y < 0, child.y + child.height > parent.height
+   - If parent has clipsContent: true → content IS being cropped, always flag.
+   - If clipsContent is false but child overflows → visual overflow, flag.
+
+d) **Check padding** — compare content area to frame edges:
+   - Are declared paddingLeft/Right/Top/Bottom values actually reflected in child positions?
+   - Is padding 0 creating cramped edges?
+   - Is padding wildly asymmetric (e.g., 32px left but 8px right)?
+
+e) **Check alignment**:
+   - VERTICAL layout: are children aligned left/center/right as declared?
+   - HORIZONTAL layout: are children aligned top/center/bottom as declared?
+   - Are similar children consistent with each other?
+
+### 2C. Element size validation (CRITICAL — this catches oversized buttons etc.)
+For EVERY interactive/semantic element, validate its dimensions against standard UI conventions:
+
+| Element type | Typical height | Flag if |
+|---|---|---|
+| Button / CTA | 36-48px | > 56px or < 28px |
+| Text input / field | 36-44px | > 52px or < 28px |
+| Inline icon | 16-24px | > 32px or < 12px |
+| Nav link / menu item | 36-48px | > 56px or < 24px |
+| Avatar / thumbnail | 32-64px | > 96px or < 20px |
+| Card | Proportional to content | > 40% empty space inside |
+| Section heading | fontSize+padding | > 3x the text height |
+
+Detect element type from: node name (e.g., "Button", "CTA", "Submit"), fills/corner radius (rounded rect = likely button), or text content ("Buy Now", "Sign Up", etc.).
+**Any element > 1.5x the standard height for its type → flag as PROPORTION_ISSUES with severity "error".**
+**Any element > 2x → describe it as "dramatically oversized".**
+
+### 2D. Check text nodes
+- fontSize < 11px → too small
+- Text content likely wider than node? (chars × fontSize × 0.6 > node.width)
+- textAutoResize "NONE" on a node too small for its text → truncation risk
+- Similar text nodes using different font sizes/weights/families?
+- lineHeight < fontSize × 1.2 for body text?
+
+### 2E. Check section spacing ratios
+For the top-level sections of the frame:
+- Compute the height of each section
+- Compute the gaps between sections
+- Are gaps wildly inconsistent? (e.g., 8px between sections A-B but 40px between B-C)
+- Does any section's internal spacing look different from adjacent sections?
+- Are there sections that are mostly padding/whitespace with very little content?
+
+### 2F. Check auto-layout usage
+- Frame with layoutMode "NONE" but 3+ children in a row/column → should use auto-layout
+- Auto-layout frame with sizing mode causing collapse (width/height = 0)?
+- FIXED sizing when children overflow?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## PASS 3: CROSS-REFERENCE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Compare your visual findings (Pass 1) with your structural findings (Pass 2):
+- Did you see anything visually "off" that you haven't yet explained with JSON data? → Investigate deeper and report it.
+- Did the JSON reveal issues you DIDN'T notice visually? → Still report them.
+- For every issue from Pass 1, verify it with JSON measurements and include pixel values.
+
+## CATEGORIES
+- SPACING_INCONSISTENCY — gaps between siblings differ, or differ from declared itemSpacing
+- OVERLAP — bounding boxes of siblings or related elements intersect
+- CROPPING — content extends beyond parent bounds and may be clipped
+- ALIGNMENT — elements misaligned relative to siblings, container axis, or grid
+- MARGIN_ISSUES — content too close to edges, asymmetric/missing padding, excessive margins
+- SIZE_INCONSISTENCY — similar elements have different dimensions
+- TYPOGRAPHY_ISSUES — inconsistent fonts, sizes too small, line height problems
+- PROPORTION_ISSUES — element is too large/small for its purpose, disproportionate whitespace, content-container mismatch. NEVER flag a frame just for being tall — only flag it if it has significant empty/wasted space inside. A 2000px page full of content is normal, not an issue.
+- AUTO_LAYOUT_PROBLEMS — missing auto-layout, wrong sizing mode, collapsed frames
+- VISUAL_HIERARCHY — unclear importance ranking, weak CTA prominence
+- DESIGN_CONVENTION — element violates standard UI sizing/spacing conventions
+
+## OUTPUT FORMAT
+Return a JSON object (no markdown fences, no prose):
+{
+  "summary": "<1-2 sentence overall assessment>",
+  "issues": [
+    {
+      "category": "<one of the categories above>",
+      "severity": "error" | "warning" | "info",
+      "nodeId": "<id of the most relevant node>",
+      "nodeName": "<name of that node>",
+      "description": "<SPECIFIC description with actual pixel values, e.g. 'Button \"Submit\" is 96px tall — standard button height is 36-48px, making this ~2.5x too tall'>",
+      "suggestion": "<concrete fix, e.g. 'Reduce button height to 44px and adjust vertical padding to 10px'>"
+    }
+  ]
+}
+
+## RULES
+- Return ONLY valid JSON. No markdown, no explanations, no code fences.
+- Be EXHAUSTIVE — report every issue, even 1px misalignments. 15-30+ issues is normal for a complex frame.
+- Be SPECIFIC — always include actual measured values ("height is 96px, expected ~40px"), never vague ("too tall").
+- Walk EVERY node in the tree. Don't skip subtrees.
+- severity: "error" = broken/ugly/overlapping/dramatically oversized, "warning" = noticeable misalignment or inconsistency, "info" = minor polish.
+- Include the nodeId so users can navigate to the problem.
+- Sort by severity (errors first).
+- TRUST YOUR EYES: If something looks wrong in the screenshot, it IS wrong. Report it even if the JSON looks technically correct.
+- NEVER flag the root frame, main content wrapper, or any large container frame as a proportion/size issue just because it is tall. Scrollable pages are naturally tall. Only flag proportion issues on LEAF elements (buttons, icons, inputs, cards, images) or sections that have clearly excessive empty space relative to their content.
+- Check EVERY button, input, card, and interactive element against the size conventions table.
+- If the layout is flawless, return {"summary": "Layout looks clean.", "issues": []}.
+- Aim for COMPLETENESS over brevity. Missing a real issue is worse than reporting a false positive.`;
+
+export async function callLLMLayoutAudit(
+  selectionSnapshot: any,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+  imageBase64?: string
+): Promise<unknown> {
+  const snapshotJson = JSON.stringify(selectionSnapshot, null, 2);
+  const userPrompt = `## Frame Snapshot to Audit
+
+\`\`\`json
+${snapshotJson}
+\`\`\`
+
+## Instructions
+${imageBase64 ? `**PASS 1 — VISUAL (do this FIRST, before reading the JSON):**
+1. Look at the screenshot. Scan every element for proportion problems — buttons that are way too tall, containers that are mostly empty space, sections with weird spacing.
+2. Note every element whose SIZE looks wrong for what it is (e.g., a button that's 80-100px tall when it should be ~40px).
+3. Note every area where SPACING looks off — cramped sections, uneven gaps, sections that feel disconnected.
+4. Note any visual hierarchy problems — can you instantly tell what's most important?
+
+**PASS 2 — STRUCTURAL (now use the JSON to verify and extend):**` : "**STRUCTURAL ANALYSIS:**"}
+5. Walk through EVERY node in this tree systematically, starting from the root.
+6. For each frame/container, compute the actual pixel gaps between consecutive children and compare to declared itemSpacing.
+7. Check every child's bounds against its parent's bounds for overflow/cropping.
+8. Check all sibling pairs for overlap.
+9. **CHECK EVERY button, input, card against the size conventions table in your instructions.** Flag anything > 1.5x standard height.
+10. Group similar elements and compare their sizes for consistency.
+11. Check all text nodes for truncation risk and consistency.
+12. Report EVERY issue found — even 1px discrepancies. Each distinct problem gets its own entry.
+${imageBase64 ? "\n**PASS 3 — CROSS-REFERENCE:** Verify all visual findings with JSON pixel values. If you noticed something visually but can't find it in JSON, report it anyway with your best estimate." : ""}
+
+Return the full JSON with ALL issues. Aim for 15+ issues on a complex frame.`;
+
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    if (imageBase64) {
+      raw = await callProviderWithImage(provider, LAYOUT_AUDIT_SYSTEM_PROMPT, userPrompt, imageBase64, resolvedModel, 16384, apiKey, abort, true);
+    } else {
+      raw = await callProvider(provider, LAYOUT_AUDIT_SYSTEM_PROMPT, userPrompt, resolvedModel, 16384, apiKey, abort);
+    }
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "llm-layout-audit");
 }
