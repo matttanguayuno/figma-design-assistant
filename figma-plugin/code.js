@@ -41,6 +41,7 @@
   var _userApiKey = "";
   var _selectedProvider = "anthropic";
   var _selectedModel = "claude-sonnet-4-20250514";
+  var _generateMode = "standard";
   var CACHE_TTL_MS = 6e4;
   var _designSystemCache = null;
   var _rawTokenCache = null;
@@ -5778,12 +5779,15 @@ RULES:
         if (k) allKeys[p] = k;
       }
       _userApiKey = allKeys[_selectedProvider] || "";
+      const savedGenerateMode = await figma.clientStorage.getAsync("generateMode");
+      if (savedGenerateMode === "multi-step") _generateMode = "multi-step";
       sendToUI({
         type: "load-api-key",
         key: _userApiKey,
         provider: _selectedProvider,
         model: _selectedModel,
-        allKeys
+        allKeys,
+        generateMode: _generateMode
       });
       console.log(`[startup] Loaded provider=${_selectedProvider}, model=${_selectedModel}, key=${_userApiKey ? "set" : "empty"}`);
     } catch (e) {
@@ -6300,6 +6304,293 @@ RULES:
       if (_activeJobs.size === 0) _nextPlaceX = null;
     }
   }
+  function buildNodeIdTree(node, depth = 0) {
+    var _a;
+    const indent = "  ".repeat(depth);
+    let line = `${indent}${node.id} ${node.type} "${node.name}"`;
+    if ("width" in node) line += ` ${Math.round(node.width)}x${Math.round(node.height)}`;
+    if (node.type === "TEXT") line += ` chars="${(_a = node.characters) == null ? void 0 : _a.slice(0, 40)}"`;
+    const lines = [line];
+    if ("children" in node) {
+      for (const child of node.children) {
+        lines.push(buildNodeIdTree(child, depth + 1));
+      }
+    }
+    return lines.join("\n");
+  }
+  async function runGenerateJobMultiStep(job, prompt, sourceSnapshot, sourcePosition, sourceNodeIds) {
+    try {
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
+      await yieldToUI();
+      console.log(`[job ${job.id}] [multi-step] Phase 1: Analyzing design system...`);
+      const designSystem = await extractDesignSystemSnapshot();
+      const dsSummary = buildDSSummary(designSystem);
+      console.log(`[job ${job.id}] [multi-step] DS summary built.`);
+      await yieldToUI();
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      const styleTokens = await extractStyleTokens(prompt);
+      console.log(`[job ${job.id}] [multi-step] Style tokens extracted.`);
+      await yieldToUI();
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "plan" });
+      console.log(`[job ${job.id}] [multi-step] Phase 2: Calling /generate-plan...`);
+      let layoutPlan;
+      try {
+        const planResult = await fetchViaUIForJob("/generate-plan", {
+          prompt,
+          dsSummary,
+          apiKey: _userApiKey,
+          provider: _selectedProvider,
+          model: _selectedModel
+        }, job.id);
+        layoutPlan = planResult.plan;
+        console.log(`[job ${job.id}] [multi-step] Plan received:`, JSON.stringify(layoutPlan).slice(0, 500));
+      } catch (err) {
+        if (job.cancelled) {
+          sendToUI({ type: "job-cancelled", jobId: job.id });
+          return;
+        }
+        console.warn(`[job ${job.id}] [multi-step] Plan step failed, falling back to standard generation:`, err.message);
+      }
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
+      const selectionSnapshot = sourceSnapshot || extractSelectionSnapshot();
+      const truncatedSelection = {
+        nodes: selectionSnapshot.nodes.map((n) => truncateSnapshotForGenerate(n))
+      };
+      if (styleTokens && styleTokens.referenceSnapshots && styleTokens.referenceSnapshots.length > 0) {
+        styleTokens.referenceSnapshots = styleTokens.referenceSnapshots.map(
+          (s) => truncateSnapshotForGenerate(s, 8e4)
+        );
+      }
+      const trimmedDesignSystem = {
+        textStyles: (designSystem.textStyles || []).slice(0, 12),
+        fillStyles: (designSystem.fillStyles || []).slice(0, 12),
+        components: [],
+        variables: []
+      };
+      const payloadToSend = __spreadValues(__spreadValues({
+        prompt,
+        styleTokens,
+        designSystem: trimmedDesignSystem,
+        dsSummary,
+        selection: truncatedSelection,
+        apiKey: _userApiKey,
+        provider: _selectedProvider,
+        model: _selectedModel
+      }, _fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {}), layoutPlan ? { layoutPlan } : {});
+      console.log(`[job ${job.id}] [multi-step] Phase 3: Calling /generate with plan...`);
+      let result;
+      try {
+        result = await fetchViaUIForJob("/generate", payloadToSend, job.id);
+      } catch (err) {
+        if (job.cancelled) {
+          sendToUI({ type: "job-cancelled", jobId: job.id });
+          return;
+        }
+        sendToUI({ type: "job-error", jobId: job.id, error: `Backend error: ${err.message}` });
+        return;
+      }
+      const snapshot = result.snapshot;
+      if (!snapshot || !snapshot.type) {
+        sendToUI({ type: "job-error", jobId: job.id, error: "Backend returned invalid frame data." });
+        return;
+      }
+      console.log(`[job ${job.id}] [multi-step] Snapshot received: ${snapshot.name} (${snapshot.type})`);
+      const lintFixes = lintGeneratedSnapshot(snapshot, dsSummary);
+      if (lintFixes > 0) {
+        console.log(`[job ${job.id}] [multi-step] Lint pass: ${lintFixes} fixes`);
+      }
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      const resolvedSourceNodes = [];
+      if (sourceNodeIds && sourceNodeIds.length > 0) {
+        for (const nid of sourceNodeIds) {
+          const found = figma.getNodeById(nid);
+          if (found && "type" in found && found.type !== "DOCUMENT" && found.type !== "PAGE") {
+            resolvedSourceNodes.push(found);
+          }
+        }
+      } else {
+        resolvedSourceNodes.push(...figma.currentPage.selection);
+      }
+      if (resolvedSourceNodes.length > 0) {
+        const imageMap = await buildImageMap(resolvedSourceNodes);
+        if (imageMap.size > 0) {
+          const transplanted = transplantImages(snapshot, imageMap, "");
+          console.log(`[job ${job.id}] [multi-step] Transplanted ${transplanted} image(s)`);
+        }
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "create" });
+      assignTempIds(snapshot);
+      _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
+      clearStyleMaps();
+      const modeHint = `${prompt} ${snapshot.name || ""} ${(sourcePosition == null ? void 0 : sourcePosition.name) || ""}`;
+      _currentThemeMode = detectThemeMode(modeHint);
+      let placeX;
+      let placeY;
+      const frameW = snapshot.width || 390;
+      const frameH = snapshot.height || 800;
+      const GAP = 100;
+      if (sourcePosition) {
+        let hasCollisionMS2 = function(cx, cy, cw, ch) {
+          for (const ob of obstacles) {
+            if (cx < ob.x + ob.w && cx + cw > ob.x && cy < ob.y + ob.h && cy + ch > ob.y) return true;
+          }
+          return false;
+        };
+        var hasCollisionMS = hasCollisionMS2;
+        const candidates = [
+          { x: sourcePosition.x + sourcePosition.width + GAP, y: sourcePosition.y },
+          { x: sourcePosition.x, y: sourcePosition.y + sourcePosition.height + GAP },
+          { x: sourcePosition.x + sourcePosition.width + GAP + frameW + GAP, y: sourcePosition.y }
+        ];
+        const obstacles = [];
+        for (const child of figma.currentPage.children) {
+          obstacles.push({ x: child.x, y: child.y, w: child.width, h: child.height });
+        }
+        let placed = false;
+        for (const c of candidates) {
+          if (!hasCollisionMS2(c.x, c.y, frameW, frameH)) {
+            placeX = c.x;
+            placeY = c.y;
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) {
+          let maxBottom = sourcePosition.y + sourcePosition.height;
+          for (const ob of obstacles) {
+            if (ob.x < sourcePosition.x + sourcePosition.width + GAP + frameW && ob.x + ob.w > sourcePosition.x) {
+              const bottom = ob.y + ob.h;
+              if (bottom > maxBottom) maxBottom = bottom;
+            }
+          }
+          placeX = sourcePosition.x;
+          placeY = maxBottom + GAP;
+        }
+      } else if (_nextPlaceX !== null) {
+        placeX = _nextPlaceX;
+        placeY = 0;
+      } else {
+        placeX = 0;
+        placeY = 0;
+        const existingChildren = figma.currentPage.children;
+        if (existingChildren.length > 0) {
+          let maxRight = -Infinity;
+          for (const child of existingChildren) {
+            const right = child.x + child.width;
+            if (right > maxRight) maxRight = right;
+          }
+          placeX = maxRight + 200;
+        }
+      }
+      if (!sourcePosition) {
+        _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
+      }
+      const isComponentSetSnapshot = snapshot.type === "COMPONENT_SET";
+      if (sourcePosition && sourcePosition.width > 0 && sourcePosition.height > 0 && !isComponentSetSnapshot) {
+        snapshot.width = sourcePosition.width;
+        snapshot.height = sourcePosition.height;
+        snapshot.layoutSizingVertical = "FIXED";
+        snapshot.layoutSizingHorizontal = "FIXED";
+      }
+      console.log(`[job ${job.id}] [multi-step] Creating frame at x:${placeX}, y:${placeY}...`);
+      const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
+      if (!node) {
+        sendToUI({ type: "job-error", jobId: job.id, error: "Failed to create frame from snapshot." });
+        return;
+      }
+      node.x = placeX;
+      node.y = placeY;
+      if (sourcePosition && "resize" in node && node.type !== "COMPONENT_SET") {
+        const targetW = sourcePosition.width;
+        const targetH = sourcePosition.height;
+        if (targetW > 0 && targetH > 0) {
+          const frame = node;
+          try {
+            frame.layoutSizingHorizontal = "FIXED";
+          } catch (_) {
+          }
+          try {
+            frame.layoutSizingVertical = "FIXED";
+          } catch (_) {
+          }
+          frame.resize(targetW, targetH);
+        }
+      }
+      if ("setPluginData" in node) {
+        node.setPluginData("generated", "true");
+      }
+      figma.currentPage.selection = [node];
+      figma.viewport.scrollAndZoomIntoView([node]);
+      const actualRight = placeX + node.width + 200;
+      if (actualRight > (_nextPlaceX || 0)) _nextPlaceX = actualRight;
+      console.log(`[job ${job.id}] [multi-step] Frame created. Starting refine phase...`);
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "refine" });
+      try {
+        let screenshotBase64 = "";
+        if ("exportAsync" in node) {
+          const scale = Math.min(2, 1200 / Math.max(node.width, 1));
+          const pngBytes = await node.exportAsync({
+            format: "PNG",
+            constraint: { type: "SCALE", value: Math.max(0.5, scale) }
+          });
+          screenshotBase64 = uint8ToBase64(pngBytes);
+          console.log(`[job ${job.id}] [multi-step] Screenshot captured: ${screenshotBase64.length} chars`);
+        }
+        if (screenshotBase64 && !job.cancelled) {
+          const nodeTree = buildNodeIdTree(node);
+          console.log(`[job ${job.id}] [multi-step] Node tree: ${nodeTree.split("\\n").length} lines`);
+          const refineResult = await fetchViaUIForJob("/generate-refine", {
+            nodeTree,
+            prompt,
+            imageBase64: screenshotBase64,
+            apiKey: _userApiKey,
+            provider: _selectedProvider,
+            model: _selectedModel
+          }, job.id);
+          const operations = (refineResult == null ? void 0 : refineResult.operations) || [];
+          console.log(`[job ${job.id}] [multi-step] Refine returned ${operations.length} operations`);
+          if (operations.length > 0 && !job.cancelled) {
+            const batch = { operations };
+            const applyResult = await applyBatch(batch, `[multi-step refine] ${prompt}`);
+            console.log(`[job ${job.id}] [multi-step] Applied refine operations:\\n${applyResult}`);
+          }
+        }
+      } catch (refineErr) {
+        console.warn(`[job ${job.id}] [multi-step] Refine step failed (non-fatal):`, refineErr.message);
+      }
+      const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (multi-step)`;
+      figma.notify(genStats, { timeout: 4e3 });
+      sendToUI({ type: "job-complete", jobId: job.id, summary: genStats });
+    } catch (err) {
+      console.error(`[job ${job.id}] [multi-step] Error:`, err.message, err.stack);
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id });
+        return;
+      }
+      sendToUI({ type: "job-error", jobId: job.id, error: `Generation failed: ${err.message}` });
+    } finally {
+      _activeJobs.delete(job.id);
+      if (_activeJobs.size === 0) _nextPlaceX = null;
+    }
+  }
   figma.ui.onmessage = async (msg) => {
     var _a, _b, _c, _d;
     try {
@@ -6446,6 +6737,18 @@ RULES:
             console.log(`[settings] Provider=${provider}, model=${model}, key=${_userApiKey ? "set" : "empty"}`);
           } catch (e) {
             console.warn("[settings] Failed to save provider selection:", e);
+          }
+          return;
+        }
+        // ── Persist generate mode ─────────────────────────────
+        case "save-generate-mode": {
+          try {
+            const mode = msg.mode === "multi-step" ? "multi-step" : "standard";
+            _generateMode = mode;
+            await figma.clientStorage.setAsync("generateMode", mode);
+            console.log(`[settings] Generate mode saved: ${mode}`);
+          } catch (e) {
+            console.warn("[settings] Failed to save generate mode:", e);
           }
           return;
         }
@@ -6755,6 +7058,7 @@ RULES:
           }
           const intentText = msg.intent || "";
           const intentLower = intentText.toLowerCase();
+          const useMultiStep = !!msg.multiStep || _generateMode === "multi-step";
           const hasVariantKeyword = /\bvariants?\b/i.test(intentText) || /\bstates?\b/i.test(intentText);
           const hasCreateKeyword = /\b(create|make|add|generate|missing)\b/i.test(intentText);
           const selectionIsComponentSet = figma.currentPage.selection.length > 0 && figma.currentPage.selection[0].type === "COMPONENT_SET";
@@ -9075,7 +9379,8 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
                 const singleSelection = { nodes: [frameData.snapshot] };
                 console.log(`[run] Starting generate job ${mjobId} for frame "${frameData.snapshot.name}" (${frameData.position.width}x${frameData.position.height} at ${frameData.position.x},${frameData.position.y})`);
                 sendToUI({ type: "job-started", jobId: mjobId, prompt: `${prompt} (${frameData.snapshot.name})` });
-                runGenerateJob(mjob, prompt, singleSelection, frameData.position, [frameData.nodeId]).catch((err) => {
+                const runner = useMultiStep ? runGenerateJobMultiStep : runGenerateJob;
+                runner(mjob, prompt, singleSelection, frameData.position, [frameData.nodeId]).catch((err) => {
                   console.error(`[run] Unhandled error in generate job ${mjobId}:`, err);
                   if (!mjob.cancelled) {
                     sendToUI({ type: "job-error", jobId: mjobId, error: `Generation failed: ${err.message}` });
@@ -9085,9 +9390,10 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
               }
             } else {
               const singleNodeIds = currentSelection.map((n) => n.id);
-              console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"`);
+              console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}"${useMultiStep ? " (multi-step)" : ""}`);
               sendToUI({ type: "job-started", jobId, prompt });
-              runGenerateJob(job, prompt, void 0, void 0, singleNodeIds.length > 0 ? singleNodeIds : void 0).catch((err) => {
+              const runner = useMultiStep ? runGenerateJobMultiStep : runGenerateJob;
+              runner(job, prompt, void 0, void 0, singleNodeIds.length > 0 ? singleNodeIds : void 0).catch((err) => {
                 console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
                 if (!job.cancelled) {
                   sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });

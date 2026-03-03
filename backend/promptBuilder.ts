@@ -461,12 +461,27 @@ export function buildGeneratePrompt(
   designSystem: DesignSystemSnapshot,
   selection?: any,
   fullDesignSystem?: any,
-  dsSummary?: any
+  dsSummary?: any,
+  layoutPlan?: any
 ): string {
   const parts: string[] = [
     "## User Request",
     prompt,
   ];
+
+  // ── 0. Layout Plan (from multi-step pipeline) ──
+  if (layoutPlan) {
+    parts.push("", "## Layout Plan (FOLLOW THIS STRUCTURE)");
+    parts.push("A planning step has already decomposed this screen into semantic blocks.");
+    parts.push("You MUST follow this plan exactly — create one FRAME per block, in this order,");
+    parts.push("with the specified roles, children structure, and estimated heights.");
+    parts.push("");
+    parts.push(JSON.stringify(layoutPlan, null, 2));
+    parts.push("");
+    parts.push("IMPORTANT: Every block in the plan MUST appear as a top-level child of the root FRAME.");
+    parts.push("Use the block IDs as frame names. Flesh out each block with real content, proper styling,");
+    parts.push("and enough child nodes to create a production-quality design.");
+  }
 
   // ── 1. DSSummary (curated palette — preferred over raw tokens) ──
   if (dsSummary) {
@@ -628,4 +643,152 @@ export function buildGeneratePrompt(
   const fullPrompt = parts.join("\n");
   console.log(`[buildGeneratePrompt] Total prompt size: ${fullPrompt.length} chars`);
   return fullPrompt;
+}
+
+// ── Plan System Prompt (Multi-Step Pipeline Step 1) ─────────────────
+
+export const PLAN_SYSTEM_PROMPT = `You are a senior UI/UX architect creating a structural layout plan for a Figma frame.
+Return ONLY valid JSON — no markdown, no prose, no explanation.
+
+═══ OUTPUT FORMAT ═══
+Return a JSON object with this structure:
+{
+  "blocks": [
+    {
+      "id": "header",
+      "role": "header|hero|nav|content|card|list|grid|cta|footer|form|stats|filters|tabs",
+      "label": "Human-readable section label",
+      "description": "What this block contains and its purpose",
+      "layout": "VERTICAL|HORIZONTAL",
+      "estimatedHeight": 120,
+      "children": [
+        {
+          "id": "header-title",
+          "role": "text|icon|image|button|input|divider|badge|avatar|rating",
+          "label": "Section title",
+          "description": "Main heading text"
+        }
+      ]
+    }
+  ],
+  "rootWidth": 390,
+  "rootLayout": "VERTICAL",
+  "theme": "light|dark",
+  "density": "compact|normal|spacious"
+}
+
+═══ PLANNING RULES ═══
+1. Decompose the screen into 4-8 major semantic blocks.
+2. Each block should have 2-6 children describing its internal structure.
+3. Think about visual hierarchy: what draws the eye first? What is secondary?
+4. Consider spacing rhythm: use alternating tight/loose spacing between blocks.
+5. For lists/grids, specify the number of items and their card structure.
+6. For mobile (390px), plan for single-column vertical scroll.
+7. For desktop (1440px), plan for multi-column layouts with sidebars or split panels.
+8. Every block must have a clear role and purpose — no generic "container" blocks.
+9. Aim for 30-80 total leaf nodes across all blocks.
+
+═══ ROLE DEFINITIONS ═══
+- header: Top bar with title, navigation, actions
+- hero: Large visual section with primary message
+- nav: Navigation bar or tab bar
+- content: Generic content area
+- card: Individual card component
+- list: Vertical list of items
+- grid: Grid layout of items
+- cta: Call-to-action section
+- footer: Bottom section
+- form: Input form
+- stats: Statistics/metrics display
+- filters: Filter controls
+- tabs: Tab navigation
+
+Generate the layout plan JSON now.`;
+
+export function buildPlanPrompt(
+  prompt: string,
+  dsSummary?: any
+): string {
+  const parts: string[] = [
+    "## User Request",
+    prompt,
+  ];
+
+  if (dsSummary) {
+    parts.push("", "## Design System Context");
+    if (dsSummary.surfaces?.length > 0) {
+      parts.push("Available surface colors: " + dsSummary.surfaces.map((c: any) => c.name).join(", "));
+    }
+    if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
+      parts.push("Typography roles: " + Object.keys(dsSummary.typeRoles).join(", "));
+    }
+    if (dsSummary.spacingScale?.length > 0) {
+      parts.push("Spacing scale: " + dsSummary.spacingScale.join(", "));
+    }
+  }
+
+  parts.push("", "Generate the layout plan JSON now.");
+  return parts.join("\n");
+}
+
+// ── Refine System Prompt (Multi-Step Pipeline Step 3) ───────────────
+
+export const REFINE_SYSTEM_PROMPT = `You are a senior design QA reviewer examining a generated Figma frame.
+You receive a screenshot of the frame and its node ID tree.
+Your job is to identify visual problems and return EDIT OPERATIONS to fix them.
+
+Return ONLY valid JSON — no markdown, no prose, no explanation.
+
+═══ OUTPUT FORMAT ═══
+{
+  "operations": [
+    { "type": "SET_LAYOUT_PROPS", "nodeId": "...", "paddingTop": 16, ... },
+    { "type": "RESIZE_NODE", "nodeId": "...", "width": 390 },
+    { "type": "SET_TEXT", "nodeId": "...", "text": "..." },
+    { "type": "SET_FILL_COLOR", "nodeId": "...", "color": "#..." },
+    { "type": "SET_SIZE_MODE", "nodeId": "...", "horizontal": "FILL" }
+  ]
+}
+
+═══ WHAT TO CHECK ═══
+1. Text clipping or overflow — fix with RESIZE_NODE or SET_SIZE_MODE (HUG/FILL).
+2. Insufficient padding — fix with SET_LAYOUT_PROPS.
+3. Inconsistent spacing — fix with SET_LAYOUT_PROPS (itemSpacing).
+4. Elements too small (buttons < 44px height, text < 10px) — fix with RESIZE_NODE.
+5. Poor contrast (light text on light bg or dark on dark) — fix with SET_FILL_COLOR.
+6. Misaligned elements — fix with SET_LAYOUT_PROPS or SET_SIZE_MODE.
+7. Excessive whitespace or cramped sections — fix spacing.
+8. Missing visual hierarchy — ensure heading/body/caption text sizes differ.
+
+═══ OPERATION TYPES AVAILABLE ═══
+- SET_LAYOUT_PROPS: { nodeId, paddingTop?, paddingRight?, paddingBottom?, paddingLeft?, itemSpacing?, counterAxisSpacing? }
+- RESIZE_NODE: { nodeId, width?, height? }
+- SET_TEXT: { nodeId, text }
+- SET_FILL_COLOR: { nodeId, color: "#HEXHEX" }
+- SET_SIZE_MODE: { nodeId, horizontal?: "FIXED"|"FILL"|"HUG", vertical?: "FIXED"|"FILL"|"HUG" }
+- SET_LAYOUT_MODE: { nodeId, layoutMode: "HORIZONTAL"|"VERTICAL"|"NONE" }
+
+═══ RULES ═══
+- Only return operations for REAL problems visible in the screenshot.
+- Use the node IDs from the provided tree — do NOT invent IDs.
+- Prefer minimal changes — fix only what is broken.
+- If the design looks good, return { "operations": [] }.
+- Maximum 20 operations per response.
+
+Return the operations JSON now.`;
+
+export function buildRefinePrompt(
+  nodeTree: string,
+  prompt: string
+): string {
+  const parts: string[] = [
+    "## Original Request",
+    prompt,
+    "",
+    "## Node ID Tree (use these IDs in operations)",
+    nodeTree,
+    "",
+    "Examine the screenshot carefully. Identify any visual problems and return fix operations.",
+  ];
+  return parts.join("\n");
 }

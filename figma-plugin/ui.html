@@ -671,6 +671,60 @@
       background-position: right 8px center;
       padding-right: 24px;
     }
+    /* Toggle switch for multi-step mode */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .toggle-row .settings-label {
+      margin: 0;
+      flex: 1;
+    }
+    .toggle-desc {
+      font-size: 9px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .toggle-switch {
+      position: relative;
+      width: 32px;
+      height: 18px;
+      flex-shrink: 0;
+    }
+    .toggle-switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--border);
+      border-radius: 9px;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: "";
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      left: 2px;
+      bottom: 2px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+    .toggle-switch input:checked + .toggle-slider {
+      background: var(--accent);
+    }
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(14px);
+    }
     .settings-select:focus {
       border-color: var(--accent);
     }
@@ -1742,6 +1796,16 @@
       <span class="key-dot"></span>
       <span id="key-status-text">No API key configured</span>
     </div>
+    <div class="toggle-row">
+      <div>
+        <div class="settings-label">Multi-Step Generation</div>
+        <div class="toggle-desc">Plan → Generate → Refine (3 LLM calls)</div>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="multi-step-toggle" />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
   </div>
 
   <div id="progress-container" class="progress-container">
@@ -2034,7 +2098,7 @@
     const menuExportDocs = document.getElementById("menu-export-docs");
     const fileInput = document.getElementById("file-input");
     const progressContainer = document.getElementById("progress-container");
-    const progressSegments = document.querySelectorAll(".progress-segment");
+    let progressSegments = document.querySelectorAll(".progress-segment");
     const jobListEl = document.getElementById("job-list");
     const settingsPanel = document.getElementById("settings-panel");
     const apiKeyInput = document.getElementById("api-key-input");
@@ -2046,6 +2110,7 @@
     const providerSelect = document.getElementById("provider-select");
     const modelSelect = document.getElementById("model-select");
     const apiKeyLabel = document.getElementById("api-key-label");
+    const multiStepToggle = document.getElementById("multi-step-toggle");
     const menuAuditA11y = document.getElementById("menu-audit-a11y");
     const menuClearA11y = document.getElementById("menu-clear-a11y");
     const menuAuditStates = document.getElementById("menu-audit-states");
@@ -2213,6 +2278,8 @@
     let _selectedModel = "claude-sonnet-4-20250514";
     // Store keys per provider
     let _providerKeys = { anthropic: "", openai: "", gemini: "" };
+    // Multi-step generation mode
+    let _multiStepMode = false;
 
     // ── API Key state ────────────────────────────────────────────
     let _apiKey = "";
@@ -2277,6 +2344,13 @@
       postToPlugin({ type: "save-provider-selection", provider: _selectedProvider, model: _selectedModel });
     });
 
+    // Multi-step mode toggle
+    multiStepToggle.addEventListener("change", function() {
+      _multiStepMode = multiStepToggle.checked;
+      postToPlugin({ type: "save-generate-mode", mode: _multiStepMode ? "multi-step" : "standard" });
+      updateProgressSegments();
+    });
+
     // Track whether anything is selected to update button label
     let hasSelection = false;
     function updateButtonLabel(selected) {
@@ -2294,7 +2368,39 @@
     // Default estimates (ms). Conservative first-run values — most generate
     // calls take 60-120s on typical frames. Updated after each successful run.
     let phaseEstimates = { analyze: 8000, generate: 90000, create: 6000 };
-    const PHASE_ORDER = ["analyze", "generate", "create"];
+    const PHASE_ORDER_STANDARD = ["analyze", "generate", "create"];
+    const PHASE_ORDER_MULTISTEP = ["analyze", "plan", "generate", "create", "refine"];
+    const PHASE_ESTIMATES_MULTISTEP = { analyze: 8000, plan: 15000, generate: 90000, create: 6000, refine: 30000 };
+    let PHASE_ORDER = PHASE_ORDER_STANDARD;
+
+    // Dynamically update progress bar segments based on mode
+    function updateProgressSegments() {
+      const order = _multiStepMode ? PHASE_ORDER_MULTISTEP : PHASE_ORDER_STANDARD;
+      PHASE_ORDER = order;
+      phaseEstimates = _multiStepMode ? { ...PHASE_ESTIMATES_MULTISTEP } : { analyze: 8000, generate: 90000, create: 6000 };
+
+      const labels = {
+        analyze: "Analyzing",
+        plan: "Planning",
+        generate: "Generating",
+        create: "Creating",
+        refine: "Refining",
+      };
+
+      const container = document.querySelector(".progress-segments");
+      if (!container) return;
+      container.innerHTML = "";
+      for (const step of order) {
+        const seg = document.createElement("div");
+        seg.className = "progress-segment";
+        seg.setAttribute("data-step", step);
+        seg.innerHTML = '<div class="segment-track"><div class="segment-fill"></div></div>' +
+          '<div class="segment-label">' + (labels[step] || step) + '</div>';
+        container.appendChild(seg);
+      }
+      // Re-query segments nodeList
+      progressSegments = document.querySelectorAll(".progress-segment");
+    }
 
     let _progressInterval = null;
     let _progressPhase = "";
@@ -4157,7 +4263,7 @@
         if (_dsExpandedExtra) { _dsExpandedExtra = 0; }
         dsBanner.style.display = "none";
       }
-      postToPlugin({ type: "run", intent });
+      postToPlugin({ type: "run", intent, multiStep: _multiStepMode });
     });
 
     btnCancel.addEventListener("click", () => {
@@ -4585,6 +4691,12 @@
           }
           // Validate stored keys on startup
           validateStartupKeys();
+          // Restore multi-step mode
+          if (msg.generateMode === "multi-step") {
+            _multiStepMode = true;
+            multiStepToggle.checked = true;
+            updateProgressSegments();
+          }
           break;
         }
         // ── Design System Extraction Messages ───────────────────

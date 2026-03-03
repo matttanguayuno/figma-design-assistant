@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -531,9 +531,10 @@ export async function callLLMGenerate(
   model?: string,
   selection?: any,
   fullDesignSystem?: any,
-  dsSummary?: any
+  dsSummary?: any,
+  layoutPlan?: any
 ): Promise<unknown> {
-  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary);
+  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
   console.log(`[callLLMGenerate] System prompt: ${GENERATE_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
 
   // Hard safety: if the user prompt exceeds ~500K chars (~125K tokens), truncate it
@@ -934,4 +935,57 @@ Return the full JSON with ALL issues. Aim for 15+ issues on a complex frame.`;
   }
 
   return parseJsonResponse(raw, "llm-layout-audit");
+}
+
+// ── Call LLM for Layout Plan (Multi-Step Pipeline Step 1) ───────────
+
+export async function callLLMPlan(
+  prompt: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+  dsSummary?: any
+): Promise<unknown> {
+  const userPrompt = buildPlanPrompt(prompt, dsSummary);
+  console.log(`[callLLMPlan] System: ${PLAN_SYSTEM_PROMPT.length} chars, User: ${userPrompt.length} chars`);
+
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    raw = await callProvider(provider, PLAN_SYSTEM_PROMPT, userPrompt, resolvedModel, 4096, apiKey, abort, true, 0.4);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "llm-plan");
+}
+
+// ── Call LLM for Visual Refinement (Multi-Step Pipeline Step 3) ─────
+
+export async function callLLMRefine(
+  nodeTree: string,
+  prompt: string,
+  imageBase64: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string
+): Promise<unknown> {
+  const userPrompt = buildRefinePrompt(nodeTree, prompt);
+  console.log(`[callLLMRefine] System: ${REFINE_SYSTEM_PROMPT.length} chars, User: ${userPrompt.length} chars, Image: ${imageBase64.length} chars`);
+
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    raw = await callProviderWithImage(provider, REFINE_SYSTEM_PROMPT, userPrompt, imageBase64, resolvedModel, 8192, apiKey, abort, true);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  return parseJsonResponse(raw, "llm-refine");
 }

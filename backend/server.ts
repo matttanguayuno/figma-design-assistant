@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 
 const app = express();
@@ -325,7 +325,7 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, layoutPlan } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -413,7 +413,8 @@ app.post("/generate", async (req: Request, res: Response) => {
       model,
       safeSelection,
       safeFullDS,
-      dsSummary
+      dsSummary,
+      layoutPlan
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));
@@ -585,12 +586,87 @@ app.post("/layout-audit", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /generate-plan ────────────────────────────────────────────
+
+app.post("/generate-plan", async (req: Request, res: Response) => {
+  try {
+    const { prompt, apiKey, provider, model, dsSummary } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key." });
+      return;
+    }
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+    if (!prompt || typeof prompt !== "string") {
+      res.status(400).json({ error: "Missing or invalid 'prompt'" });
+      return;
+    }
+
+    console.log(`[generate-plan] provider=${resolvedProvider}, model=${model || "default"}, prompt="${prompt}"`);
+
+    const plan = await callLLMPlan(prompt, apiKey, resolvedProvider, model, dsSummary);
+    console.log(`[generate-plan] LLM returned plan:`, JSON.stringify(plan).slice(0, 500));
+
+    if (!plan || typeof plan !== "object") {
+      res.status(422).json({ error: "LLM returned an invalid plan structure" });
+      return;
+    }
+
+    res.json({ plan });
+  } catch (err: any) {
+    console.error("[generate-plan] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /generate-refine ──────────────────────────────────────────
+
+app.post("/generate-refine", async (req: Request, res: Response) => {
+  try {
+    const { nodeTree, prompt, imageBase64, apiKey, provider, model } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key." });
+      return;
+    }
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+    if (!nodeTree || typeof nodeTree !== "string") {
+      res.status(400).json({ error: "Missing or invalid 'nodeTree'" });
+      return;
+    }
+    if (!imageBase64 || typeof imageBase64 !== "string") {
+      res.status(400).json({ error: "Missing screenshot image" });
+      return;
+    }
+
+    console.log(`[generate-refine] provider=${resolvedProvider}, model=${model || "default"}, nodeTree=${nodeTree.length} chars, image=${imageBase64.length} chars`);
+
+    const result = await callLLMRefine(nodeTree, prompt || "", imageBase64, apiKey, resolvedProvider, model);
+    console.log(`[generate-refine] LLM returned:`, JSON.stringify(result).slice(0, 500));
+
+    res.json(result);
+  } catch (err: any) {
+    console.error("[generate-refine] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ───────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`DesignOps AI backend running on http://localhost:${PORT}`);
   console.log(`  POST /plan          — generate operation batch`);
   console.log(`  POST /generate      — generate new frame from prompt`);
+  console.log(`  POST /generate-plan — multi-step: layout plan`);
+  console.log(`  POST /generate-refine — multi-step: visual refinement`);
   console.log(`  POST /audit         — accessibility audit enrichment`);
   console.log(`  POST /audit-fix     — LLM-assisted audit fix`);
   console.log(`  POST /audit-states  — UI state completeness audit`);
