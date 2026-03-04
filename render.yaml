@@ -1,21 +1,11 @@
 services:
   - type: web
     name: designops-ai-backend
-    runtime: node
+    runtime: docker
     plan: standard
-    buildCommand: |
-      apt-get update && apt-get install -y --no-install-recommends \
-        wget gnupg ca-certificates \
-      && wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-      && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
-      && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
-      && npm install \
-      && npm run build:backend
-    startCommand: node dist/server.js
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
-      - key: PUPPETEER_EXECUTABLE_PATH
-        value: /usr/bin/google-chrome-stable
       - key: ANTHROPIC_API_KEY
         sync: false          # prompted during first deploy
       - key: NODE_ENV
