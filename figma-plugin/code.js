@@ -6652,7 +6652,7 @@ RULES:
         sendToUI({ type: "job-cancelled", jobId: job.id });
         return;
       }
-      sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" });
+      sendToUI({ type: "job-progress", jobId: job.id, phase: "design" });
       const trimmedDesignSystem = {
         textStyles: (designSystem.textStyles || []).slice(0, 12),
         fillStyles: (designSystem.fillStyles || []).slice(0, 12),
@@ -6668,6 +6668,13 @@ RULES:
         provider: _selectedProvider,
         model: _selectedModel
       };
+      if (sourceSnapshot && sourceSnapshot.nodes && sourceSnapshot.nodes.length > 0) {
+        const truncatedSelection = {
+          nodes: sourceSnapshot.nodes.map((n) => truncateSnapshotForGenerate(n, 4e4))
+        };
+        payloadToSend.selection = truncatedSelection;
+        console.log(`[job ${job.id}] [html] Including selection (${truncatedSelection.nodes.length} node(s)) for edit mode`);
+      }
       console.log(`[job ${job.id}] [html] Phase 2-3: Calling /generate-html...`);
       let result;
       try {
@@ -6725,12 +6732,17 @@ RULES:
       clearStyleMaps();
       const modeHint = `${prompt} ${snapshot.name || ""} ${(sourcePosition == null ? void 0 : sourcePosition.name) || ""}`;
       _currentThemeMode = detectThemeMode(modeHint);
+      const isEditMode = !!(sourcePosition && sourceSnapshot && sourceSnapshot.nodes && sourceSnapshot.nodes.length > 0 && sourceSnapshot.nodes[0].children && sourceSnapshot.nodes[0].children.length > 0 && !/\b(new|fresh|blank|empty)\s+(frame|screen|page|view|layout)\b/i.test(prompt));
       let placeX;
       let placeY;
       const frameW = snapshot.width || 390;
       const frameH = snapshot.height || 800;
       const GAP = 100;
-      if (sourcePosition) {
+      if (isEditMode && sourcePosition) {
+        placeX = sourcePosition.x;
+        placeY = sourcePosition.y;
+        console.log(`[job ${job.id}] [html] Edit mode: placing at source position x:${placeX}, y:${placeY}`);
+      } else if (sourcePosition) {
         let hasCollisionHTML2 = function(cx, cy, cw, ch) {
           for (const ob of obstacles) {
             if (cx < ob.x + ob.w && cx + cw > ob.x && cy < ob.y + ob.h && cy + ch > ob.y) return true;
@@ -6821,11 +6833,20 @@ RULES:
         node.setPluginData("generated", "true");
         node.setPluginData("generatedViaHTML", "true");
       }
+      if (isEditMode && sourceNodeIds && sourceNodeIds.length > 0) {
+        for (const oldId of sourceNodeIds) {
+          const oldNode = figma.getNodeById(oldId);
+          if (oldNode && oldNode.id !== node.id && "remove" in oldNode) {
+            console.log(`[job ${job.id}] [html] Edit mode: removing old frame "${oldNode.name}" (${oldId})`);
+            oldNode.remove();
+          }
+        }
+      }
       figma.currentPage.selection = [node];
       figma.viewport.scrollAndZoomIntoView([node]);
       const actualRight = placeX + node.width + 200;
       if (actualRight > (_nextPlaceX || 0)) _nextPlaceX = actualRight;
-      const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML\u2192Figma)`;
+      const genStats = isEditMode ? `Updated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML\u2192Figma)` : `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML\u2192Figma)`;
       figma.notify(genStats, { timeout: 4e3 });
       sendToUI({ type: "job-complete", jobId: job.id, summary: genStats });
       if (result.html) {
@@ -9643,10 +9664,24 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
               }
             } else {
               const singleNodeIds = currentSelection.map((n) => n.id);
+              let singleSnapshot;
+              let singlePosition;
+              if (currentSelection.length === 1) {
+                const selNode = currentSelection[0];
+                singleSnapshot = { nodes: [snapshotNode(selNode, 0)] };
+                singlePosition = {
+                  x: Math.round(selNode.x),
+                  y: Math.round(selNode.y),
+                  width: Math.round(selNode.width),
+                  height: Math.round(selNode.height),
+                  name: selNode.name
+                };
+                console.log(`[run] Captured single frame: "${selNode.name}" at ${singlePosition.x},${singlePosition.y} (${singlePosition.width}x${singlePosition.height})`);
+              }
               console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}" (mode: ${activeGenerateMode})`);
               sendToUI({ type: "job-started", jobId, prompt });
               const runner = activeGenerateMode === "html" ? runGenerateJobHTML : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
-              runner(job, prompt, void 0, void 0, singleNodeIds.length > 0 ? singleNodeIds : void 0).catch((err) => {
+              runner(job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : void 0).catch((err) => {
                 console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
                 if (!job.cancelled) {
                   sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });

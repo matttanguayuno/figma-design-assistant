@@ -140,16 +140,11 @@
       flex: 1 1 auto;
       min-height: 0;
       overflow-y: auto;
+      scrollbar-width: none;           /* Firefox */
+      -ms-overflow-style: none;        /* IE/Edge */
     }
     .job-list::-webkit-scrollbar {
-      width: 4px;
-    }
-    .job-list::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    .job-list::-webkit-scrollbar-thumb {
-      background: var(--border);
-      border-radius: 2px;
+      display: none;                   /* Chrome/Safari */
     }
     .job-list:empty {
       display: none;
