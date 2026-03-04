@@ -660,28 +660,35 @@ function describeSnapshotTree(node: any, depth: number): string {
   const lines: string[] = [];
 
   if (node.type === "TEXT") {
-    const text = (node.characters || "").slice(0, 80);
-    const size = node.fontSize ? ` (${node.fontSize}px)` : "";
-    lines.push(`${indent}- TEXT: "${text}"${size}`);
+    const text = (node.characters || "").slice(0, 120);
+    const size = node.fontSize ? ` ${node.fontSize}px` : "";
+    const weight = node.fontStyle ? ` ${node.fontStyle}` : "";
+    const color = node.fillColor ? ` color:${node.fillColor}` : "";
+    lines.push(`${indent}- TEXT: "${text}"${size}${weight}${color}`);
   } else if (node.type === "RECTANGLE" || node.type === "ELLIPSE") {
     const img = node.imagePrompt ? ` [image: "${node.imagePrompt}"]` : "";
+    const hasImage = node.imageData || (node.fillTypes && node.fillTypes.includes("IMAGE")) ? " [has image fill]" : "";
     const size = node.width && node.height ? ` (${node.width}x${node.height})` : "";
-    lines.push(`${indent}- ${node.type}${size}${img}`);
+    const bg = node.fillColor ? ` fill:${node.fillColor}` : "";
+    lines.push(`${indent}- ${node.type}${size}${bg}${img}${hasImage}`);
   } else {
     // FRAME or container
     const name = node.name || "Frame";
-    const layout = node.layoutMode === "HORIZONTAL" ? "row" : "column";
+    const layout = node.layoutMode === "HORIZONTAL" ? "row" : node.layoutMode === "VERTICAL" ? "column" : "none";
     const size = node.width && node.height ? ` (${node.width}x${node.height})` : "";
     const img = node.imagePrompt ? ` [background image: "${node.imagePrompt}"]` : "";
+    const hasImage = node.imageData || (node.fillTypes && node.fillTypes.includes("IMAGE")) ? " [has image fill]" : "";
     const bg = node.fillColor ? ` bg:${node.fillColor}` : "";
-    lines.push(`${indent}- ${name}: ${layout}${size}${bg}${img}`);
+    const radius = node.cornerRadius ? ` radius:${node.cornerRadius}px` : "";
+    const padding = (node.paddingTop || node.paddingLeft) ? ` pad:${node.paddingTop || 0}/${node.paddingRight || 0}/${node.paddingBottom || 0}/${node.paddingLeft || 0}` : "";
+    lines.push(`${indent}- ${name}: ${layout}${size}${bg}${radius}${padding}${img}${hasImage}`);
 
     if (node.children && Array.isArray(node.children)) {
-      for (const child of node.children.slice(0, 20)) {
+      for (const child of node.children.slice(0, 25)) {
         lines.push(describeSnapshotTree(child, depth + 1));
       }
-      if (node.children.length > 20) {
-        lines.push(`${indent}  ... and ${node.children.length - 20} more children`);
+      if (node.children.length > 25) {
+        lines.push(`${indent}  ... and ${node.children.length - 25} more children`);
       }
     }
   }
@@ -832,6 +839,16 @@ The CORRECT pattern puts data-image-prompt on the OUTER container and text as ch
 - Missing visual breaks between sections.
 - Generic, boring flat layouts without depth (add subtle shadows/overlays).
 
+═══ EDIT MODE (when user prompt says "EDIT MODE") ═══
+When the user prompt contains an "EDIT MODE" section, you are MODIFYING an existing page — NOT creating from scratch.
+You MUST:
+1. Output the COMPLETE HTML page with ALL existing sections reproduced EXACTLY.
+2. Apply ONLY the specific change the user requested (add/remove/modify a section).
+3. Preserve every existing section's text content, images, colors, layout, and styling.
+4. If adding something (e.g. a header), INSERT it at the correct position and keep everything else.
+5. If modifying something, change ONLY that element and leave the rest untouched.
+If you strip out existing content, the result is BROKEN. The user will see missing sections.
+
 Generate the complete HTML document now.`;
 
 // ════════════════════════════════════════════════════════════════════
@@ -920,15 +937,21 @@ export function buildGenerateHTMLPrompt(
   // Edit mode: describe existing content so LLM preserves it
   if (isEditMode) {
     const selectedNode = selection.nodes[0];
-    parts.push("", "## EDIT MODE — Existing Frame Content");
-    parts.push(`You are MODIFYING an existing design. The user's request describes WHAT TO CHANGE — apply only that change.`);
-    parts.push(`Keep ALL existing sections, text, images, colors, and layout EXACTLY as they are, except for the requested modification.`);
-    parts.push(`Frame: ${selectedNode.name || 'Frame'} (${selectedNode.width}x${selectedNode.height}px)`);
+    parts.push("", "## ⚠️ EDIT MODE — You are modifying an EXISTING page");
+    parts.push(`Frame: "${selectedNode.name || 'Frame'}" (${selectedNode.width}x${selectedNode.height}px)`);
     parts.push("");
-    parts.push("Current content structure:");
+    parts.push("### Existing sections that MUST be preserved:");
     parts.push(describeSnapshotTree(selectedNode, 0));
     parts.push("");
-    parts.push("IMPORTANT: Reproduce the existing content faithfully in your HTML. Only add/change what the user requested.");
+    parts.push("### Requested change:");
+    parts.push(prompt);
+    parts.push("");
+    parts.push("### RULES FOR EDIT MODE:");
+    parts.push("1. Output the COMPLETE HTML with ALL existing sections above reproduced faithfully.");
+    parts.push("2. Apply ONLY the requested change — insert/modify/remove exactly what was asked.");
+    parts.push("3. Keep every existing section's text, images (data-image-prompt), colors, layout, and sizing.");
+    parts.push("4. If adding a new element (e.g. header/footer), INSERT it at the natural position and keep everything else intact.");
+    parts.push("5. Do NOT simplify, rearrange, or omit any existing section. Treat the existing structure as sacred.");
   }
 
   parts.push("", `## Layout: ${isMobile ? 'MOBILE' : 'DESKTOP'} — set root <div> to width:${rootWidth}px.`);
