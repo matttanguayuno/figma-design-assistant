@@ -2316,13 +2316,34 @@ async function createNodeFromSnapshot(
     // Try to bind a text style by name (priority) or by font properties
     try {
       const snapshotFontSize = snap.fontSize && typeof snap.fontSize === "number" ? snap.fontSize : null;
+      const snapshotFontFamily = loadedFamily;
+      const snapshotFontStyle = loadedStyle;
+      const snapshotLineHeight = snap.lineHeight != null ? snap.lineHeight : null;
+      const snapshotLineHeightUnit = snap.lineHeightUnit || "PIXELS";
       if (snap.textStyleName) {
         tryBindTextStyleByName(textNode, snap.textStyleName);
-        // After style binding, Figma may override fontSize with the style's value.
-        // Restore the snapshot's intended fontSize to preserve visual fidelity.
+        // After style binding, Figma silently overrides fontName, fontSize, lineHeight.
+        // Restore the snapshot's intended values to preserve visual fidelity.
         if (snapshotFontSize && textNode.fontSize !== snapshotFontSize) {
           console.log(`[styleBinding] Restoring fontSize: style set ${textNode.fontSize}px, snapshot wants ${snapshotFontSize}px`);
           textNode.fontSize = snapshotFontSize;
+        }
+        // Restore fontName (weight/style) — e.g. "Semi Bold" overridden to "Regular"
+        const currentFN = textNode.fontName as FontName;
+        if (currentFN && currentFN.style !== snapshotFontStyle) {
+          try {
+            await figma.loadFontAsync({ family: snapshotFontFamily, style: snapshotFontStyle });
+            textNode.fontName = { family: snapshotFontFamily, style: snapshotFontStyle } as FontName;
+            console.log(`[styleBinding] Restoring fontStyle: style set "${currentFN.style}", snapshot wants "${snapshotFontStyle}"`);
+          } catch (_) {
+            console.warn(`[styleBinding] Could not restore fontStyle "${snapshotFontStyle}" for family "${snapshotFontFamily}"`);
+          }
+        }
+        // Restore lineHeight if it was set in the snapshot
+        if (snapshotLineHeight != null && snapshotLineHeight !== "AUTO") {
+          try {
+            textNode.lineHeight = { value: Number(snapshotLineHeight), unit: snapshotLineHeightUnit };
+          } catch (_) {}
         }
       } else {
         console.warn(`[styleBinding] TEXT node "${snap.characters || snap.name}" has NO textStyleName in snapshot`);

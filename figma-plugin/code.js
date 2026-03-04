@@ -1842,11 +1842,31 @@
       }
       try {
         const snapshotFontSize = snap.fontSize && typeof snap.fontSize === "number" ? snap.fontSize : null;
+        const snapshotFontFamily = loadedFamily;
+        const snapshotFontStyle = loadedStyle;
+        const snapshotLineHeight = snap.lineHeight != null ? snap.lineHeight : null;
+        const snapshotLineHeightUnit = snap.lineHeightUnit || "PIXELS";
         if (snap.textStyleName) {
           tryBindTextStyleByName(textNode, snap.textStyleName);
           if (snapshotFontSize && textNode.fontSize !== snapshotFontSize) {
             console.log(`[styleBinding] Restoring fontSize: style set ${textNode.fontSize}px, snapshot wants ${snapshotFontSize}px`);
             textNode.fontSize = snapshotFontSize;
+          }
+          const currentFN = textNode.fontName;
+          if (currentFN && currentFN.style !== snapshotFontStyle) {
+            try {
+              await figma.loadFontAsync({ family: snapshotFontFamily, style: snapshotFontStyle });
+              textNode.fontName = { family: snapshotFontFamily, style: snapshotFontStyle };
+              console.log(`[styleBinding] Restoring fontStyle: style set "${currentFN.style}", snapshot wants "${snapshotFontStyle}"`);
+            } catch (_) {
+              console.warn(`[styleBinding] Could not restore fontStyle "${snapshotFontStyle}" for family "${snapshotFontFamily}"`);
+            }
+          }
+          if (snapshotLineHeight != null && snapshotLineHeight !== "AUTO") {
+            try {
+              textNode.lineHeight = { value: Number(snapshotLineHeight), unit: snapshotLineHeightUnit };
+            } catch (_) {
+            }
           }
         } else {
           console.warn(`[styleBinding] TEXT node "${snap.characters || snap.name}" has NO textStyleName in snapshot`);
