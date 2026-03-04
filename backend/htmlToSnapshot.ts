@@ -276,6 +276,15 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     if (style.display === "none" || style.visibility === "hidden") return null;
     if (style.opacity === "0") return null;
 
+    // Skip position:absolute/fixed elements — they break auto-layout conversion.
+    // These elements are out of normal flow; when converted to auto-layout children
+    // they stack sequentially instead of overlapping, causing text to appear
+    // outside/below frames instead of overlaying images.
+    if (depth > 0 && (style.position === "absolute" || style.position === "fixed")) {
+      console.log(`[DOM walker] Skipping position:${style.position} element: <${tag}> (breaks auto-layout)`);
+      return null;
+    }
+
     // Skip elements with CSS mask/mask-image (these can't be converted to Figma)
     const maskImage = style.getPropertyValue("mask-image") || style.getPropertyValue("-webkit-mask-image");
     if (maskImage && maskImage !== "none") return null;

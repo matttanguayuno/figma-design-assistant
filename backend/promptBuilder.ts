@@ -730,13 +730,15 @@ MOBILE (390px):
 - <body> must contain a single <div id="root"> with the width specified in the user prompt.
 - All styles in a single <style> block in <head>. Never use inline style= attributes.
 
-═══ FIGMA CONVERSION RULES ═══
+═══ FIGMA CONVERSION RULES (CRITICAL — follow exactly) ═══
 These constraints exist because the HTML is parsed into Figma auto-layout frames:
-- Use ONLY flexbox for layout (display:flex + flex-direction). No CSS Grid, float, position:absolute/fixed.
+- Use ONLY flexbox for layout (display:flex + flex-direction). No CSS Grid, float, position:absolute/fixed/relative.
+- NEVER use position:absolute or position:relative. Elements with position:absolute will be DROPPED from the output.
 - Use "gap" for spacing between children, "padding" on containers.
 - For elements that should stretch to fill available space in a row, use "flex: 1" (not width:100%).
 - No transform, animation, transition, media queries, @keyframes, or JavaScript.
 - No CSS mask or mask-image properties.
+- No overflow:hidden on containers with content that should be visible.
 - box-shadow maps to Figma drop shadows (e.g. box-shadow: 0px 4px 16px 0px rgba(0,0,0,0.08)).
 - Star ratings: use ★ and ☆ characters in a <span>, not individual elements.
 
@@ -760,6 +762,30 @@ Rules:
 - NEVER use placeholder src values — always use data-image-prompt.
 - Hero images should be full-width and at least 400px tall.
 - Images make the design look professional and real — a design without images looks broken.
+
+═══ HERO OVERLAY PATTERN (important!) ═══
+To put text ON TOP of a hero image, the text MUST be INSIDE the same element that has data-image-prompt.
+The data-image-prompt element becomes a frame with an image fill — children render on top of it.
+
+CORRECT — text children inside the image element:
+  <div class="hero" data-image-prompt="juicy burger dark moody professional">
+    <div class="hero-overlay">
+      <h1>Flame-Grilled Perfection</h1>
+      <p>Crafted daily with the finest ingredients</p>
+      <button>Order Now</button>
+    </div>
+  </div>
+  .hero { display:flex; flex-direction:column; justify-content:center; align-items:center; width:100%; height:500px; }
+  .hero-overlay { display:flex; flex-direction:column; align-items:center; gap:16px; padding:40px; background:rgba(0,0,0,0.45); border-radius:12px; }
+  .hero h1 { color:white; font-size:48px; }
+
+WRONG — never use a separate sibling div for the image and overlay:
+  <div class="hero">
+    <div class="hero-bg" data-image-prompt="..."></div>  <!-- WRONG: image and text are siblings -->
+    <div class="hero-text"><h1>Title</h1></div>            <!-- Text ends up BELOW the image, not on top -->
+  </div>
+
+The CORRECT pattern puts data-image-prompt on the OUTER container and text as children inside it.
 
 ═══ COMMON MISTAKES TO AVOID ═══
 - Tiny cramped sections with 8px padding (use 64-96px).
