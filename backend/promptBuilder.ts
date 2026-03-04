@@ -675,6 +675,13 @@ Return ONLY a self-contained HTML document — no markdown fences, no explanatio
 - <img> → RECTANGLE with image placeholder
 - <hr> → RECTANGLE (1px tall divider)
 
+═══ COMPONENT BINDING ═══
+If a DS component list is provided, and an element corresponds to a known component
+(e.g. a card, button, input, chip, avatar), add a data-component attribute:
+  <div class="card" data-component="Card">...</div>
+  <button data-component="Button/Primary">Click me</button>
+The Figma plugin will try to instantiate the real component instance.
+
 ═══ CSS CUSTOM PROPERTIES (MANDATORY) ═══
 Define ALL colors as CSS custom properties in :root, with comments mapping each to its Figma style name.
 Example:
@@ -871,6 +878,20 @@ export function buildGenerateHTMLPrompt(
   // ── 5. Full design system ──
   if (fullDesignSystem) {
     parts.push("", formatFullDesignSystemSection(fullDesignSystem));
+  }
+
+  // ── 6. Components (from designSystem.components or fullDesignSystem.components) ──
+  const components = fullDesignSystem?.components || designSystem?.components || [];
+  if (components.length > 0) {
+    parts.push("", "## Available Design System Components");
+    parts.push("When an element maps to one of these components, add a data-component attribute with the exact name:");
+    parts.push('  <div data-component="ComponentName">...</div>');
+    parts.push("This lets the Figma plugin try to instantiate the actual DS component instance.");
+    parts.push("");
+    for (const comp of components.slice(0, 25)) {
+      const name = comp.name || comp.key;
+      if (name) parts.push(`- ${name}`);
+    }
   }
 
   parts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");

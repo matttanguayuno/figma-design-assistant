@@ -12,7 +12,7 @@ import cors from "cors";
 import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
-import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot } from "./htmlToSnapshot";
+import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot, extractFillStyleMap, extractTextStyleMap } from "./htmlToSnapshot";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -669,15 +669,20 @@ app.post("/generate-html", async (req: Request, res: Response) => {
     const viewportWidth = isDesktop ? 1440 : 390;
     const viewportHeight = isDesktop ? 900 : 844;
 
-    // 3. Render in Puppeteer and extract snapshot
+    // 3. Parse style maps from raw HTML (CSS comments are stripped by browser CSSOM)
+    const fillStyles = extractFillStyleMap(htmlContent);
+    const textStyleMaps = extractTextStyleMap(htmlContent);
+    console.log(`[generate-html] Extracted ${fillStyles.length} fill style bindings, ${textStyleMaps.length} text style bindings from CSS comments`);
+
+    // 4. Render in Puppeteer and extract snapshot
     console.log(`[generate-html] Step 2: Rendering HTML in Puppeteer (${viewportWidth}x${viewportHeight})...`);
     let page;
     try {
       page = await renderHTMLPage(htmlContent, viewportWidth, viewportHeight);
 
-      // 4. Walk the DOM and extract NodeSnapshot
+      // 5. Walk the DOM and extract NodeSnapshot, passing pre-parsed style maps
       console.log(`[generate-html] Step 3: Extracting NodeSnapshot from DOM...`);
-      const snapshot = await page.evaluate(DOM_TO_SNAPSHOT_SCRIPT);
+      const snapshot = await page.evaluate(DOM_TO_SNAPSHOT_SCRIPT, fillStyles, textStyleMaps);
 
       if (!snapshot || typeof snapshot !== "object" || !(snapshot as any).type) {
         console.error(`[generate-html] DOM walker returned invalid snapshot`);
@@ -685,8 +690,8 @@ app.post("/generate-html", async (req: Request, res: Response) => {
         return;
       }
 
-      // 5. Post-process: enrich style bindings from CSS comments
-      const enrichedSnapshot = postProcessHTMLSnapshot(snapshot, htmlContent);
+      // 6. Post-process: enrich style bindings from CSS comments + dsSummary fallback
+      const enrichedSnapshot = postProcessHTMLSnapshot(snapshot, htmlContent, dsSummary);
 
       console.log(`[generate-html] Snapshot extracted:`, JSON.stringify(enrichedSnapshot).slice(0, 500));
       res.json({ snapshot: enrichedSnapshot, html: htmlContent });

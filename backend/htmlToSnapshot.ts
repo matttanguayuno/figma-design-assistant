@@ -4,14 +4,87 @@
 //
 // This function runs inside page.evaluate() in Puppeteer, so it must
 // be completely self-contained — no imports, no closures over external vars.
+//
+// Design-system style maps (fillStyleName, textStyleName) are parsed
+// server-side from the raw HTML source and injected as arguments to
+// page.evaluate(), because browsers strip CSS comments from the CSSOM.
+
+// ── Types for the pre-parsed style maps ─────────────────────────
+
+export interface FillStyleEntry {
+  hex: string;
+  fillStyleName: string;
+  cssVar?: string;  // e.g. "--surface-bg"
+}
+
+export interface TextStyleEntry {
+  selector: string;      // CSS selector string
+  textStyleName: string;
+}
+
+/**
+ * Parse the raw HTML source to extract fillStyleName mappings from CSS comments.
+ * Pattern: \/\* fillStyleName: "Light/Surface" \*\/\n  --surface-bg: #FFFFFF;
+ *
+ * Returns a map of uppercase-hex → fillStyleName.
+ */
+export function extractFillStyleMap(htmlSource: string): FillStyleEntry[] {
+  const entries: FillStyleEntry[] = [];
+  // Match: /* fillStyleName: "Name" */  --var: #hex;
+  const pattern = /\/\*\s*fillStyleName:\s*"([^"]+)"\s*\*\/\s*\n?\s*(--[\w-]+)\s*:\s*([^;]+);/g;
+  let m;
+  while ((m = pattern.exec(htmlSource)) !== null) {
+    entries.push({
+      fillStyleName: m[1],
+      cssVar: m[2],
+      hex: m[3].trim().toUpperCase(),
+    });
+  }
+  return entries;
+}
+
+/**
+ * Parse the raw HTML source to extract textStyleName mappings from CSS comments.
+ * Pattern: \/\* textStyleName: "Heading/Large" \*\/\n  h1 { ... }
+ *
+ * Returns an array of { selector, textStyleName }.
+ */
+export function extractTextStyleMap(htmlSource: string): TextStyleEntry[] {
+  const entries: TextStyleEntry[] = [];
+  // Match: /* textStyleName: "Name" */\n  selector { ... }
+  const pattern = /\/\*\s*textStyleName:\s*"([^"]+)"\s*\*\/\s*\n?\s*([\w\s.#\-\[\]=:>,*+~"'()]+?)\s*\{/g;
+  let m;
+  while ((m = pattern.exec(htmlSource)) !== null) {
+    entries.push({
+      textStyleName: m[1],
+      selector: m[2].trim(),
+    });
+  }
+  return entries;
+}
+
+/**
+ * Parse data-component attributes from the HTML source.
+ * These let the LLM hint which elements should become Figma component instances.
+ */
+export function extractComponentHints(htmlSource: string): boolean {
+  return htmlSource.includes("data-component");
+}
 
 /**
  * The page.evaluate script that walks the rendered DOM and extracts
  * a NodeSnapshot-compatible JSON tree.
  *
- * Must be called as: page.evaluate(DOM_TO_SNAPSHOT_SCRIPT)
+ * Arguments are injected by page.evaluate():
+ *   fillStyles: array of { hex, fillStyleName, cssVar }
+ *   textStyles: array of { selector, textStyleName }
+ *
+ * Must be called as: page.evaluate(DOM_TO_SNAPSHOT_SCRIPT, fillStyles, textStyles)
  */
-export const DOM_TO_SNAPSHOT_SCRIPT = () => {
+export const DOM_TO_SNAPSHOT_SCRIPT = (
+  fillStyles: { hex: string; fillStyleName: string; cssVar?: string }[],
+  textStyles: { selector: string; textStyleName: string }[]
+) => {
 
   // ── Helpers ────────────────────────────────────────────────────
 
@@ -105,82 +178,61 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
     }
   }
 
-  /** Parse :root CSS variables and map them to Figma style names via their comments */
-  function extractCSSVariableMap(): Record<string, { hex: string; fillStyleName?: string; textStyleName?: string }> {
-    const varMap: Record<string, { hex: string; fillStyleName?: string; textStyleName?: string }> = {};
+  /** 
+   * Build a hex→fillStyleName lookup from the pre-parsed fill styles.
+   * Also resolves CSS variable values from the computed root style.
+   */
+  function buildFillStyleLookup(
+    rootStyle: CSSStyleDeclaration
+  ): Map<string, string> {
+    const hexToStyle = new Map<string, string>();
 
-    for (const sheet of Array.from(document.styleSheets)) {
-      try {
-        for (const rule of Array.from(sheet.cssRules)) {
-          if (rule instanceof CSSStyleRule && rule.selectorText === ":root") {
-            // Parse the raw CSS text to find /* fillStyleName: "..." */ comments
-            const cssText = rule.cssText;
-            // Match patterns like: /* fillStyleName: "Light/Surface" */\n  --surface-bg: #FFFFFF;
-            const varPattern = /\/\*\s*(?:fillStyleName|textStyleName):\s*"([^"]+)"\s*\*\/\s*\n?\s*(--[\w-]+)\s*:\s*([^;]+);/g;
-            let m;
-            while ((m = varPattern.exec(cssText)) !== null) {
-              const styleName = m[1];
-              const varName = m[2];
-              const value = m[3].trim();
-              varMap[varName] = { hex: value, fillStyleName: styleName };
-            }
-
-            // Also grab all variables from computed style as fallback
-            for (let i = 0; i < rule.style.length; i++) {
-              const prop = rule.style[i];
-              if (prop.startsWith("--")) {
-                const val = rule.style.getPropertyValue(prop).trim();
-                if (!varMap[prop]) {
-                  varMap[prop] = { hex: val };
-                }
-              }
-            }
-          }
+    for (const entry of fillStyles) {
+      // Direct hex match
+      if (entry.hex) {
+        hexToStyle.set(entry.hex.toUpperCase(), entry.fillStyleName);
+      }
+      // Also resolve the CSS variable to get the computed value
+      if (entry.cssVar) {
+        const resolved = rootStyle.getPropertyValue(entry.cssVar).trim();
+        if (resolved) {
+          const hex = colorToHex(resolved);
+          if (hex) hexToStyle.set(hex, entry.fillStyleName);
         }
-      } catch (e) {
-        // Cross-origin stylesheet, skip
       }
     }
-    return varMap;
+
+    return hexToStyle;
   }
 
-  /** Find which CSS variable a computed color value maps to */
+  /** Find fillStyleName for a computed color */
   function resolveColorToStyleName(
     hexColor: string | null,
-    varMap: Record<string, { hex: string; fillStyleName?: string }>,
-    rootStyle: CSSStyleDeclaration
+    hexToStyle: Map<string, string>
   ): string | undefined {
     if (!hexColor) return undefined;
-    // Check each CSS variable's resolved value against this color
-    for (const [varName, info] of Object.entries(varMap)) {
-      const resolvedHex = colorToHex(rootStyle.getPropertyValue(varName).trim());
-      if (resolvedHex && resolvedHex.toUpperCase() === hexColor.toUpperCase() && info.fillStyleName) {
-        return info.fillStyleName;
-      }
-    }
-    return undefined;
+    return hexToStyle.get(hexColor.toUpperCase());
   }
 
-  /** Extract textStyleName from CSS comments in stylesheets for a given element */
+  /** 
+   * Find textStyleName for an element using the pre-parsed text style selectors.
+   * Uses element.matches() to test if the element matches any of the selectors
+   * that had a textStyleName CSS comment above them.
+   */
   function resolveTextStyleName(element: Element): string | undefined {
-    // We'll try to find a matching CSS rule with a textStyleName comment
-    for (const sheet of Array.from(document.styleSheets)) {
+    for (const entry of textStyles) {
       try {
-        for (const rule of Array.from(sheet.cssRules)) {
-          if (rule instanceof CSSStyleRule) {
-            try {
-              if (element.matches(rule.selectorText)) {
-                const cssText = rule.cssText;
-                const m = cssText.match(/\/\*\s*textStyleName:\s*"([^"]+)"\s*\*\//);
-                if (m) return m[1];
-              }
-            } catch (e) {
-              // Invalid selector, skip
-            }
-          }
+        if (element.matches(entry.selector)) {
+          return entry.textStyleName;
         }
       } catch (e) {
-        // Cross-origin stylesheet, skip
+        // Invalid selector, try splitting compound selectors
+        const parts = entry.selector.split(",").map(s => s.trim());
+        for (const part of parts) {
+          try {
+            if (element.matches(part)) return entry.textStyleName;
+          } catch {}
+        }
       }
     }
     return undefined;
@@ -214,8 +266,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
 
   function walkElement(
     el: Element,
-    varMap: Record<string, { hex: string; fillStyleName?: string }>,
-    rootStyle: CSSStyleDeclaration,
+    hexToStyle: Map<string, string>,
     depth: number = 0
   ): any | null {
     const tag = el.tagName;
@@ -245,7 +296,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
       const bgColor = colorToHex(style.backgroundColor);
       if (bgColor) {
         node.fillColor = bgColor;
-        node.fillStyleName = resolveColorToStyleName(bgColor, varMap, rootStyle);
+        node.fillStyleName = resolveColorToStyleName(bgColor, hexToStyle);
       }
       const cr = parseFloat(style.borderRadius);
       if (cr > 0) node.cornerRadius = Math.round(cr);
@@ -262,7 +313,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
         width: Math.round(rect.width),
         height: Math.max(1, Math.round(rect.height)),
         fillColor: bgColor || "#E0E0E0",
-        fillStyleName: resolveColorToStyleName(bgColor, varMap, rootStyle),
+        fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
         layoutSizingHorizontal: "FILL",
         childrenCount: 0,
       };
@@ -316,7 +367,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
       }
 
       // Style binding
-      node.fillStyleName = resolveColorToStyleName(fillColor, varMap, rootStyle);
+      node.fillStyleName = resolveColorToStyleName(fillColor, hexToStyle);
       node.textStyleName = resolveTextStyleName(el);
 
       return node;
@@ -337,7 +388,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
         fontFamily: style.fontFamily.replace(/["']/g, "").split(",")[0].trim(),
         fontStyle: fontWeightToStyle(style.fontWeight),
         fillColor: textColor,
-        fillStyleName: resolveColorToStyleName(textColor, varMap, rootStyle),
+        fillStyleName: resolveColorToStyleName(textColor, hexToStyle),
         textStyleName: resolveTextStyleName(el),
         textAlignHorizontal: "CENTER",
         layoutSizingVertical: "HUG",
@@ -358,11 +409,15 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
         paddingBottom: Math.round(parseFloat(style.paddingBottom)),
         paddingLeft: Math.round(parseFloat(style.paddingLeft)),
         fillColor: bgColor,
-        fillStyleName: resolveColorToStyleName(bgColor, varMap, rootStyle),
+        fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
         layoutSizingHorizontal: "FILL",
         childrenCount: 1,
         children: [textNode],
       };
+
+      // data-component for buttons
+      const btnComp = (el as HTMLElement).getAttribute?.("data-component");
+      if (btnComp) node.componentName = btnComp;
 
       const cr = parseFloat(style.borderRadius);
       if (cr > 0) node.cornerRadius = Math.round(cr);
@@ -395,7 +450,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
         fontFamily: style.fontFamily.replace(/["']/g, "").split(",")[0].trim(),
         fontStyle: "Regular",
         fillColor: textColor || "#999999",
-        fillStyleName: resolveColorToStyleName(textColor, varMap, rootStyle),
+        fillStyleName: resolveColorToStyleName(textColor, hexToStyle),
         layoutSizingHorizontal: "FILL",
         layoutSizingVertical: "HUG",
         childrenCount: 0,
@@ -414,7 +469,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
         paddingBottom: Math.round(parseFloat(style.paddingBottom)),
         paddingLeft: Math.round(parseFloat(style.paddingLeft)),
         fillColor: bgColor,
-        fillStyleName: resolveColorToStyleName(bgColor, varMap, rootStyle),
+        fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
         layoutSizingHorizontal: "FILL",
         childrenCount: 1,
         children: [textNode],
@@ -440,7 +495,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
     // If this element has mixed text + element children, wrap text runs as TEXT nodes
     for (const child of Array.from(el.childNodes)) {
       if (child.nodeType === Node.ELEMENT_NODE) {
-        const childSnapshot = walkElement(child as Element, varMap, rootStyle, depth + 1);
+        const childSnapshot = walkElement(child as Element, hexToStyle, depth + 1);
         if (childSnapshot) children.push(childSnapshot);
       } else if (child.nodeType === Node.TEXT_NODE) {
         const text = child.textContent?.trim();
@@ -455,7 +510,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
             fontFamily: style.fontFamily.replace(/["']/g, "").split(",")[0].trim(),
             fontStyle: fontWeightToStyle(style.fontWeight),
             fillColor: colorToHex(style.color),
-            fillStyleName: resolveColorToStyleName(colorToHex(style.color), varMap, rootStyle),
+            fillStyleName: resolveColorToStyleName(colorToHex(style.color), hexToStyle),
             layoutSizingHorizontal: "FILL",
             layoutSizingVertical: "HUG",
             childrenCount: 0,
@@ -492,10 +547,16 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
       children: children.length > 0 ? children : undefined,
     };
 
+    // data-component → componentName for DS component instantiation
+    const compAttr = (el as HTMLElement).getAttribute?.("data-component");
+    if (compAttr) {
+      node.componentName = compAttr;
+    }
+
     // Fill color
     if (bgColor) {
       node.fillColor = bgColor;
-      node.fillStyleName = resolveColorToStyleName(bgColor, varMap, rootStyle);
+      node.fillStyleName = resolveColorToStyleName(bgColor, hexToStyle);
     }
 
     // Gap → itemSpacing
@@ -551,10 +612,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
   // ── Entry point ────────────────────────────────────────────────
 
   const root = document.getElementById("root") || document.body.firstElementChild || document.body;
-  const varMap = extractCSSVariableMap();
   const rootStyle = window.getComputedStyle(document.documentElement);
+  const hexToStyle = buildFillStyleLookup(rootStyle);
 
-  const snapshot = walkElement(root, varMap, rootStyle, 0);
+  const snapshot = walkElement(root, hexToStyle, 0);
 
   if (snapshot) {
     // Ensure root has a sensible name
@@ -566,43 +627,59 @@ export const DOM_TO_SNAPSHOT_SCRIPT = () => {
 
 /**
  * Post-process a snapshot that came from the DOM walker:
- * - Parse CSS variable comments from the original HTML to rebuild style name bindings
+ * - Fill any missing fillStyleName bindings by matching hex colors
+ * - Fill any missing textStyleName bindings using dsSummary type roles
  * - Clean up empty/duplicate nodes
  */
 export function postProcessHTMLSnapshot(
   snapshot: any,
-  htmlSource: string
+  htmlSource: string,
+  dsSummary?: any
 ): any {
   if (!snapshot) return snapshot;
 
-  // Extract fillStyleName and textStyleName from CSS comments in the HTML source
-  // Pattern: /* fillStyleName: "StyleName" */\n  --var-name: #hex;
-  const fillStyleMap = new Map<string, string>();
-  const textStyleMap = new Map<string, string>();
-
-  // Build hex → styleName map from CSS variable comments
-  const fillPattern = /\/\*\s*fillStyleName:\s*"([^"]+)"\s*\*\/\s*\n?\s*--[\w-]+\s*:\s*([^;]+);/g;
-  let m;
-  while ((m = fillPattern.exec(htmlSource)) !== null) {
-    const styleName = m[1];
-    const hexRaw = m[2].trim().toUpperCase();
-    fillStyleMap.set(hexRaw, styleName);
+  // Build hex → styleName map from the pre-parsed entries (belt-and-suspenders)
+  const fillEntries = extractFillStyleMap(htmlSource);
+  const hexToStyleName = new Map<string, string>();
+  for (const e of fillEntries) {
+    hexToStyleName.set(e.hex.toUpperCase(), e.fillStyleName);
   }
 
-  const textPattern = /\/\*\s*textStyleName:\s*"([^"]+)"\s*\*\//g;
-  while ((m = textPattern.exec(htmlSource)) !== null) {
-    // For text styles we just collect the names — binding is harder from computed CSS
-    textStyleMap.set(m[1], m[1]);
+  // Build a simple textStyleName fallback map from dsSummary typeRoles
+  // e.g. { heading: "Heading/Large", body: "Body/Medium", ... }
+  const typeRoleFallbacks = new Map<string, string>();
+  if (dsSummary?.typeRoles) {
+    for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
+      typeRoleFallbacks.set(role.toLowerCase(), styleName as string);
+    }
   }
 
-  // Walk the snapshot tree and ensure fillStyleName bindings are present
+  // Walk the snapshot tree and fill missing bindings
   function enrichNode(node: any): void {
     if (!node) return;
 
     // If we have a fillColor but no fillStyleName, try to resolve from our map
     if (node.fillColor && !node.fillStyleName) {
-      const styleName = fillStyleMap.get(node.fillColor.toUpperCase());
+      const styleName = hexToStyleName.get(node.fillColor.toUpperCase());
       if (styleName) node.fillStyleName = styleName;
+    }
+
+    // If TEXT node has no textStyleName, try to infer from font size + dsSummary
+    if (node.type === "TEXT" && !node.textStyleName && typeRoleFallbacks.size > 0) {
+      const fontSize = node.fontSize || 16;
+      if (fontSize >= 28 && typeRoleFallbacks.has("display")) {
+        node.textStyleName = typeRoleFallbacks.get("display");
+      } else if (fontSize >= 22 && typeRoleFallbacks.has("heading")) {
+        node.textStyleName = typeRoleFallbacks.get("heading");
+      } else if (fontSize >= 18 && typeRoleFallbacks.has("title")) {
+        node.textStyleName = typeRoleFallbacks.get("title");
+      } else if (fontSize >= 14 && typeRoleFallbacks.has("body")) {
+        node.textStyleName = typeRoleFallbacks.get("body");
+      } else if (typeRoleFallbacks.has("caption")) {
+        node.textStyleName = typeRoleFallbacks.get("caption");
+      } else if (typeRoleFallbacks.has("label")) {
+        node.textStyleName = typeRoleFallbacks.get("label");
+      }
     }
 
     // Recurse into children
