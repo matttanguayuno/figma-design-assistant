@@ -1,9 +1,10 @@
 services:
   - type: web
     name: designops-ai-backend
-    runtime: docker
+    runtime: node
     plan: standard
-    dockerfilePath: ./Dockerfile
+    buildCommand: npm install && npm run build:backend
+    startCommand: node dist/server.js
     healthCheckPath: /health
     envVars:
       - key: ANTHROPIC_API_KEY

@@ -1,6 +1,8 @@
 // backend/browser.ts
 // Shared Puppeteer browser instance for HTML-to-Figma rendering.
 // Lazily launches Chromium on first request, reuses across subsequent calls.
+// In production (Render), uses @sparticuz/chromium which bundles a headless
+// Chromium binary inside node_modules — no system Chrome needed.
 
 import puppeteer, { Browser, Page } from "puppeteer-core";
 
@@ -9,14 +11,34 @@ let _browserLaunchPromise: Promise<Browser> | null = null;
 
 /**
  * Resolve Chrome executable path.
- * 1. PUPPETEER_EXECUTABLE_PATH env var (set on Render)
- * 2. Common system Chrome locations
+ * 1. @sparticuz/chromium (self-contained, works on Render/Lambda/serverless)
+ * 2. PUPPETEER_EXECUTABLE_PATH env var
+ * 3. Common system Chrome locations (local dev)
  */
-function findChromePath(): string {
-  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-    return process.env.PUPPETEER_EXECUTABLE_PATH;
+async function resolveChrome(): Promise<{ executablePath: string; args: string[] }> {
+  // ---- Try @sparticuz/chromium first (production / cloud) ----
+  try {
+    const chromium = (await import("@sparticuz/chromium")).default;
+    const executablePath = await chromium.executablePath();
+    console.log("[browser] Using @sparticuz/chromium bundled browser");
+    return {
+      executablePath,
+      args: chromium.args,           // optimised flags for headless environments
+    };
+  } catch (e: any) {
+    console.log("[browser] @sparticuz/chromium not available, falling back to system Chrome");
   }
-  // Fallback for local dev on Windows/Mac
+
+  // ---- Env-var override ----
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    return {
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+      args: defaultArgs(),
+    };
+  }
+
+  // ---- Common local-dev paths ----
+  const fs = require("fs");
   const candidates = [
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
@@ -26,13 +48,33 @@ function findChromePath(): string {
     "/usr/bin/chromium",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   ];
-  const fs = require("fs");
   for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch {}
+    try {
+      if (fs.existsSync(c)) return { executablePath: c, args: defaultArgs() };
+    } catch {}
   }
+
   throw new Error(
-    "Chrome/Chromium not found. Set PUPPETEER_EXECUTABLE_PATH or install Google Chrome."
+    "Chrome/Chromium not found. Install @sparticuz/chromium, set PUPPETEER_EXECUTABLE_PATH, or install Google Chrome."
   );
+}
+
+function defaultArgs(): string[] {
+  return [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--disable-translate",
+    "--metrics-recording-only",
+    "--no-first-run",
+    "--safebrowsing-disable-auto-update",
+    "--font-render-hinting=none",
+  ];
 }
 
 /**
@@ -45,28 +87,13 @@ async function getBrowser(): Promise<Browser> {
   // Prevent concurrent launches
   if (_browserLaunchPromise) return _browserLaunchPromise;
 
-  const executablePath = findChromePath();
+  const { executablePath, args } = await resolveChrome();
   console.log(`[browser] Using Chrome at: ${executablePath}`);
 
   _browserLaunchPromise = puppeteer.launch({
     headless: true,
     executablePath,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",        // Use /tmp instead of shared memory
-      "--disable-gpu",
-      "--disable-extensions",
-      "--disable-background-networking",
-      "--disable-default-apps",
-      "--disable-sync",
-      "--disable-translate",
-      "--metrics-recording-only",
-      "--no-first-run",
-      "--safebrowsing-disable-auto-update",
-      "--font-render-hinting=none",
-    ],
-    // Lower memory: limit number of renderer processes
+    args,
     protocolTimeout: 120_000, // 2 min timeout for protocol operations
   });
 
