@@ -657,11 +657,27 @@ export function buildGeneratePrompt(
 // STEP 1 — Creative HTML Generation (no DS constraints)
 // ════════════════════════════════════════════════════════════════════
 
-export const GENERATE_HTML_SYSTEM_PROMPT = `You are an award-winning UI/UX designer creating production-quality web pages.
+export const GENERATE_HTML_SYSTEM_PROMPT = `You are an award-winning UI/UX designer and copywriter creating production-quality web pages.
 Generate a stunning, modern HTML/CSS page that would impress a design director at a top agency.
 The HTML will be rendered in Puppeteer and converted into a Figma design file, so follow the conversion rules below.
 
 Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, no explanation.
+
+═══ CONTENT STRATEGY (think before you design) ═══
+Before writing HTML, mentally plan the CONTENT like a creative director:
+- HEADLINE: Write a punchy, benefit-driven headline (not generic "Welcome to X"). Use power words, create urgency or desire.
+  BAD: "Welcome to Burger Haven" / "About Our Company"
+  GOOD: "Flame-Grilled Perfection, Served Fresh" / "Every Bite Tells a Story"
+- SUBHEADLINE: Support the headline with a specific value proposition or emotional hook.
+- BODY COPY: Write realistic, compelling text — not lorem ipsum or generic filler. Every section needs enough text to fill its space naturally (2-3 sentences minimum for content sections).
+- CTA: Action-oriented button text (not "Submit" / "Click Here"). Use "Order Now", "Explore the Menu", "Reserve a Table", etc.
+- SECTION DENSITY: Every section should feel COMPLETE. If you show an image with text beside it, include a heading + 2-3 sentences + a CTA link/button. Empty-feeling sections look unfinished.
+- For PARTIAL page requests (e.g., "header and hero"), still make the sections substantial and detailed — don't make them thin or minimal.
+
+═══ MOBILE vs DESKTOP ═══
+- For MOBILE (390px): Stack everything vertically. Full-width images. Larger touch targets (min 44px tap areas). Shorter headings. More compact but still spacious padding (32-48px sections).
+- For DESKTOP (1440px): Use multi-column layouts. Side-by-side content. Larger hero sections. More generous spacing (64-96px sections).
+- The root <div> width is specified in the user prompt — follow it exactly.
 
 ═══ DESIGN PHILOSOPHY ═══
 Think like a senior designer at a top creative agency. Every pixel matters.
@@ -673,12 +689,20 @@ Think like a senior designer at a top creative agency. Every pixel matters.
 - Use COLOR SPARINGLY: 1 dominant neutral, 1-2 accent colors max. Large color-filled areas, not scattered bits.
 
 ═══ LAYOUT PATTERNS (use these for professional results) ═══
-- HERO SECTION: Full-width, tall (400-600px), with large background image. Overlay semi-transparent dark gradient on the image, then place white heading text on top. Center-aligned text with clear CTA button.
-- FEATURE/CARDS GRID: 3-4 cards in a horizontal row. Each card: image on top (200-250px tall, same height for all), then text content with padding. Equal card widths.
-- ALTERNATING CONTENT: Section with image on one side (50% width), text content on the other. Alternate left/right for visual rhythm.
-- TESTIMONIALS: Large quote text, customer photo (small circle), name and role below.
+DESKTOP (1440px):
+- HERO SECTION: Full-width, tall (450-600px), with large background image. Overlay semi-transparent dark gradient on the image, then place white heading text on top. Center-aligned text with clear CTA button. The hero should feel IMMERSIVE and DRAMATIC.
+- FEATURE/CARDS GRID: 3-4 cards in a horizontal row. Each card: image on top (200-250px tall, same height for all), then text content with padding (heading + description + optional link). Equal card widths via flex:1.
+- ALTERNATING CONTENT: Section with image on one side (50% width, 300-400px tall), text content on the other (heading + 2-3 paragraphs + CTA). Alternate left/right for visual rhythm.
+- TESTIMONIALS: Large quote text (20-24px italic), customer photo (small 60px circle), name and role below.
 - CTA BANNER: Full-width colored background, centered text with button. Stand-out section.
-- FOOTER: Dark background, columns of links, contact info.
+- FOOTER: Dark background, 3-4 columns of links, contact info, social.
+
+MOBILE (390px):
+- HERO: Full-width image (250-350px tall) with overlay gradient + centered text. Keep heading shorter (max 6-8 words).
+- CARDS: Stack vertically (one per row), full-width. Image + text below each.
+- CONTENT SECTIONS: Image on top (full-width, 200-250px), text below. No side-by-side on mobile.
+- NAV: Simple row with brand name + hamburger icon (☰) or 2-3 text links max.
+- All touch targets: minimum 44px height.
 
 ═══ TYPOGRAPHY RULES ═══
 - Hero heading: 48-64px, bold (700-900 weight). Make it commanding.
@@ -703,7 +727,7 @@ Think like a senior designer at a top creative agency. Every pixel matters.
 - Buttons: Solid accent fill, white text, rounded corners (8-12px radius), comfortable padding (16px 32px min).
 
 ═══ STRUCTURE ═══
-- <body> must contain a single <div id="root"> with explicit width (390px mobile, 1440px desktop).
+- <body> must contain a single <div id="root"> with the width specified in the user prompt.
 - All styles in a single <style> block in <head>. Never use inline style= attributes.
 
 ═══ FIGMA CONVERSION RULES ═══
@@ -808,13 +832,26 @@ export function buildGenerateHTMLPrompt(
     prompt,
   ];
 
-  // Only include the selected frame dimensions (for root width), no DS binding
+  // Detect mobile vs desktop from prompt or selection
+  const promptLower = prompt.toLowerCase();
+  const isMobile = promptLower.includes("mobile") || promptLower.includes("phone") || promptLower.includes("390") || promptLower.includes("iphone");
+  const isDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
+
+  // Determine root width
+  let rootWidth = isMobile ? 390 : (isDesktop ? 1440 : 1440); // default to desktop
   if (selection && selection.nodes && selection.nodes.length > 0) {
     const selectedNode = selection.nodes[0];
     const selectedWidth = selectedNode.width || 0;
-    parts.push("", "## Target Frame");
-    parts.push(`Width: ${selectedWidth}px, Height: ${selectedNode.height || 0}px`);
-    parts.push(`Set the root <div> to width:${selectedWidth}px.`);
+    if (selectedWidth > 0) {
+      rootWidth = selectedWidth;
+      parts.push("", "## Target Frame");
+      parts.push(`Width: ${selectedWidth}px, Height: ${selectedNode.height || 0}px`);
+    }
+  }
+
+  parts.push("", `## Layout: ${isMobile ? 'MOBILE' : 'DESKTOP'} — set root <div> to width:${rootWidth}px.`);
+  if (isMobile) {
+    parts.push("This is a MOBILE design. Stack all content vertically. Use full-width images. No side-by-side columns. Minimum 44px touch targets.");
   }
 
   // Include font family hint so the LLM picks a reasonable default
@@ -822,6 +859,10 @@ export function buildGenerateHTMLPrompt(
   if (fontFamilies.length > 0) {
     parts.push("", `## Font: Use "${fontFamilies[0]}" as the primary font-family.`);
   }
+
+  // Encourage content depth
+  parts.push("", "## Content Guidelines");
+  parts.push("Write compelling, realistic copy — not generic filler. Every section should feel complete with enough text, images, and visual weight. Avoid empty-feeling sections.");
 
   parts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
 
