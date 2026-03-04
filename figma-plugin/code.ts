@@ -8585,7 +8585,7 @@ async function runGenerateJobHTML(
       variables: [] as any[],
     };
 
-    const payloadToSend = {
+    const payloadToSend: any = {
       prompt,
       styleTokens,
       designSystem: trimmedDesignSystem,
@@ -8594,6 +8594,15 @@ async function runGenerateJobHTML(
       provider: _selectedProvider,
       model: _selectedModel,
     };
+
+    // Include existing frame content if a frame is selected (edit mode)
+    if (sourceSnapshot && sourceSnapshot.nodes && sourceSnapshot.nodes.length > 0) {
+      const truncatedSelection: SelectionSnapshot = {
+        nodes: sourceSnapshot.nodes.map(n => truncateSnapshotForGenerate(n, 40000))
+      };
+      payloadToSend.selection = truncatedSelection;
+      console.log(`[job ${job.id}] [html] Including selection (${truncatedSelection.nodes.length} node(s)) for edit mode`);
+    }
 
     console.log(`[job ${job.id}] [html] Phase 2-3: Calling /generate-html...`);
     let result: { snapshot: any; html?: string };

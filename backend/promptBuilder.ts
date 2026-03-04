@@ -653,6 +653,42 @@ export function buildGeneratePrompt(
 
 // ── HTML Generation System Prompt ───────────────────────────────────
 
+// ── Helper: describe a snapshot tree as a text outline for edit mode ──
+
+function describeSnapshotTree(node: any, depth: number): string {
+  const indent = "  ".repeat(depth);
+  const lines: string[] = [];
+
+  if (node.type === "TEXT") {
+    const text = (node.characters || "").slice(0, 80);
+    const size = node.fontSize ? ` (${node.fontSize}px)` : "";
+    lines.push(`${indent}- TEXT: "${text}"${size}`);
+  } else if (node.type === "RECTANGLE" || node.type === "ELLIPSE") {
+    const img = node.imagePrompt ? ` [image: "${node.imagePrompt}"]` : "";
+    const size = node.width && node.height ? ` (${node.width}x${node.height})` : "";
+    lines.push(`${indent}- ${node.type}${size}${img}`);
+  } else {
+    // FRAME or container
+    const name = node.name || "Frame";
+    const layout = node.layoutMode === "HORIZONTAL" ? "row" : "column";
+    const size = node.width && node.height ? ` (${node.width}x${node.height})` : "";
+    const img = node.imagePrompt ? ` [background image: "${node.imagePrompt}"]` : "";
+    const bg = node.fillColor ? ` bg:${node.fillColor}` : "";
+    lines.push(`${indent}- ${name}: ${layout}${size}${bg}${img}`);
+
+    if (node.children && Array.isArray(node.children)) {
+      for (const child of node.children.slice(0, 20)) {
+        lines.push(describeSnapshotTree(child, depth + 1));
+      }
+      if (node.children.length > 20) {
+        lines.push(`${indent}  ... and ${node.children.length - 20} more children`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
 // ════════════════════════════════════════════════════════════════════
 // STEP 1 — Creative HTML Generation (no DS constraints)
 // ════════════════════════════════════════════════════════════════════
@@ -863,16 +899,36 @@ export function buildGenerateHTMLPrompt(
   const isMobile = promptLower.includes("mobile") || promptLower.includes("phone") || promptLower.includes("390") || promptLower.includes("iphone");
   const isDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
 
-  // Determine root width
+  // Determine root width and check if this is editing an existing frame
   let rootWidth = isMobile ? 390 : (isDesktop ? 1440 : 1440); // default to desktop
+  let isEditMode = false;
   if (selection && selection.nodes && selection.nodes.length > 0) {
     const selectedNode = selection.nodes[0];
     const selectedWidth = selectedNode.width || 0;
     if (selectedWidth > 0) {
       rootWidth = selectedWidth;
-      parts.push("", "## Target Frame");
-      parts.push(`Width: ${selectedWidth}px, Height: ${selectedNode.height || 0}px`);
+      // If selected frame has children, this is an edit of existing content
+      if (selectedNode.children && selectedNode.children.length > 0) {
+        isEditMode = true;
+      } else {
+        parts.push("", "## Target Frame");
+        parts.push(`Width: ${selectedWidth}px, Height: ${selectedNode.height || 0}px`);
+      }
     }
+  }
+
+  // Edit mode: describe existing content so LLM preserves it
+  if (isEditMode) {
+    const selectedNode = selection.nodes[0];
+    parts.push("", "## EDIT MODE — Existing Frame Content");
+    parts.push(`You are MODIFYING an existing design. The user's request describes WHAT TO CHANGE — apply only that change.`);
+    parts.push(`Keep ALL existing sections, text, images, colors, and layout EXACTLY as they are, except for the requested modification.`);
+    parts.push(`Frame: ${selectedNode.name || 'Frame'} (${selectedNode.width}x${selectedNode.height}px)`);
+    parts.push("");
+    parts.push("Current content structure:");
+    parts.push(describeSnapshotTree(selectedNode, 0));
+    parts.push("");
+    parts.push("IMPORTANT: Reproduce the existing content faithfully in your HTML. Only add/change what the user requested.");
   }
 
   parts.push("", `## Layout: ${isMobile ? 'MOBILE' : 'DESKTOP'} — set root <div> to width:${rootWidth}px.`);
