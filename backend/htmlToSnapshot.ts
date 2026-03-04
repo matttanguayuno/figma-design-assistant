@@ -640,6 +640,31 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       }
     }
 
+    // Post-process children's sizing based on THIS container's layout direction.
+    // layoutSizingHorizontal/Vertical describe how a child behaves inside its parent,
+    // so children's sizing must match the parent's layout mode, not the child's own.
+    if (children.length > 0) {
+      for (const child of children) {
+        if (layoutMode === "HORIZONTAL") {
+          // In a row, children should HUG along the primary (horizontal) axis
+          // so justify-content (SPACE_BETWEEN, etc.) can distribute space.
+          // Exception: children with flex-grow already have FILL set above.
+          if (child.type === "TEXT") {
+            child.layoutSizingHorizontal = "HUG";
+          }
+          if (child.type === "FRAME" && !child.layoutSizingHorizontal) {
+            child.layoutSizingHorizontal = "HUG";
+          }
+        } else {
+          // In a column, children should FILL horizontally (CSS stretch default).
+          if (child.type === "FRAME" && !child.layoutSizingHorizontal) {
+            child.layoutSizingHorizontal = "FILL";
+          }
+          // TEXT children already default to FILL from their construction.
+        }
+      }
+    }
+
     return node;
   }
 

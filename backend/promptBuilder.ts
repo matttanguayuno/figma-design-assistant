@@ -671,19 +671,25 @@ Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, n
 These constraints exist because the HTML is parsed into Figma auto-layout frames:
 - Use ONLY flexbox for layout (display:flex + flex-direction). No CSS Grid, float, position:absolute/fixed.
 - Use "gap" for spacing between children, "padding" on containers.
+- For elements that should stretch to fill available space in a row, use "flex: 1" (not width:100%).
 - No transform, animation, transition, media queries, @keyframes, or JavaScript.
 - No CSS mask or mask-image properties.
 - box-shadow maps to Figma drop shadows (e.g. box-shadow: 0px 4px 16px 0px rgba(0,0,0,0.08)).
 - Star ratings: use ★ and ☆ characters in a <span>, not individual elements.
 
 ═══ IMAGES — CRITICAL ═══
-Every design MUST include images. Add data-image-prompt attributes to elements that should display stock photos.
+Every design MUST include images. Add data-image-prompt as an HTML ATTRIBUTE on the element (NOT as a CSS property).
 The backend fetches matching photos from Unsplash and fills the element automatically.
 
+CORRECT — attribute on the HTML element:
   <div class="hero-image" data-image-prompt="gourmet burger fresh ingredients close-up"></div>
   <img alt="outdoor patio" data-image-prompt="outdoor restaurant patio sunny day">
 
+WRONG — never put data-image-prompt in CSS:
+  .hero-image { data-image-prompt: "..."; }  /* THIS DOES NOT WORK */
+
 Rules:
+- data-image-prompt is an HTML attribute, like class or id. It must be in the HTML markup, not in CSS.
 - Use 3-6 specific, descriptive keywords per prompt.
 - Elements with data-image-prompt MUST have explicit width AND height in CSS.
 - Include at LEAST 3-5 images per page (hero, product images, gallery, etc.).
