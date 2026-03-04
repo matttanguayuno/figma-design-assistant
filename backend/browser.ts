@@ -2,10 +2,38 @@
 // Shared Puppeteer browser instance for HTML-to-Figma rendering.
 // Lazily launches Chromium on first request, reuses across subsequent calls.
 
-import puppeteer, { Browser, Page } from "puppeteer";
+import puppeteer, { Browser, Page } from "puppeteer-core";
 
 let _browser: Browser | null = null;
 let _browserLaunchPromise: Promise<Browser> | null = null;
+
+/**
+ * Resolve Chrome executable path.
+ * 1. PUPPETEER_EXECUTABLE_PATH env var (set on Render)
+ * 2. Common system Chrome locations
+ */
+function findChromePath(): string {
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    return process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+  // Fallback for local dev on Windows/Mac
+  const candidates = [
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ];
+  const fs = require("fs");
+  for (const c of candidates) {
+    try { if (fs.existsSync(c)) return c; } catch {}
+  }
+  throw new Error(
+    "Chrome/Chromium not found. Set PUPPETEER_EXECUTABLE_PATH or install Google Chrome."
+  );
+}
 
 /**
  * Get or lazily create a shared Chromium browser instance.
@@ -17,8 +45,12 @@ async function getBrowser(): Promise<Browser> {
   // Prevent concurrent launches
   if (_browserLaunchPromise) return _browserLaunchPromise;
 
+  const executablePath = findChromePath();
+  console.log(`[browser] Using Chrome at: ${executablePath}`);
+
   _browserLaunchPromise = puppeteer.launch({
     headless: true,
+    executablePath,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
