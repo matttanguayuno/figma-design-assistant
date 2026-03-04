@@ -155,7 +155,8 @@ export type PluginToUIMessage =
   | { type: "extract-ds-cached"; summary: { colors: number; typography: number; components: number; variables: number; pages: number }; extractedAt: number }
   | { type: "layout-audit-phase"; phase: string }
   | { type: "layout-audit-results"; data: { summary?: string; issues?: LayoutAuditIssue[] } }
-  | { type: "layout-audit-error"; error: string };
+  | { type: "layout-audit-error"; error: string }
+  | { type: "html-preview"; jobId: number; html: string };
 
 // ── Accessibility Audit Types ────────────────────────────────────────
 

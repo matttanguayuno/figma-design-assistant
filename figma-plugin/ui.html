@@ -4661,8 +4661,37 @@
           }
           break;
         }
+        case "html-preview": {
+          // Store the raw HTML from HTML generation mode for inspection
+          window._lastHTMLPreview = msg.html;
+          // Update status to include a "View HTML" link
+          var htmlSummary = statusBarText.textContent || "";
+          setStatus(
+            htmlSummary + ' — <a href="#" id="view-html-link" style="color:var(--accent);text-decoration:underline;cursor:pointer;">View HTML</a>',
+            "success",
+            true
+          );
+          setTimeout(function() {
+            var link = document.getElementById("view-html-link");
+            if (link) {
+              link.addEventListener("click", function(e) {
+                e.preventDefault();
+                if (window._lastHTMLPreview) {
+                  var w = window.open("", "_blank", "width=1400,height=900");
+                  if (w) {
+                    w.document.open();
+                    w.document.write(window._lastHTMLPreview);
+                    w.document.close();
+                  }
+                }
+              });
+            }
+          }, 50);
+          break;
+        }
         case "job-error": {
           errorJob(msg.jobId, msg.error);
+
           if (_fixFromAudit) {
             _fixFromAudit = false;
             _lastFixedIssueIdx = -1;

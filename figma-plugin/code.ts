@@ -8732,6 +8732,11 @@ async function runGenerateJobHTML(
     figma.notify(genStats, { timeout: 4000 });
     sendToUI({ type: "job-complete", jobId: job.id, summary: genStats } as any);
 
+    // Send the raw HTML so the UI can show a "View HTML" button for inspection
+    if (result.html) {
+      sendToUI({ type: "html-preview", jobId: job.id, html: result.html } as any);
+    }
+
   } catch (err: any) {
     console.error(`[job ${job.id}] [html] Error:`, err.message, err.stack);
     if (job.cancelled) {

@@ -6788,6 +6788,9 @@ RULES:
       const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML\u2192Figma)`;
       figma.notify(genStats, { timeout: 4e3 });
       sendToUI({ type: "job-complete", jobId: job.id, summary: genStats });
+      if (result.html) {
+        sendToUI({ type: "html-preview", jobId: job.id, html: result.html });
+      }
     } catch (err) {
       console.error(`[job ${job.id}] [html] Error:`, err.message, err.stack);
       if (job.cancelled) {
