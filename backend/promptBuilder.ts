@@ -653,117 +653,83 @@ export function buildGeneratePrompt(
 
 // ── HTML Generation System Prompt ───────────────────────────────────
 
-export const GENERATE_HTML_SYSTEM_PROMPT = `You are a senior UI/UX designer generating production-quality HTML/CSS for a mobile or desktop screen.
-Return ONLY a self-contained HTML document — no markdown fences, no explanation, no commentary.
+// ════════════════════════════════════════════════════════════════════
+// STEP 1 — Creative HTML Generation (no DS constraints)
+// ════════════════════════════════════════════════════════════════════
 
-═══ OUTPUT RULES ═══
-1. Return a complete HTML document: <!DOCTYPE html><html><head><style>...</style></head><body>...</body></html>
-2. ALL styles MUST be in a single <style> block in <head>. No external stylesheets, no inline style attributes.
-3. Use CSS custom properties (variables) for ALL colors, mapped to the design system provided.
-4. The <body> must contain a single root <div id="root"> that is the screen container.
+export const GENERATE_HTML_SYSTEM_PROMPT = `You are a world-class UI/UX designer. Generate a complete, visually polished HTML/CSS page based on the user's request.
+The HTML will be rendered in Puppeteer and converted into a Figma design file, so follow the conversion rules below.
 
-═══ LAYOUT RULES (CRITICAL — Figma conversion depends on these) ═══
-- Use ONLY flexbox for ALL layout. Every container must have display:flex and flex-direction.
-- Use "gap" for spacing between children (becomes itemSpacing in Figma).
-- Use padding on containers (becomes paddingTop/Right/Bottom/Left in Figma).
-- NEVER use CSS Grid, float, position:absolute, position:fixed, or negative margins.
-- NEVER use transform, animation, transition, or any dynamic CSS.
-- For horizontal layouts: flex-direction:row. For vertical: flex-direction:column.
-- For full-width children: use width:100% or flex:1.
-- Set explicit width and height on the root container (e.g. 390px for mobile, 1440px for desktop).
-- Set explicit height on elements that need it (buttons: min 44px, inputs: min 44px).
+Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, no explanation.
 
-═══ ELEMENT MAPPING (how HTML elements convert to Figma nodes) ═══
-- <div>, <section>, <header>, <footer>, <nav>, <main>, <aside>, <form>, <ul>, <ol> → FRAME
-- <p>, <h1>–<h6>, <span>, <label>, <a>, <li> → TEXT
-- <button> → FRAME containing TEXT child
-- <input>, <textarea>, <select> → FRAME styled as input field
-- <img> → RECTANGLE with image placeholder
-- <hr> → RECTANGLE (1px tall divider)
+═══ STRUCTURE ═══
+- <body> must contain a single <div id="root"> with explicit width (390px mobile, 1440px desktop).
+- All styles in a single <style> block in <head>. Never use inline style= attributes.
+- Define ALL colors as CSS custom properties in :root { ... }. Reference them via var(--name) in rules — never raw hex/rgb in rules.
 
-═══ COMPONENT BINDING ═══
-If a DS component list is provided, and an element corresponds to a known component
-(e.g. a card, button, input, chip, avatar), add a data-component attribute:
-  <div class="card" data-component="Card">...</div>
-  <button data-component="Button/Primary">Click me</button>
-The Figma plugin will try to instantiate the real component instance.
+═══ FIGMA CONVERSION RULES ═══
+These constraints exist because the HTML is parsed into Figma auto-layout frames:
+- Use ONLY flexbox for layout (display:flex + flex-direction). No CSS Grid, float, position:absolute/fixed.
+- Use "gap" for spacing between children, "padding" on containers.
+- No transform, animation, transition, media queries, @keyframes, or JavaScript.
+- No CSS mask or mask-image properties.
+- box-shadow maps to Figma drop shadows (e.g. box-shadow: 0px 4px 16px 0px rgba(0,0,0,0.08)).
+- Star ratings: use ★ and ☆ characters in a <span>, not individual elements.
 
-═══ CSS CUSTOM PROPERTIES (MANDATORY) ═══
-Define ALL colors as CSS custom properties in :root, with comments mapping each to its Figma style name.
-Example:
-  :root {
-    /* fillStyleName: "Light/Surface" */
-    --surface-bg: #FFFFFF;
-    /* fillStyleName: "Light/Surface/Container" */
-    --surface-container: #F5F5F5;
-    /* fillStyleName: "Light/Text/Primary" */
-    --text-primary: #1A1A1A;
-    /* fillStyleName: "Light/Primary" */
-    --brand-primary: #0066FF;
-  }
+═══ IMAGES — CRITICAL ═══
+Every design MUST include images. Add data-image-prompt attributes to elements that should display stock photos.
+The backend fetches matching photos from Unsplash and fills the element automatically.
 
-EVERY color in the CSS MUST reference a custom property. Never use raw hex/rgb values in rules.
+  <div class="hero-image" data-image-prompt="gourmet burger fresh ingredients close-up"></div>
+  <img alt="outdoor patio" data-image-prompt="outdoor restaurant patio sunny day">
 
-═══ TYPOGRAPHY ═══
-- Use the font families and sizes from the design system.
-- Apply font-weight for different text styles (400=Regular, 500=Medium, 600=SemiBold, 700=Bold).
-- Add a CSS comment with the Figma textStyleName above each text rule:
-  /* textStyleName: "Heading/Large" */
-  h1 { font-size: 28px; font-weight: 700; font-family: "Inter", sans-serif; }
-
-═══ SEMANTIC STRUCTURE ═══
-- Use meaningful HTML elements: <header>, <nav>, <main>, <section>, <footer>.
-- Use <h1>–<h6> for headings (proper hierarchy).
-- Use <button> for interactive elements.
-- Use <input> for form fields.
-- Use descriptive class names (e.g. "card", "hero-section", "nav-bar").
-
-═══ VISUAL DESIGN ═══
-- USE 3+ levels of text size for visual hierarchy.
-- USE contrast/depth: background surface → card surfaces → accent highlights.
-- EVERY section/card MUST have distinct padding and gap values.
-- Buttons: min-height 44px, centered content, rounded corners.
-- Cards: subtle background, border-radius, padding, optional box-shadow.
-- Star ratings: use filled/empty star characters (★★★★☆).
-- Icons: use small <div> placeholders with background color, sized 16-24px.
-
-═══ DENSITY & SIZE ═══
-- Mobile: root width 390px, single column.
-- Desktop: root width 1440px, may use multi-column flex layouts.
-- Minimum content: at least 30-50 meaningful elements for a section, 50-80 for a full screen.
-
-═══ SPACING RHYTHM ═══
-Use 8px base grid: 4, 8, 12, 16, 24, 32, 48px.
-- Text line spacing: 4-8px gap
-- Form fields: 12-16px gap
-- Section padding: 16-24px
-- Between major sections: 24-32px gap
-
-═══ BOX SHADOW → FIGMA EFFECT ═══
-Use box-shadow for cards/elevated elements. Format: box-shadow: Xpx Ypx Rpx Spx rgba(r,g,b,a);
-This maps to Figma DROP_SHADOW {offset:{x,y}, radius:R, spread:S, color:{r,g,b,a}}.
-
-═══ ICONS & RATINGS ═══
-- Star ratings: use plain text star characters ★ (filled) and ☆ (empty) inside a single text element.
-  Example: <span class="rating-stars">★★★★☆</span>
-- NEVER use individual divs for each star. NEVER use CSS mask, mask-image, or SVG icons for stars.
-- For other simple icons, use Unicode/emoji characters in text spans.
-
-═══ ANTI-PATTERNS (NEVER DO THESE) ═══
-- NEVER use CSS mask, mask-image, -webkit-mask, or -webkit-mask-image properties (these cannot be converted to Figma).
-- NEVER use individual empty divs as icons — use text characters instead.
-- NEVER use position:absolute or position:fixed (Figma can't convert these to auto-layout).
-- NEVER use CSS Grid (only flexbox).
-- NEVER use inline style= attributes (all styles in <style> block only).
-- NEVER use media queries, @keyframes, or JavaScript.
-- NEVER use <script> tags.
-- NEVER include phone status bar elements (time, battery, signal).
-- NEVER produce fewer than 25 HTML elements.
-- NEVER use colors that aren't defined as CSS custom properties.
+Rules:
+- Use 3-6 specific, descriptive keywords per prompt.
+- Elements with data-image-prompt MUST have explicit width AND height in CSS.
+- Include at LEAST 3-5 images per page (hero, product images, gallery, etc.).
+- NEVER use placeholder src values — always use data-image-prompt.
+- Images make the design look professional and real — a design without images looks broken.
 
 Generate the complete HTML document now.`;
 
-// ── HTML Generation User Prompt ─────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════
+// STEP 2 — Design System Binding (mechanical CSS rewrite)
+// ════════════════════════════════════════════════════════════════════
+
+export const BIND_DS_SYSTEM_PROMPT = `You are a design system engineer. You receive an HTML document and a design system specification.
+Your job is to rewrite the CSS to use the design system's color tokens, typography styles, and component names.
+
+DO NOT change the layout, structure, content, or images. ONLY modify:
+1. CSS color variables in :root — replace with DS colors, adding /* fillStyleName: "ExactName" */ comments
+2. Typography rules — adjust font-size/weight to match DS type roles, adding /* textStyleName: "ExactName" */ comments
+3. Component bindings — add data-component="ComponentName" attributes on matching elements
+
+Return the FULL modified HTML document. No markdown fences, no explanation.
+
+═══ COLOR BINDING ═══
+Replace the existing :root color variables with the design system's actual colors and style names:
+  :root {
+    /* fillStyleName: "Light/Surface" */
+    --surface: #FFFFFF;
+    /* fillStyleName: "Light/Primary" */  
+    --primary: #0066FF;
+  }
+Map the HTML's semantic color roles (surface, primary, text, accent, etc.) to the closest DS color.
+
+═══ TYPOGRAPHY BINDING ═══
+Above each text CSS rule, add a comment with the matching DS text style:
+  /* textStyleName: "UNO Semantic/Headline Large" */
+  .headline { font-size: 32px; font-weight: 700; }
+Use the EXACT font-size from the DS type role. Match by semantic purpose (display→display, headline→headline, body→body, label→label).
+
+═══ COMPONENT BINDING ═══
+Add data-component attributes to elements that match available DS components:
+  <div class="card" data-component="Card">...</div>
+  <button class="btn" data-component="Button/Primary">Click</button>
+
+Return the full modified HTML document now.`;
+
+// ── Step 1: Creative HTML User Prompt ───────────────────────────────
 
 export function buildGenerateHTMLPrompt(
   prompt: string,
@@ -778,14 +744,70 @@ export function buildGenerateHTMLPrompt(
     prompt,
   ];
 
-  // ── 1. DSSummary → CSS custom properties ──
+  // Only include the selected frame dimensions (for root width), no DS binding
+  if (selection && selection.nodes && selection.nodes.length > 0) {
+    const selectedNode = selection.nodes[0];
+    const selectedWidth = selectedNode.width || 0;
+    parts.push("", "## Target Frame");
+    parts.push(`Width: ${selectedWidth}px, Height: ${selectedNode.height || 0}px`);
+    parts.push(`Set the root <div> to width:${selectedWidth}px.`);
+  }
+
+  // Include font family hint so the LLM picks a reasonable default
+  const fontFamilies = styleTokens?.fontFamilies || [];
+  if (fontFamilies.length > 0) {
+    parts.push("", `## Font: Use "${fontFamilies[0]}" as the primary font-family.`);
+  }
+
+  parts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
+
+  const fullPrompt = parts.join("\n");
+  console.log(`[buildGenerateHTMLPrompt] Step 1 prompt size: ${fullPrompt.length} chars`);
+  return fullPrompt;
+}
+
+// ── Step 2: DS Binding User Prompt ──────────────────────────────────
+
+export function buildDSBindingPrompt(
+  html: string,
+  styleTokens: any,
+  designSystem: DesignSystemSnapshot,
+  fullDesignSystem?: any,
+  dsSummary?: any
+): string | null {
+  // If there's no design system context, skip Step 2 entirely
+  const hasDSSummary = dsSummary && (
+    dsSummary.surfaces?.length > 0 ||
+    dsSummary.textColors?.length > 0 ||
+    dsSummary.brandColors?.length > 0 ||
+    (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0)
+  );
+  const hasTextStyles = designSystem?.textStyles?.length > 0;
+  const hasFillStyles = designSystem?.fillStyles?.length > 0;
+  const hasComponents = fullDesignSystem?.components?.length > 0 || designSystem?.components?.length > 0;
+
+  if (!hasDSSummary && !hasTextStyles && !hasFillStyles && !hasComponents) {
+    console.log(`[buildDSBindingPrompt] No DS context available — skipping Step 2`);
+    return null;
+  }
+
+  const parts: string[] = [
+    "## HTML to Modify",
+    "Below is the HTML document. Rewrite its CSS to use the design system tokens described after it.",
+    "Do NOT change layout, structure, content, images, or data-image-prompt attributes.",
+    "",
+    "```html",
+    html,
+    "```",
+  ];
+
+  // ── DS Colors ──
   if (dsSummary) {
-    parts.push("", "## Design System (define these as CSS custom properties in :root)");
-    parts.push("Map every color below to a CSS variable. Include a comment with the exact Figma style name.");
+    parts.push("", "## Design System Colors");
+    parts.push("Replace the existing :root CSS variables with these DS colors. Add /* fillStyleName: \"...\" */ comments.");
     parts.push("");
     parts.push(":root {");
 
-    // Surface colors
     if (dsSummary.surfaces?.length > 0) {
       parts.push("  /* ── Surface Colors ── */");
       for (const c of dsSummary.surfaces) {
@@ -795,7 +817,6 @@ export function buildGenerateHTMLPrompt(
       }
     }
 
-    // Text colors
     if (dsSummary.textColors?.length > 0) {
       parts.push("  /* ── Text Colors ── */");
       for (const c of dsSummary.textColors) {
@@ -805,7 +826,6 @@ export function buildGenerateHTMLPrompt(
       }
     }
 
-    // Brand/accent colors
     if (dsSummary.brandColors?.length > 0) {
       parts.push("  /* ── Brand / Accent Colors ── */");
       for (const c of dsSummary.brandColors) {
@@ -817,10 +837,11 @@ export function buildGenerateHTMLPrompt(
 
     parts.push("}");
 
-    // Typography roles with font sizes — LLM must use matching font-size for each role
+    // Typography roles
     if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
-      parts.push("", "### Typography Roles (add /* textStyleName: \"...\" */ comment above each text rule)");
-      parts.push("IMPORTANT: Use the EXACT font-size listed for each role. The Figma text style defines a specific size — your CSS must match it.");
+      parts.push("", "## Typography Roles");
+      parts.push("Add /* textStyleName: \"...\" */ comments above matching text CSS rules.");
+      parts.push("Use the EXACT font-size from each role.");
       for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
         const fontSize = dsSummary.typeRoleFontSizes?.[role];
         if (fontSize) {
@@ -831,51 +852,21 @@ export function buildGenerateHTMLPrompt(
       }
     }
 
-    // Spacing + Radii + Shadow
-    if (dsSummary.spacingScale?.length > 0) {
-      parts.push(`### Spacing Scale: ${dsSummary.spacingScale.join(", ")}px`);
-    }
+    // Spacing/radii hints
     if (dsSummary.radii?.length > 0) {
-      parts.push(`### Corner Radii: ${dsSummary.radii.join(", ")}px`);
-    }
-    if (dsSummary.shadow) {
-      parts.push(`### Default Shadow: box-shadow: ${dsSummary.shadow.offsetX || 0}px ${dsSummary.shadow.offsetY || 2}px ${dsSummary.shadow.radius || 8}px ${dsSummary.shadow.spread || 0}px rgba(0,0,0,${dsSummary.shadow.color?.a || 0.08})`);
-    }
-
-    // Blocked styles
-    if (dsSummary.blockedStyles?.length > 0) {
-      parts.push("### BLOCKED STYLES (do NOT use these colors as default fills)");
-      parts.push(dsSummary.blockedStyles.slice(0, 20).join(", "));
+      parts.push(`\n## Corner Radii: ${dsSummary.radii.join(", ")}px — prefer these values.`);
     }
   }
 
-  // ── 2. Selected frame context ──
-  if (selection && selection.nodes && selection.nodes.length > 0) {
-    const selectedNode = selection.nodes[0];
-    const selectedWidth = selectedNode.width || 0;
-    parts.push("", "## Currently Selected Frame");
-    parts.push(`Name: "${selectedNode.name || 'unknown'}", ${selectedWidth}×${selectedNode.height || 0}px`);
-    parts.push(`Set the root <div> to width:${selectedWidth}px.`);
-  }
-
-  // ── 3. Fallback: raw style tokens ──
+  // Fallback: raw style tokens
   if (!dsSummary && styleTokens && Object.keys(styleTokens).length > 0) {
-    parts.push("", "## Design Style Tokens (define as CSS custom properties)");
-    if (styleTokens.fontFamilies?.length > 0) {
-      parts.push("Font families: " + styleTokens.fontFamilies.slice(0, 3).join(", "));
-    }
-    if (styleTokens.fontSizes?.length > 0) {
-      parts.push("Font sizes: " + styleTokens.fontSizes.slice(0, 8).join(", ") + "px");
-    }
+    parts.push("", "## Style Tokens");
     if (styleTokens.colors?.length > 0) {
-      parts.push("Colors (map to CSS variables): " + styleTokens.colors.slice(0, 12).join(", "));
-    }
-    if (styleTokens.cornerRadii?.length > 0) {
-      parts.push("Corner radii: " + styleTokens.cornerRadii.join(", ") + "px");
+      parts.push("Colors: " + styleTokens.colors.slice(0, 12).join(", "));
     }
   }
 
-  // ── 4. Text + paint styles (fallback) ──
+  // Fallback: text + paint styles
   if (!dsSummary) {
     if (designSystem.textStyles.length > 0) {
       const trimmed = designSystem.textStyles.slice(0, 8).map((s: any) => s.name);
@@ -895,29 +886,25 @@ export function buildGenerateHTMLPrompt(
     }
   }
 
-  // ── 5. Full design system ──
+  // Full design system
   if (fullDesignSystem) {
     parts.push("", formatFullDesignSystemSection(fullDesignSystem));
   }
 
-  // ── 6. Components (from designSystem.components or fullDesignSystem.components) ──
+  // Components
   const components = fullDesignSystem?.components || designSystem?.components || [];
   if (components.length > 0) {
-    parts.push("", "## Available Design System Components");
-    parts.push("When an element maps to one of these components, add a data-component attribute with the exact name:");
-    parts.push('  <div data-component="ComponentName">...</div>');
-    parts.push("This lets the Figma plugin try to instantiate the actual DS component instance.");
-    parts.push("");
+    parts.push("", "## Available Components — add data-component attributes to matching elements");
     for (const comp of components.slice(0, 25)) {
       const name = comp.name || comp.key;
       if (name) parts.push(`- ${name}`);
     }
   }
 
-  parts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
+  parts.push("", "Return the FULL modified HTML document now. No markdown fences, no explanation.");
 
   const fullPrompt = parts.join("\n");
-  console.log(`[buildGenerateHTMLPrompt] Total prompt size: ${fullPrompt.length} chars`);
+  console.log(`[buildDSBindingPrompt] Step 2 prompt size: ${fullPrompt.length} chars`);
   return fullPrompt;
 }
 

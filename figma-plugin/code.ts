@@ -8575,8 +8575,8 @@ async function runGenerateJobHTML(
     await yieldToUI();
     if (job.cancelled) { sendToUI({ type: "job-cancelled", jobId: job.id } as any); return; }
 
-    // ── Phase 2: Generate (HTML via LLM) + Phase 3: Render (server-side Puppeteer) ──
-    sendToUI({ type: "job-progress", jobId: job.id, phase: "generate" } as any);
+    // ── Phase 2: Design (creative HTML via LLM) + Phase 3: Bind (DS binding) ──
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "design" } as any);
 
     const trimmedDesignSystem = {
       textStyles: (designSystem.textStyles || []).slice(0, 12),

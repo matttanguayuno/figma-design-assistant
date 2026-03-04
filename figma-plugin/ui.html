@@ -2473,9 +2473,9 @@
     let phaseEstimates = { analyze: 8000, generate: 90000, create: 6000 };
     const PHASE_ORDER_STANDARD = ["analyze", "generate", "create"];
     const PHASE_ORDER_MULTISTEP = ["analyze", "plan", "generate", "create", "refine"];
-    const PHASE_ORDER_HTML = ["analyze", "generate", "render", "create"];
+    const PHASE_ORDER_HTML = ["analyze", "design", "render", "create"];
     const PHASE_ESTIMATES_MULTISTEP = { analyze: 8000, plan: 15000, generate: 90000, create: 6000, refine: 30000 };
-    const PHASE_ESTIMATES_HTML = { analyze: 8000, generate: 60000, render: 10000, create: 6000 };
+    const PHASE_ESTIMATES_HTML = { analyze: 8000, design: 90000, render: 15000, create: 6000 };
     let PHASE_ORDER = PHASE_ORDER_STANDARD;
 
     // Dynamically update progress bar segments based on mode
@@ -2497,7 +2497,9 @@
       const labels = {
         analyze: "Analyzing",
         plan: "Planning",
+        design: "Designing",
         generate: "Generating",
+        bind: "Binding DS",
         render: "Rendering",
         create: "Creating",
         refine: "Refining",

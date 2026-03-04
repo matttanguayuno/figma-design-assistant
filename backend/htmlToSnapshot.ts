@@ -304,6 +304,17 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       }
       const cr = parseFloat(style.borderRadius);
       if (cr > 0) node.cornerRadius = Math.round(cr);
+      // Extract data-image-prompt for stock photo resolution
+      const imgPrompt = (el as HTMLElement).getAttribute?.("data-image-prompt");
+      if (imgPrompt) {
+        node.imagePrompt = imgPrompt;
+      } else {
+        // Fallback: use alt text as image search query if no data-image-prompt
+        const altText = (el as HTMLImageElement).alt;
+        if (altText && altText.length > 2 && altText.toLowerCase() !== "image") {
+          node.imagePrompt = altText;
+        }
+      }
       return node;
     }
 
@@ -555,6 +566,13 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     const compAttr = (el as HTMLElement).getAttribute?.("data-component");
     if (compAttr) {
       node.componentName = compAttr;
+    }
+
+    // data-image-prompt → imagePrompt for stock photo resolution
+    // Used on divs that act as image containers (hero backgrounds, thumbnails)
+    const imgPromptAttr = (el as HTMLElement).getAttribute?.("data-image-prompt");
+    if (imgPromptAttr) {
+      node.imagePrompt = imgPromptAttr;
     }
 
     // Fill color

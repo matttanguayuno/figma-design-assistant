@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
 import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot, extractFillStyleMap, extractTextStyleMap } from "./htmlToSnapshot";
@@ -648,9 +648,9 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       }
     }
 
-    // 1. Call LLM to generate HTML
-    console.log(`[generate-html] Step 1: Calling LLM for HTML generation...`);
-    const htmlContent = await callLLMGenerateHTML(
+    // ── Step 1: Creative HTML generation (no DS constraints) ──
+    console.log(`[generate-html] Step 1: Calling LLM for creative HTML generation...`);
+    const rawHtml = await callLLMGenerateHTML(
       prompt,
       styleTokens || {},
       safeDesignSystem,
@@ -661,9 +661,29 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       safeFullDS,
       dsSummary
     );
-    console.log(`[generate-html] HTML generated: ${htmlContent.length} chars`);
+    console.log(`[generate-html] Step 1 complete: ${rawHtml.length} chars`);
 
-    // 2. Determine viewport size from prompt
+    // ── Step 2: Design system binding (if DS context available) ──
+    let htmlContent = rawHtml;
+    console.log(`[generate-html] Step 2: DS binding pass...`);
+    try {
+      htmlContent = await callLLMBindDS(
+        rawHtml,
+        styleTokens || {},
+        safeDesignSystem,
+        apiKey,
+        resolvedProvider,
+        model,
+        safeFullDS,
+        dsSummary
+      );
+      console.log(`[generate-html] Step 2 complete: ${htmlContent.length} chars`);
+    } catch (bindErr: any) {
+      console.warn(`[generate-html] Step 2 (DS binding) failed, using raw HTML: ${bindErr.message}`);
+      htmlContent = rawHtml;
+    }
+
+    // 3. Determine viewport size from prompt
     const promptLower = prompt.toLowerCase();
     const isDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
     const viewportWidth = isDesktop ? 1440 : 390;
@@ -692,6 +712,34 @@ app.post("/generate-html", async (req: Request, res: Response) => {
 
       // 6. Post-process: enrich style bindings from CSS comments + dsSummary fallback
       const enrichedSnapshot = postProcessHTMLSnapshot(snapshot, htmlContent, dsSummary);
+
+      // 7. Resolve image prompts → fetch stock photos from Unsplash
+      console.log(`[generate-html] Step 4: Resolving image prompts...`);
+      let imageCount = 0;
+      async function resolveImagesInSnapshot(node: any): Promise<void> {
+        if (!node) return;
+        if (node.imagePrompt) {
+          try {
+            console.log(`[generate-html] Resolving image: "${node.imagePrompt}"`);
+            const base64 = await resolveImagePrompt(node.imagePrompt);
+            node.imageData = base64;
+            delete node.imagePrompt;
+            imageCount++;
+            console.log(`[generate-html] Image resolved (${base64.length} chars base64)`);
+          } catch (imgErr: any) {
+            console.warn(`[generate-html] Image resolution failed for "${node.imagePrompt}": ${imgErr.message}`);
+            // Leave the node as a colored rectangle if image fetch fails
+            delete node.imagePrompt;
+          }
+        }
+        if (node.children) {
+          for (const child of node.children) {
+            await resolveImagesInSnapshot(child);
+          }
+        }
+      }
+      await resolveImagesInSnapshot(enrichedSnapshot);
+      console.log(`[generate-html] Resolved ${imageCount} images`);
 
       console.log(`[generate-html] Snapshot extracted:`, JSON.stringify(enrichedSnapshot).slice(0, 500));
       res.json({ snapshot: enrichedSnapshot, html: htmlContent });

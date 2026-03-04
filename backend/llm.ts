@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -615,6 +615,67 @@ export async function callLLMGenerateHTML(
 
   console.log(`[callLLMGenerateHTML] HTML output: ${html.length} chars`);
   return html;
+}
+
+// ── Call LLM for Design System Binding (Step 2) ─────────────────────
+
+export async function callLLMBindDS(
+  html: string,
+  styleTokens: any,
+  designSystem: DesignSystemSnapshot,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+  fullDesignSystem?: any,
+  dsSummary?: any
+): Promise<string> {
+  const userPrompt = buildDSBindingPrompt(html, styleTokens, designSystem, fullDesignSystem, dsSummary);
+  if (!userPrompt) {
+    console.log(`[callLLMBindDS] No DS context — skipping binding step`);
+    return html;
+  }
+
+  console.log(`[callLLMBindDS] System prompt: ${BIND_DS_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${BIND_DS_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((BIND_DS_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
+
+  const MAX_USER_PROMPT_CHARS = 500000;
+  let safeUserPrompt = userPrompt;
+  if (userPrompt.length > MAX_USER_PROMPT_CHARS) {
+    console.warn(`[callLLMBindDS] User prompt too long (${userPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
+    safeUserPrompt = userPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED]";
+  }
+
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    // Lower temperature for binding — this is a mechanical rewrite, not creative
+    raw = await callProvider(provider, BIND_DS_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, false, 0.2);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  // Strip markdown fences
+  let bound = raw.trim();
+  if (bound.startsWith("```html")) {
+    bound = bound.slice(7);
+  } else if (bound.startsWith("```")) {
+    bound = bound.slice(3);
+  }
+  if (bound.endsWith("```")) {
+    bound = bound.slice(0, -3);
+  }
+  bound = bound.trim();
+
+  if (!bound.includes("<") || !bound.includes(">")) {
+    console.warn(`[callLLMBindDS] Binding returned non-HTML — using original`);
+    return html;
+  }
+
+  console.log(`[callLLMBindDS] Bound HTML output: ${bound.length} chars`);
+  return bound;
 }
 
 // ── Call LLM for Accessibility Audit Enrichment ─────────────────────
