@@ -14,6 +14,38 @@ import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
 import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot, extractFillStyleMap, extractTextStyleMap } from "./htmlToSnapshot";
 
+/**
+ * Fix data-image-prompt values that the LLM put in CSS instead of as HTML attributes.
+ * Extracts selector + prompt from CSS rules, removes the CSS property,
+ * and injects a <script> that applies them as HTML attributes via querySelectorAll.
+ */
+function fixCSSImagePrompts(html: string): string {
+  // Find CSS rules containing data-image-prompt: "..."
+  const rulePattern = /([^{}]+)\{([^}]*data-image-prompt:\s*"([^"]+)"[^}]*)\}/g;
+  const fixes: { selector: string; prompt: string }[] = [];
+  let m;
+
+  while ((m = rulePattern.exec(html)) !== null) {
+    fixes.push({ selector: m[1].trim(), prompt: m[3] });
+  }
+
+  if (fixes.length === 0) return html;
+
+  console.log(`[fixCSSImagePrompts] Found ${fixes.length} data-image-prompt in CSS — converting to HTML attributes`);
+
+  // Remove data-image-prompt from CSS (preserves rest of the rule)
+  html = html.replace(/\s*data-image-prompt:\s*"[^"]*"\s*;?/g, '');
+
+  // Inject a script that applies the attributes using proper CSS selector matching
+  const escapedFixes = JSON.stringify(fixes).replace(/<\//g, '<\\/');
+  const fixScript = `<script>\n(function(){\n  var fixes=${escapedFixes};\n  fixes.forEach(function(f){\n    document.querySelectorAll(f.selector).forEach(function(el){\n      if(!el.hasAttribute('data-image-prompt')){\n        el.setAttribute('data-image-prompt',f.prompt);\n      }\n    });\n  });\n})();\n</script>`;
+
+  // Insert before </body>
+  html = html.replace('</body>', fixScript + '\n</body>');
+
+  return html;
+}
+
 const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
@@ -689,7 +721,10 @@ app.post("/generate-html", async (req: Request, res: Response) => {
     const viewportWidth = isDesktop ? 1440 : 390;
     const viewportHeight = isDesktop ? 900 : 844;
 
-    // 3. Parse style maps from raw HTML (CSS comments are stripped by browser CSSOM)
+    // 3a. Fix data-image-prompt values stuck in CSS (LLM sometimes puts them as CSS properties instead of HTML attributes)
+    htmlContent = fixCSSImagePrompts(htmlContent);
+
+    // 3b. Parse style maps from raw HTML (CSS comments are stripped by browser CSSOM)
     const fillStyles = extractFillStyleMap(htmlContent);
     const textStyleMaps = extractTextStyleMap(htmlContent);
     console.log(`[generate-html] Extracted ${fillStyles.length} fill style bindings, ${textStyleMaps.length} text style bindings from CSS comments`);
