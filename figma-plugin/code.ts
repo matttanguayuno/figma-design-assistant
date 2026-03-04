@@ -8673,14 +8673,27 @@ async function runGenerateJobHTML(
     const modeHint = `${prompt} ${snapshot.name || ""} ${sourcePosition?.name || ""}`;
     _currentThemeMode = detectThemeMode(modeHint);
 
-    // Determine placement position (same logic as standard/multi-step)
+    // Determine if this is an edit-mode operation (modifying an existing frame)
+    // Edit mode: source frame has children AND prompt does NOT ask for a "new" frame/screen
+    const isEditMode = !!(sourcePosition && sourceSnapshot && sourceSnapshot.nodes &&
+      sourceSnapshot.nodes.length > 0 && sourceSnapshot.nodes[0].children &&
+      sourceSnapshot.nodes[0].children.length > 0 &&
+      !/\b(new|fresh|blank|empty)\s+(frame|screen|page|view|layout)\b/i.test(prompt));
+
+    // Determine placement position
     let placeX: number;
     let placeY: number;
     const frameW = snapshot.width || 390;
     const frameH = snapshot.height || 800;
     const GAP = 100;
 
-    if (sourcePosition) {
+    if (isEditMode && sourcePosition) {
+      // Edit mode: place at the exact same position as the source frame
+      placeX = sourcePosition.x;
+      placeY = sourcePosition.y;
+      console.log(`[job ${job.id}] [html] Edit mode: placing at source position x:${placeX}, y:${placeY}`);
+    } else if (sourcePosition) {
+      // New generation with a reference frame: place next to it
       const candidates = [
         { x: sourcePosition.x + sourcePosition.width + GAP, y: sourcePosition.y },
         { x: sourcePosition.x, y: sourcePosition.y + sourcePosition.height + GAP },
@@ -8766,13 +8779,27 @@ async function runGenerateJobHTML(
       (node as SceneNode).setPluginData("generated", "true");
       (node as SceneNode).setPluginData("generatedViaHTML", "true");
     }
+
+    // Edit mode: remove the old source frame now that the new one is created
+    if (isEditMode && sourceNodeIds && sourceNodeIds.length > 0) {
+      for (const oldId of sourceNodeIds) {
+        const oldNode = figma.getNodeById(oldId);
+        if (oldNode && oldNode.id !== node.id && "remove" in oldNode) {
+          console.log(`[job ${job.id}] [html] Edit mode: removing old frame "${(oldNode as SceneNode).name}" (${oldId})`);
+          (oldNode as SceneNode).remove();
+        }
+      }
+    }
+
     figma.currentPage.selection = [node];
     figma.viewport.scrollAndZoomIntoView([node]);
 
     const actualRight = placeX + node.width + 200;
     if (actualRight > (_nextPlaceX || 0)) _nextPlaceX = actualRight;
 
-    const genStats = `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML→Figma)`;
+    const genStats = isEditMode
+      ? `Updated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML→Figma)`
+      : `Generated "${snapshot.name || "Frame"}": ${_importStats.frames} frames, ${_importStats.texts} texts (HTML→Figma)`;
     figma.notify(genStats, { timeout: 4000 });
     sendToUI({ type: "job-complete", jobId: job.id, summary: genStats } as any);
 
@@ -12097,11 +12124,28 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           } else {
             // Single frame (or no selection) — original flow
             const singleNodeIds = currentSelection.map(n => n.id);
+
+            // Capture snapshot and position from selected frame for edit-mode support
+            let singleSnapshot: SelectionSnapshot | undefined;
+            let singlePosition: { x: number; y: number; width: number; height: number; name?: string } | undefined;
+            if (currentSelection.length === 1) {
+              const selNode = currentSelection[0];
+              singleSnapshot = { nodes: [snapshotNode(selNode, 0)] };
+              singlePosition = {
+                x: Math.round(selNode.x),
+                y: Math.round(selNode.y),
+                width: Math.round(selNode.width),
+                height: Math.round(selNode.height),
+                name: selNode.name
+              };
+              console.log(`[run] Captured single frame: "${selNode.name}" at ${singlePosition.x},${singlePosition.y} (${singlePosition.width}x${singlePosition.height})`);
+            }
+
             console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}" (mode: ${activeGenerateMode})`);
             sendToUI({ type: "job-started", jobId, prompt } as any);
             const runner = activeGenerateMode === "html" ? runGenerateJobHTML
               : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
-            runner(job, prompt, undefined, undefined, singleNodeIds.length > 0 ? singleNodeIds : undefined).catch((err: any) => {
+            runner(job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : undefined).catch((err: any) => {
               console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
               if (!job.cancelled) {
                 sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
