@@ -671,7 +671,18 @@
       background-position: right 8px center;
       padding-right: 24px;
     }
-    /* Toggle switch for multi-step mode */
+    /* Generation mode selector */
+    .gen-mode-row {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .gen-mode-desc {
+      font-size: 9px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    /* Legacy toggle switch (kept for other uses) */
     .toggle-row {
       display: flex;
       align-items: center;
@@ -1796,15 +1807,14 @@
       <span class="key-dot"></span>
       <span id="key-status-text">No API key configured</span>
     </div>
-    <div class="toggle-row">
-      <div>
-        <div class="settings-label">Multi-Step Generation</div>
-        <div class="toggle-desc">Plan → Generate → Refine (3 LLM calls)</div>
-      </div>
-      <label class="toggle-switch">
-        <input type="checkbox" id="multi-step-toggle" />
-        <span class="toggle-slider"></span>
-      </label>
+    <div class="gen-mode-row">
+      <div class="settings-label">Generation Mode</div>
+      <select id="generate-mode-select" class="settings-select">
+        <option value="standard">Standard (1 pass)</option>
+        <option value="multi-step">Multi-Step (3 passes)</option>
+        <option value="html">HTML to Figma</option>
+      </select>
+      <div class="gen-mode-desc" id="gen-mode-desc">Single LLM call → NodeSnapshot JSON</div>
     </div>
   </div>
 
@@ -1997,6 +2007,7 @@
     var _userWidth = MIN_W;
     var _userHeight = BARE_MIN_H;
     var _hasManualResize = false; // true once user drags resize handle upward
+    var _preSettingsHeight = null;  // height before settings opened (null = not in settings resize)
 
     /** Compute the auto-fit height based on visible banners, jobs, etc. */
     function computeAutoHeight() {
@@ -2110,7 +2121,8 @@
     const providerSelect = document.getElementById("provider-select");
     const modelSelect = document.getElementById("model-select");
     const apiKeyLabel = document.getElementById("api-key-label");
-    const multiStepToggle = document.getElementById("multi-step-toggle");
+    const generateModeSelect = document.getElementById("generate-mode-select");
+    const genModeDesc = document.getElementById("gen-mode-desc");
     const menuAuditA11y = document.getElementById("menu-audit-a11y");
     const menuClearA11y = document.getElementById("menu-clear-a11y");
     const menuAuditStates = document.getElementById("menu-audit-states");
@@ -2278,8 +2290,8 @@
     let _selectedModel = "claude-sonnet-4-20250514";
     // Store keys per provider
     let _providerKeys = { anthropic: "", openai: "", gemini: "" };
-    // Multi-step generation mode
-    let _multiStepMode = false;
+    // Generation mode: "standard" | "multi-step" | "html"
+    let _generateMode = "standard";
 
     // ── API Key state ────────────────────────────────────────────
     let _apiKey = "";
@@ -2344,10 +2356,16 @@
       postToPlugin({ type: "save-provider-selection", provider: _selectedProvider, model: _selectedModel });
     });
 
-    // Multi-step mode toggle
-    multiStepToggle.addEventListener("change", function() {
-      _multiStepMode = multiStepToggle.checked;
-      postToPlugin({ type: "save-generate-mode", mode: _multiStepMode ? "multi-step" : "standard" });
+    // Generation mode dropdown
+    const GEN_MODE_DESCRIPTIONS = {
+      standard: "Single LLM call → NodeSnapshot JSON",
+      "multi-step": "Plan → Generate → Refine (3 LLM calls)",
+      html: "LLM generates HTML → server renders → Figma nodes",
+    };
+    generateModeSelect.addEventListener("change", function() {
+      _generateMode = generateModeSelect.value;
+      genModeDesc.textContent = GEN_MODE_DESCRIPTIONS[_generateMode] || "";
+      postToPlugin({ type: "save-generate-mode", mode: _generateMode });
       updateProgressSegments();
     });
 
@@ -2370,19 +2388,32 @@
     let phaseEstimates = { analyze: 8000, generate: 90000, create: 6000 };
     const PHASE_ORDER_STANDARD = ["analyze", "generate", "create"];
     const PHASE_ORDER_MULTISTEP = ["analyze", "plan", "generate", "create", "refine"];
+    const PHASE_ORDER_HTML = ["analyze", "generate", "render", "create"];
     const PHASE_ESTIMATES_MULTISTEP = { analyze: 8000, plan: 15000, generate: 90000, create: 6000, refine: 30000 };
+    const PHASE_ESTIMATES_HTML = { analyze: 8000, generate: 60000, render: 10000, create: 6000 };
     let PHASE_ORDER = PHASE_ORDER_STANDARD;
 
     // Dynamically update progress bar segments based on mode
     function updateProgressSegments() {
-      const order = _multiStepMode ? PHASE_ORDER_MULTISTEP : PHASE_ORDER_STANDARD;
+      let order, estimates;
+      if (_generateMode === "multi-step") {
+        order = PHASE_ORDER_MULTISTEP;
+        estimates = { ...PHASE_ESTIMATES_MULTISTEP };
+      } else if (_generateMode === "html") {
+        order = PHASE_ORDER_HTML;
+        estimates = { ...PHASE_ESTIMATES_HTML };
+      } else {
+        order = PHASE_ORDER_STANDARD;
+        estimates = { analyze: 8000, generate: 90000, create: 6000 };
+      }
       PHASE_ORDER = order;
-      phaseEstimates = _multiStepMode ? { ...PHASE_ESTIMATES_MULTISTEP } : { analyze: 8000, generate: 90000, create: 6000 };
+      phaseEstimates = estimates;
 
       const labels = {
         analyze: "Analyzing",
         plan: "Planning",
         generate: "Generating",
+        render: "Rendering",
         create: "Creating",
         refine: "Refining",
       };
@@ -2656,10 +2687,33 @@
     function openSettings() {
       settingsPanel.classList.add("visible");
       document.body.classList.add("settings-open");
+
+      // Resize the plugin if the settings panel doesn't fit
+      // Use requestAnimationFrame so the DOM has laid out the visible panel
+      requestAnimationFrame(function() {
+        var currentH = document.documentElement.clientHeight;
+        // settings panel height + body padding (16px top + 16px bottom) + status bar (~24px)
+        var neededH = settingsPanel.scrollHeight + 32 + 24;
+        if (currentH < neededH) {
+          _preSettingsHeight = currentH;
+          var w = _userWidth || MIN_W;
+          parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.min(Math.round(neededH), MAX_PLUGIN_H) } }, '*');
+        } else {
+          // Already big enough — don't touch the size
+          _preSettingsHeight = null;
+        }
+      });
     }
     function closeSettings() {
       settingsPanel.classList.remove("visible");
       document.body.classList.remove("settings-open");
+
+      // Restore previous size if we enlarged for settings
+      if (_preSettingsHeight !== null) {
+        var w = _userWidth || MIN_W;
+        parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(_preSettingsHeight) } }, '*');
+        _preSettingsHeight = null;
+      }
     }
     menuSettings.addEventListener("click", () => {
       closeMenu();
@@ -4263,7 +4317,7 @@
         if (_dsExpandedExtra) { _dsExpandedExtra = 0; }
         dsBanner.style.display = "none";
       }
-      postToPlugin({ type: "run", intent, multiStep: _multiStepMode });
+      postToPlugin({ type: "run", intent, generateMode: _generateMode });
     });
 
     btnCancel.addEventListener("click", () => {
@@ -4691,10 +4745,11 @@
           }
           // Validate stored keys on startup
           validateStartupKeys();
-          // Restore multi-step mode
-          if (msg.generateMode === "multi-step") {
-            _multiStepMode = true;
-            multiStepToggle.checked = true;
+          // Restore generation mode
+          if (msg.generateMode && msg.generateMode !== "standard") {
+            _generateMode = msg.generateMode;
+            generateModeSelect.value = _generateMode;
+            genModeDesc.textContent = GEN_MODE_DESCRIPTIONS[_generateMode] || "";
             updateProgressSegments();
           }
           break;

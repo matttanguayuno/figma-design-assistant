@@ -9,8 +9,10 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { validateOperationBatch } from "./validator";
+import { renderHTMLPage, closeBrowser } from "./browser";
+import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot } from "./htmlToSnapshot";
 
 const app = express();
 const PORT = parseInt(process.env.PORT || "3001", 10);
@@ -586,6 +588,122 @@ app.post("/layout-audit", async (req: Request, res: Response) => {
   }
 });
 
+// ── POST /generate-html ────────────────────────────────────────────
+// HTML-to-Figma pipeline: LLM generates HTML → Puppeteer renders → DOM walker extracts NodeSnapshot
+
+app.post("/generate-html", async (req: Request, res: Response) => {
+  try {
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary } = req.body;
+
+    if (!apiKey || typeof apiKey !== "string") {
+      res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
+      return;
+    }
+
+    const resolvedProvider: Provider = provider || "anthropic";
+    if (!PROVIDER_MODELS[resolvedProvider]) {
+      res.status(400).json({ error: `Unknown provider: ${provider}` });
+      return;
+    }
+
+    if (!prompt || typeof prompt !== "string") {
+      res.status(400).json({ error: "Missing or invalid 'prompt'" });
+      return;
+    }
+
+    console.log(`[generate-html] provider=${resolvedProvider}, model=${model || "default"}, prompt="${prompt}"`);
+
+    // Hard-truncate inputs (same as /generate)
+    let safeSelection = selection || null;
+    const selectionJson = JSON.stringify(selection || null);
+    if (selectionJson.length > 250000) {
+      safeSelection = { nodes: (selection?.nodes || []).map((n: any) => {
+        const nodeJson = JSON.stringify(n);
+        if (nodeJson.length > 200000) {
+          return JSON.parse(nodeJson.slice(0, 200000).replace(/,[^,]*$/, '') + '}');
+        }
+        return n;
+      }) };
+    }
+    const safeDesignSystem = {
+      textStyles: (designSystem?.textStyles || []).slice(0, 12),
+      fillStyles: (designSystem?.fillStyles || []).slice(0, 12),
+      components: (designSystem?.components || []).slice(0, 20),
+      variables: (designSystem?.variables || []).slice(0, 20),
+    };
+
+    let safeFullDS = fullDesignSystem || null;
+    if (safeFullDS) {
+      const fdJson = JSON.stringify(safeFullDS);
+      if (fdJson.length > 30000) {
+        safeFullDS = {
+          ...safeFullDS,
+          colorPalette: (safeFullDS.colorPalette || []).slice(0, 30),
+          components: (safeFullDS.components || []).slice(0, 20),
+          variables: (safeFullDS.variables || []).slice(0, 20),
+          typographyScale: (safeFullDS.typographyScale || []).slice(0, 15),
+          buttonStyles: (safeFullDS.buttonStyles || []).slice(0, 5),
+          inputStyles: (safeFullDS.inputStyles || []).slice(0, 5),
+        };
+      }
+    }
+
+    // 1. Call LLM to generate HTML
+    console.log(`[generate-html] Step 1: Calling LLM for HTML generation...`);
+    const htmlContent = await callLLMGenerateHTML(
+      prompt,
+      styleTokens || {},
+      safeDesignSystem,
+      apiKey,
+      resolvedProvider,
+      model,
+      safeSelection,
+      safeFullDS,
+      dsSummary
+    );
+    console.log(`[generate-html] HTML generated: ${htmlContent.length} chars`);
+
+    // 2. Determine viewport size from prompt
+    const promptLower = prompt.toLowerCase();
+    const isDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
+    const viewportWidth = isDesktop ? 1440 : 390;
+    const viewportHeight = isDesktop ? 900 : 844;
+
+    // 3. Render in Puppeteer and extract snapshot
+    console.log(`[generate-html] Step 2: Rendering HTML in Puppeteer (${viewportWidth}x${viewportHeight})...`);
+    let page;
+    try {
+      page = await renderHTMLPage(htmlContent, viewportWidth, viewportHeight);
+
+      // 4. Walk the DOM and extract NodeSnapshot
+      console.log(`[generate-html] Step 3: Extracting NodeSnapshot from DOM...`);
+      const snapshot = await page.evaluate(DOM_TO_SNAPSHOT_SCRIPT);
+
+      if (!snapshot || typeof snapshot !== "object" || !(snapshot as any).type) {
+        console.error(`[generate-html] DOM walker returned invalid snapshot`);
+        res.status(422).json({ error: "Failed to extract design structure from rendered HTML" });
+        return;
+      }
+
+      // 5. Post-process: enrich style bindings from CSS comments
+      const enrichedSnapshot = postProcessHTMLSnapshot(snapshot, htmlContent);
+
+      console.log(`[generate-html] Snapshot extracted:`, JSON.stringify(enrichedSnapshot).slice(0, 500));
+      res.json({ snapshot: enrichedSnapshot, html: htmlContent });
+
+    } finally {
+      // Always close the page to free memory
+      if (page) {
+        try { await page.close(); } catch (e) { /* ignore */ }
+      }
+    }
+
+  } catch (err: any) {
+    console.error("[generate-html] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /generate-plan ────────────────────────────────────────────
 
 app.post("/generate-plan", async (req: Request, res: Response) => {
@@ -665,6 +783,7 @@ app.listen(PORT, () => {
   console.log(`DesignOps AI backend running on http://localhost:${PORT}`);
   console.log(`  POST /plan          — generate operation batch`);
   console.log(`  POST /generate      — generate new frame from prompt`);
+  console.log(`  POST /generate-html — generate HTML, render, convert to snapshot`);
   console.log(`  POST /generate-plan — multi-step: layout plan`);
   console.log(`  POST /generate-refine — multi-step: visual refinement`);
   console.log(`  POST /audit         — accessibility audit enrichment`);

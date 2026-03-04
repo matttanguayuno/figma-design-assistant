@@ -645,6 +645,241 @@ export function buildGeneratePrompt(
   return fullPrompt;
 }
 
+// ── HTML Generation System Prompt ───────────────────────────────────
+
+export const GENERATE_HTML_SYSTEM_PROMPT = `You are a senior UI/UX designer generating production-quality HTML/CSS for a mobile or desktop screen.
+Return ONLY a self-contained HTML document — no markdown fences, no explanation, no commentary.
+
+═══ OUTPUT RULES ═══
+1. Return a complete HTML document: <!DOCTYPE html><html><head><style>...</style></head><body>...</body></html>
+2. ALL styles MUST be in a single <style> block in <head>. No external stylesheets, no inline style attributes.
+3. Use CSS custom properties (variables) for ALL colors, mapped to the design system provided.
+4. The <body> must contain a single root <div id="root"> that is the screen container.
+
+═══ LAYOUT RULES (CRITICAL — Figma conversion depends on these) ═══
+- Use ONLY flexbox for ALL layout. Every container must have display:flex and flex-direction.
+- Use "gap" for spacing between children (becomes itemSpacing in Figma).
+- Use padding on containers (becomes paddingTop/Right/Bottom/Left in Figma).
+- NEVER use CSS Grid, float, position:absolute, position:fixed, or negative margins.
+- NEVER use transform, animation, transition, or any dynamic CSS.
+- For horizontal layouts: flex-direction:row. For vertical: flex-direction:column.
+- For full-width children: use width:100% or flex:1.
+- Set explicit width and height on the root container (e.g. 390px for mobile, 1440px for desktop).
+- Set explicit height on elements that need it (buttons: min 44px, inputs: min 44px).
+
+═══ ELEMENT MAPPING (how HTML elements convert to Figma nodes) ═══
+- <div>, <section>, <header>, <footer>, <nav>, <main>, <aside>, <form>, <ul>, <ol> → FRAME
+- <p>, <h1>–<h6>, <span>, <label>, <a>, <li> → TEXT
+- <button> → FRAME containing TEXT child
+- <input>, <textarea>, <select> → FRAME styled as input field
+- <img> → RECTANGLE with image placeholder
+- <hr> → RECTANGLE (1px tall divider)
+
+═══ CSS CUSTOM PROPERTIES (MANDATORY) ═══
+Define ALL colors as CSS custom properties in :root, with comments mapping each to its Figma style name.
+Example:
+  :root {
+    /* fillStyleName: "Light/Surface" */
+    --surface-bg: #FFFFFF;
+    /* fillStyleName: "Light/Surface/Container" */
+    --surface-container: #F5F5F5;
+    /* fillStyleName: "Light/Text/Primary" */
+    --text-primary: #1A1A1A;
+    /* fillStyleName: "Light/Primary" */
+    --brand-primary: #0066FF;
+  }
+
+EVERY color in the CSS MUST reference a custom property. Never use raw hex/rgb values in rules.
+
+═══ TYPOGRAPHY ═══
+- Use the font families and sizes from the design system.
+- Apply font-weight for different text styles (400=Regular, 500=Medium, 600=SemiBold, 700=Bold).
+- Add a CSS comment with the Figma textStyleName above each text rule:
+  /* textStyleName: "Heading/Large" */
+  h1 { font-size: 28px; font-weight: 700; font-family: "Inter", sans-serif; }
+
+═══ SEMANTIC STRUCTURE ═══
+- Use meaningful HTML elements: <header>, <nav>, <main>, <section>, <footer>.
+- Use <h1>–<h6> for headings (proper hierarchy).
+- Use <button> for interactive elements.
+- Use <input> for form fields.
+- Use descriptive class names (e.g. "card", "hero-section", "nav-bar").
+
+═══ VISUAL DESIGN ═══
+- USE 3+ levels of text size for visual hierarchy.
+- USE contrast/depth: background surface → card surfaces → accent highlights.
+- EVERY section/card MUST have distinct padding and gap values.
+- Buttons: min-height 44px, centered content, rounded corners.
+- Cards: subtle background, border-radius, padding, optional box-shadow.
+- Star ratings: use filled/empty star characters (★★★★☆).
+- Icons: use small <div> placeholders with background color, sized 16-24px.
+
+═══ DENSITY & SIZE ═══
+- Mobile: root width 390px, single column.
+- Desktop: root width 1440px, may use multi-column flex layouts.
+- Minimum content: at least 30-50 meaningful elements for a section, 50-80 for a full screen.
+
+═══ SPACING RHYTHM ═══
+Use 8px base grid: 4, 8, 12, 16, 24, 32, 48px.
+- Text line spacing: 4-8px gap
+- Form fields: 12-16px gap
+- Section padding: 16-24px
+- Between major sections: 24-32px gap
+
+═══ BOX SHADOW → FIGMA EFFECT ═══
+Use box-shadow for cards/elevated elements. Format: box-shadow: Xpx Ypx Rpx Spx rgba(r,g,b,a);
+This maps to Figma DROP_SHADOW {offset:{x,y}, radius:R, spread:S, color:{r,g,b,a}}.
+
+═══ ANTI-PATTERNS (NEVER DO THESE) ═══
+- NEVER use position:absolute or position:fixed (Figma can't convert these to auto-layout).
+- NEVER use CSS Grid (only flexbox).
+- NEVER use inline style= attributes (all styles in <style> block only).
+- NEVER use media queries, @keyframes, or JavaScript.
+- NEVER use <script> tags.
+- NEVER include phone status bar elements (time, battery, signal).
+- NEVER produce fewer than 25 HTML elements.
+- NEVER use colors that aren't defined as CSS custom properties.
+
+Generate the complete HTML document now.`;
+
+// ── HTML Generation User Prompt ─────────────────────────────────────
+
+export function buildGenerateHTMLPrompt(
+  prompt: string,
+  styleTokens: any,
+  designSystem: DesignSystemSnapshot,
+  selection?: any,
+  fullDesignSystem?: any,
+  dsSummary?: any
+): string {
+  const parts: string[] = [
+    "## User Request",
+    prompt,
+  ];
+
+  // ── 1. DSSummary → CSS custom properties ──
+  if (dsSummary) {
+    parts.push("", "## Design System (define these as CSS custom properties in :root)");
+    parts.push("Map every color below to a CSS variable. Include a comment with the exact Figma style name.");
+    parts.push("");
+    parts.push(":root {");
+
+    // Surface colors
+    if (dsSummary.surfaces?.length > 0) {
+      parts.push("  /* ── Surface Colors ── */");
+      for (const c of dsSummary.surfaces) {
+        const varName = `--${c.role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
+        parts.push(`  /* fillStyleName: "${c.name}" */`);
+        parts.push(`  ${varName}: ${c.hex};`);
+      }
+    }
+
+    // Text colors
+    if (dsSummary.textColors?.length > 0) {
+      parts.push("  /* ── Text Colors ── */");
+      for (const c of dsSummary.textColors) {
+        const varName = `--text-${c.role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
+        parts.push(`  /* fillStyleName: "${c.name}" */`);
+        parts.push(`  ${varName}: ${c.hex};`);
+      }
+    }
+
+    // Brand/accent colors
+    if (dsSummary.brandColors?.length > 0) {
+      parts.push("  /* ── Brand / Accent Colors ── */");
+      for (const c of dsSummary.brandColors) {
+        const varName = `--brand-${c.role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
+        parts.push(`  /* fillStyleName: "${c.name}" */`);
+        parts.push(`  ${varName}: ${c.hex};`);
+      }
+    }
+
+    parts.push("}");
+
+    // Typography roles
+    if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
+      parts.push("", "### Typography Roles (add /* textStyleName: \"...\" */ comment above each text rule)");
+      for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
+        parts.push(`- ${role}: textStyleName="${styleName}"`);
+      }
+    }
+
+    // Spacing + Radii + Shadow
+    if (dsSummary.spacingScale?.length > 0) {
+      parts.push(`### Spacing Scale: ${dsSummary.spacingScale.join(", ")}px`);
+    }
+    if (dsSummary.radii?.length > 0) {
+      parts.push(`### Corner Radii: ${dsSummary.radii.join(", ")}px`);
+    }
+    if (dsSummary.shadow) {
+      parts.push(`### Default Shadow: box-shadow: ${dsSummary.shadow.offsetX || 0}px ${dsSummary.shadow.offsetY || 2}px ${dsSummary.shadow.radius || 8}px ${dsSummary.shadow.spread || 0}px rgba(0,0,0,${dsSummary.shadow.color?.a || 0.08})`);
+    }
+
+    // Blocked styles
+    if (dsSummary.blockedStyles?.length > 0) {
+      parts.push("### BLOCKED STYLES (do NOT use these colors as default fills)");
+      parts.push(dsSummary.blockedStyles.slice(0, 20).join(", "));
+    }
+  }
+
+  // ── 2. Selected frame context ──
+  if (selection && selection.nodes && selection.nodes.length > 0) {
+    const selectedNode = selection.nodes[0];
+    const selectedWidth = selectedNode.width || 0;
+    parts.push("", "## Currently Selected Frame");
+    parts.push(`Name: "${selectedNode.name || 'unknown'}", ${selectedWidth}×${selectedNode.height || 0}px`);
+    parts.push(`Set the root <div> to width:${selectedWidth}px.`);
+  }
+
+  // ── 3. Fallback: raw style tokens ──
+  if (!dsSummary && styleTokens && Object.keys(styleTokens).length > 0) {
+    parts.push("", "## Design Style Tokens (define as CSS custom properties)");
+    if (styleTokens.fontFamilies?.length > 0) {
+      parts.push("Font families: " + styleTokens.fontFamilies.slice(0, 3).join(", "));
+    }
+    if (styleTokens.fontSizes?.length > 0) {
+      parts.push("Font sizes: " + styleTokens.fontSizes.slice(0, 8).join(", ") + "px");
+    }
+    if (styleTokens.colors?.length > 0) {
+      parts.push("Colors (map to CSS variables): " + styleTokens.colors.slice(0, 12).join(", "));
+    }
+    if (styleTokens.cornerRadii?.length > 0) {
+      parts.push("Corner radii: " + styleTokens.cornerRadii.join(", ") + "px");
+    }
+  }
+
+  // ── 4. Text + paint styles (fallback) ──
+  if (!dsSummary) {
+    if (designSystem.textStyles.length > 0) {
+      const trimmed = designSystem.textStyles.slice(0, 8).map((s: any) => s.name);
+      parts.push("", "## Text Styles (add textStyleName comments)");
+      parts.push(trimmed.join(", "));
+    }
+    if (designSystem.fillStyles?.length > 0) {
+      const styleNames = designSystem.fillStyles.slice(0, 30).map((s: any) => {
+        let label = s.name;
+        if (s.hex) label += ` → ${s.hex}`;
+        return label;
+      });
+      parts.push("", "## Paint Styles (map to CSS variables with fillStyleName comments)");
+      for (const name of styleNames) {
+        parts.push(`- ${name}`);
+      }
+    }
+  }
+
+  // ── 5. Full design system ──
+  if (fullDesignSystem) {
+    parts.push("", formatFullDesignSystemSection(fullDesignSystem));
+  }
+
+  parts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
+
+  const fullPrompt = parts.join("\n");
+  console.log(`[buildGenerateHTMLPrompt] Total prompt size: ${fullPrompt.length} chars`);
+  return fullPrompt;
+}
+
 // ── Plan System Prompt (Multi-Step Pipeline Step 1) ─────────────────
 
 export const PLAN_SYSTEM_PROMPT = `You are a senior UI/UX architect creating a structural layout plan for a Figma frame.

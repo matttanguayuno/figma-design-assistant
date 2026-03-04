@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -558,6 +558,63 @@ export async function callLLMGenerate(
   }
 
   return parseJsonResponse(raw, "llm-generate");
+}
+
+// ── Call LLM for HTML Generation ────────────────────────────────────
+
+export async function callLLMGenerateHTML(
+  prompt: string,
+  styleTokens: any,
+  designSystem: DesignSystemSnapshot,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+  selection?: any,
+  fullDesignSystem?: any,
+  dsSummary?: any
+): Promise<string> {
+  const userPrompt = buildGenerateHTMLPrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary);
+  console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
+
+  const MAX_USER_PROMPT_CHARS = 500000;
+  let safeUserPrompt = userPrompt;
+  if (userPrompt.length > MAX_USER_PROMPT_CHARS) {
+    console.warn(`[callLLMGenerateHTML] User prompt too long (${userPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
+    safeUserPrompt = userPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
+  }
+
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+
+  let raw: string;
+  try {
+    // Higher max tokens since HTML can be verbose; temperature 0.5 for creativity
+    raw = await callProvider(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, false, 0.5);
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  // The LLM should return raw HTML, not JSON. Strip any markdown fences.
+  let html = raw.trim();
+  if (html.startsWith("```html")) {
+    html = html.slice(7);
+  } else if (html.startsWith("```")) {
+    html = html.slice(3);
+  }
+  if (html.endsWith("```")) {
+    html = html.slice(0, -3);
+  }
+  html = html.trim();
+
+  // Validate it looks like HTML
+  if (!html.includes("<") || !html.includes(">")) {
+    throw new Error("LLM returned non-HTML content");
+  }
+
+  console.log(`[callLLMGenerateHTML] HTML output: ${html.length} chars`);
+  return html;
 }
 
 // ── Call LLM for Accessibility Audit Enrichment ─────────────────────

@@ -102,8 +102,10 @@ export type BackendPayload = {
 
 // ── Messages between UI ↔ Plugin ────────────────────────────────────
 
+export type GenerateMode = "standard" | "multi-step" | "html";
+
 export type UIToPluginMessage =
-  | { type: "run"; intent: string }
+  | { type: "run"; intent: string; generateMode?: GenerateMode }
   | { type: "revert-last" }
   | { type: "export-json" }
   | { type: "import-json"; data: { selection: { nodes: any[] }; [key: string]: any } }
@@ -118,7 +120,8 @@ export type UIToPluginMessage =
   | { type: "fix-finding"; finding: AuditFinding }
   | { type: "fix-all-auto"; findings: AuditFinding[] }
   | { type: "extract-design-system" }
-  | { type: "cancel-extract-ds" };
+  | { type: "cancel-extract-ds" }
+  | { type: "save-generate-mode"; mode: GenerateMode };
 
 export type PluginToUIMessage =
   | { type: "apply-success"; summary: string }
