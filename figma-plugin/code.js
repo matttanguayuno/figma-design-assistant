@@ -6801,9 +6801,14 @@ RULES:
       const isComponentSetSnapshot = snapshot.type === "COMPONENT_SET";
       if (sourcePosition && sourcePosition.width > 0 && sourcePosition.height > 0 && !isComponentSetSnapshot) {
         snapshot.width = sourcePosition.width;
-        snapshot.height = sourcePosition.height;
-        snapshot.layoutSizingVertical = "FIXED";
         snapshot.layoutSizingHorizontal = "FIXED";
+        if (isEditMode) {
+          snapshot.layoutSizingVertical = "HUG";
+          console.log(`[job ${job.id}] [html] Edit mode: width locked to ${sourcePosition.width}, height set to HUG`);
+        } else {
+          snapshot.height = sourcePosition.height;
+          snapshot.layoutSizingVertical = "FIXED";
+        }
       }
       console.log(`[job ${job.id}] [html] Creating frame at x:${placeX}, y:${placeY}...`);
       const node = await createNodeFromSnapshot(snapshot, figma.currentPage);
@@ -6822,11 +6827,19 @@ RULES:
             frame.layoutSizingHorizontal = "FIXED";
           } catch (_) {
           }
-          try {
-            frame.layoutSizingVertical = "FIXED";
-          } catch (_) {
+          if (isEditMode) {
+            try {
+              frame.layoutSizingVertical = "HUG";
+            } catch (_) {
+            }
+            frame.resize(targetW, frame.height);
+          } else {
+            try {
+              frame.layoutSizingVertical = "FIXED";
+            } catch (_) {
+            }
+            frame.resize(targetW, targetH);
           }
-          frame.resize(targetW, targetH);
         }
       }
       if ("setPluginData" in node) {

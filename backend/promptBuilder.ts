@@ -952,6 +952,7 @@ export function buildGenerateHTMLPrompt(
     parts.push("3. Keep every existing section's text, images (data-image-prompt), colors, layout, and sizing.");
     parts.push("4. If adding a new element (e.g. header/footer), INSERT it at the natural position and keep everything else intact.");
     parts.push("5. Do NOT simplify, rearrange, or omit any existing section. Treat the existing structure as sacred.");
+    parts.push("6. NEW elements you add should be FULLY designed with the same creative quality as the rest of the page — proper styling, spacing, colors, icons. Don't make them bare or minimal.");
   }
 
   parts.push("", `## Layout: ${isMobile ? 'MOBILE' : 'DESKTOP'} — set root <div> to width:${rootWidth}px.`);

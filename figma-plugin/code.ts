@@ -8745,13 +8745,19 @@ async function runGenerateJobHTML(
       _nextPlaceX = placeX + (snapshot.width || 1440) + 200;
     }
 
-    // Force snapshot dimensions for variants
+    // Force snapshot dimensions for variants (but in edit mode, let height hug)
     const isComponentSetSnapshot = snapshot.type === "COMPONENT_SET";
     if (sourcePosition && sourcePosition.width > 0 && sourcePosition.height > 0 && !isComponentSetSnapshot) {
       snapshot.width = sourcePosition.width;
-      snapshot.height = sourcePosition.height;
-      snapshot.layoutSizingVertical = "FIXED";
       snapshot.layoutSizingHorizontal = "FIXED";
+      if (isEditMode) {
+        // Edit mode: keep width fixed, let height hug content (new elements may add height)
+        snapshot.layoutSizingVertical = "HUG";
+        console.log(`[job ${job.id}] [html] Edit mode: width locked to ${sourcePosition.width}, height set to HUG`);
+      } else {
+        snapshot.height = sourcePosition.height;
+        snapshot.layoutSizingVertical = "FIXED";
+      }
     }
 
     console.log(`[job ${job.id}] [html] Creating frame at x:${placeX}, y:${placeY}...`);
@@ -8763,15 +8769,20 @@ async function runGenerateJobHTML(
     node.x = placeX;
     node.y = placeY;
 
-    // Force resize for variants
+    // Force resize for variants (in edit mode, only fix width — let height hug)
     if (sourcePosition && "resize" in node && node.type !== "COMPONENT_SET") {
       const targetW = sourcePosition.width;
       const targetH = sourcePosition.height;
       if (targetW > 0 && targetH > 0) {
         const frame = node as FrameNode;
         try { frame.layoutSizingHorizontal = "FIXED"; } catch (_) {}
-        try { frame.layoutSizingVertical = "FIXED"; } catch (_) {}
-        frame.resize(targetW, targetH);
+        if (isEditMode) {
+          try { frame.layoutSizingVertical = "HUG"; } catch (_) {}
+          frame.resize(targetW, frame.height);
+        } else {
+          try { frame.layoutSizingVertical = "FIXED"; } catch (_) {}
+          frame.resize(targetW, targetH);
+        }
       }
     }
 
