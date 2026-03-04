@@ -743,7 +743,15 @@ Use 8px base grid: 4, 8, 12, 16, 24, 32, 48px.
 Use box-shadow for cards/elevated elements. Format: box-shadow: Xpx Ypx Rpx Spx rgba(r,g,b,a);
 This maps to Figma DROP_SHADOW {offset:{x,y}, radius:R, spread:S, color:{r,g,b,a}}.
 
+═══ ICONS & RATINGS ═══
+- Star ratings: use plain text star characters ★ (filled) and ☆ (empty) inside a single text element.
+  Example: <span class="rating-stars">★★★★☆</span>
+- NEVER use individual divs for each star. NEVER use CSS mask, mask-image, or SVG icons for stars.
+- For other simple icons, use Unicode/emoji characters in text spans.
+
 ═══ ANTI-PATTERNS (NEVER DO THESE) ═══
+- NEVER use CSS mask, mask-image, -webkit-mask, or -webkit-mask-image properties (these cannot be converted to Figma).
+- NEVER use individual empty divs as icons — use text characters instead.
 - NEVER use position:absolute or position:fixed (Figma can't convert these to auto-layout).
 - NEVER use CSS Grid (only flexbox).
 - NEVER use inline style= attributes (all styles in <style> block only).

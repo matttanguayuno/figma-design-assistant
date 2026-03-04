@@ -276,6 +276,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     if (style.display === "none" || style.visibility === "hidden") return null;
     if (style.opacity === "0") return null;
 
+    // Skip elements with CSS mask/mask-image (these can't be converted to Figma)
+    const maskImage = style.getPropertyValue("mask-image") || style.getPropertyValue("-webkit-mask-image");
+    if (maskImage && maskImage !== "none") return null;
+
     const rect = el.getBoundingClientRect();
     // Skip zero-size elements (unless they're text with content)
     if (rect.width === 0 && rect.height === 0 && !el.textContent?.trim()) return null;
