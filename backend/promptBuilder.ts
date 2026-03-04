@@ -657,15 +657,54 @@ export function buildGeneratePrompt(
 // STEP 1 — Creative HTML Generation (no DS constraints)
 // ════════════════════════════════════════════════════════════════════
 
-export const GENERATE_HTML_SYSTEM_PROMPT = `You are a world-class UI/UX designer. Generate a complete, visually polished HTML/CSS page based on the user's request.
+export const GENERATE_HTML_SYSTEM_PROMPT = `You are an award-winning UI/UX designer creating production-quality web pages.
+Generate a stunning, modern HTML/CSS page that would impress a design director at a top agency.
 The HTML will be rendered in Puppeteer and converted into a Figma design file, so follow the conversion rules below.
 
 Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, no explanation.
 
+═══ DESIGN PHILOSOPHY ═══
+Think like a senior designer at a top creative agency. Every pixel matters.
+- Create VISUAL IMPACT: Use bold hero sections, dramatic imagery, generous whitespace.
+- Establish clear VISUAL HIERARCHY: Guide the eye from most important → supporting → details.
+- Use CONTRAST and SCALE: Large headings vs small body text. Bold vs light weights. Dark vs light areas.
+- Design with BREATHING ROOM: Generous padding (40-80px vertical sections), ample whitespace between elements.
+- Create RHYTHM: Alternate section styles (dark bg/light bg, image-left/image-right, full-width/contained).
+- Use COLOR SPARINGLY: 1 dominant neutral, 1-2 accent colors max. Large color-filled areas, not scattered bits.
+
+═══ LAYOUT PATTERNS (use these for professional results) ═══
+- HERO SECTION: Full-width, tall (400-600px), with large background image. Overlay semi-transparent dark gradient on the image, then place white heading text on top. Center-aligned text with clear CTA button.
+- FEATURE/CARDS GRID: 3-4 cards in a horizontal row. Each card: image on top (200-250px tall, same height for all), then text content with padding. Equal card widths.
+- ALTERNATING CONTENT: Section with image on one side (50% width), text content on the other. Alternate left/right for visual rhythm.
+- TESTIMONIALS: Large quote text, customer photo (small circle), name and role below.
+- CTA BANNER: Full-width colored background, centered text with button. Stand-out section.
+- FOOTER: Dark background, columns of links, contact info.
+
+═══ TYPOGRAPHY RULES ═══
+- Hero heading: 48-64px, bold (700-900 weight). Make it commanding.
+- Section headings: 28-36px, semibold.
+- Body text: 16-18px, regular weight, 1.5-1.7 line-height for readability.
+- Limit to 2 font weights max (regular + bold). Avoid thin/light weights.
+- Text line length: max 600-700px (use max-width on text containers for readability).
+
+═══ SPACING RULES ═══
+- Section vertical padding: 64-96px (generous, breathing room).
+- Card internal padding: 20-32px.
+- Gap between cards: 24-32px.
+- Heading to body text: 16-24px.
+- Body text to CTA button: 24-32px.
+- NEVER use less than 12px padding/gap anywhere. Cramped spacing = amateur design.
+
+═══ COLOR USAGE ═══
+- Define ALL colors as CSS custom properties in :root { ... }. Reference them via var(--name) — never raw hex/rgb in rules.
+- Background sections: Alternate between white/light-gray (#f8f8f8 or similar) for visual rhythm.
+- Accent color: Used ONLY for buttons, links, and small highlights — never huge areas.
+- Text: Near-black (#1a1a1a or #222) for body, slightly lighter (#555 or #666) for secondary text.
+- Buttons: Solid accent fill, white text, rounded corners (8-12px radius), comfortable padding (16px 32px min).
+
 ═══ STRUCTURE ═══
 - <body> must contain a single <div id="root"> with explicit width (390px mobile, 1440px desktop).
 - All styles in a single <style> block in <head>. Never use inline style= attributes.
-- Define ALL colors as CSS custom properties in :root { ... }. Reference them via var(--name) in rules — never raw hex/rgb in rules.
 
 ═══ FIGMA CONVERSION RULES ═══
 These constraints exist because the HTML is parsed into Figma auto-layout frames:
@@ -690,11 +729,22 @@ WRONG — never put data-image-prompt in CSS:
 
 Rules:
 - data-image-prompt is an HTML attribute, like class or id. It must be in the HTML markup, not in CSS.
-- Use 3-6 specific, descriptive keywords per prompt.
+- Use 3-6 specific, descriptive keywords per prompt. Include style cues: "professional", "editorial", "overhead shot", "close-up", etc.
 - Elements with data-image-prompt MUST have explicit width AND height in CSS.
-- Include at LEAST 3-5 images per page (hero, product images, gallery, etc.).
+- IMPORTANT: All images in a card grid MUST have the SAME explicit height (e.g., all 250px) for visual consistency.
+- Include at LEAST 4-6 images per page (hero background, product/service images, gallery, team photos, etc.).
 - NEVER use placeholder src values — always use data-image-prompt.
+- Hero images should be full-width and at least 400px tall.
 - Images make the design look professional and real — a design without images looks broken.
+
+═══ COMMON MISTAKES TO AVOID ═══
+- Tiny cramped sections with 8px padding (use 64-96px).
+- All sections same white background (alternate light/dark styles).
+- Too many bright colors everywhere (stick to 1 accent color).
+- Text directly on images without overlay/contrast layer.
+- Inconsistent image sizes in grids (always match heights).
+- Missing visual breaks between sections.
+- Generic, boring flat layouts without depth (add subtle shadows/overlays).
 
 Generate the complete HTML document now.`;
 
@@ -790,10 +840,11 @@ export function buildDSBindingPrompt(
   dsSummary?: any
 ): string | null {
   // If there's no design system context, skip Step 2 entirely
+  // dsSummary fields are OBJECTS (surfaces.background, text.primary, brand.primary) not arrays
   const hasDSSummary = dsSummary && (
-    dsSummary.surfaces?.length > 0 ||
-    dsSummary.textColors?.length > 0 ||
-    dsSummary.brandColors?.length > 0 ||
+    (dsSummary.surfaces && (dsSummary.surfaces.background || dsSummary.surfaces.surface || dsSummary.surfaces.surfaceContainer)) ||
+    (dsSummary.text && (dsSummary.text.primary || dsSummary.text.secondary)) ||
+    (dsSummary.brand && (dsSummary.brand.primary || dsSummary.brand.secondary || dsSummary.brand.accent)) ||
     (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0)
   );
   const hasTextStyles = designSystem?.textStyles?.length > 0;
@@ -822,30 +873,32 @@ export function buildDSBindingPrompt(
     parts.push("");
     parts.push(":root {");
 
-    if (dsSummary.surfaces?.length > 0) {
+    // Helper to emit a color token
+    const emitToken = (role: string, varPrefix: string, token: any) => {
+      if (!token || !token.hex) return;
+      const varName = `--${varPrefix}${role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
+      parts.push(`  /* fillStyleName: "${token.styleName}" */`);
+      parts.push(`  ${varName}: ${token.hex};`);
+    };
+
+    if (dsSummary.surfaces && (dsSummary.surfaces.background || dsSummary.surfaces.surface || dsSummary.surfaces.surfaceContainer)) {
       parts.push("  /* ── Surface Colors ── */");
-      for (const c of dsSummary.surfaces) {
-        const varName = `--${c.role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
-        parts.push(`  /* fillStyleName: "${c.name}" */`);
-        parts.push(`  ${varName}: ${c.hex};`);
+      for (const [role, token] of Object.entries(dsSummary.surfaces)) {
+        emitToken(role, "", token);
       }
     }
 
-    if (dsSummary.textColors?.length > 0) {
+    if (dsSummary.text && (dsSummary.text.primary || dsSummary.text.secondary)) {
       parts.push("  /* ── Text Colors ── */");
-      for (const c of dsSummary.textColors) {
-        const varName = `--text-${c.role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
-        parts.push(`  /* fillStyleName: "${c.name}" */`);
-        parts.push(`  ${varName}: ${c.hex};`);
+      for (const [role, token] of Object.entries(dsSummary.text)) {
+        emitToken(role, "text-", token);
       }
     }
 
-    if (dsSummary.brandColors?.length > 0) {
+    if (dsSummary.brand && (dsSummary.brand.primary || dsSummary.brand.secondary || dsSummary.brand.accent)) {
       parts.push("  /* ── Brand / Accent Colors ── */");
-      for (const c of dsSummary.brandColors) {
-        const varName = `--brand-${c.role.replace(/[A-Z]/g, (m: string) => '-' + m.toLowerCase()).replace(/^-/, '')}`;
-        parts.push(`  /* fillStyleName: "${c.name}" */`);
-        parts.push(`  ${varName}: ${c.hex};`);
+      for (const [role, token] of Object.entries(dsSummary.brand)) {
+        emitToken(role, "brand-", token);
       }
     }
 

@@ -2108,6 +2108,14 @@
       h += (_dsExpandedExtra || 0);
       var jobCount = document.getElementById('job-list').children.length;
       if (jobCount > 0) h += jobCount * JOB_CARD_H;
+      // Account for wrapped status bar text
+      var statusEl = document.getElementById('status-bar');
+      if (statusEl) {
+        var statusHeight = statusEl.scrollHeight;
+        if (statusHeight > 28) { // default single-line height
+          h += (statusHeight - 28);
+        }
+      }
       return Math.min(h, MAX_PLUGIN_H);
     }
 
@@ -2661,6 +2669,8 @@
       }
       statusBar.title = isHtml ? statusBarText.textContent : msg;
       statusBar.className = "status-bar" + (type ? " " + type : "");
+      // Resize plugin to accommodate possibly wrapped status text
+      autoFitHeight();
       // Revert to selection status after a few seconds for success/error
       // Don't auto-revert HTML status messages (they contain clickable links)
       if (!isHtml && (type === "success" || type === "error")) {
