@@ -664,7 +664,9 @@ function describeSnapshotTree(node: any, depth: number): string {
     const size = node.fontSize ? ` ${node.fontSize}px` : "";
     const weight = node.fontStyle ? ` ${node.fontStyle}` : "";
     const color = node.fillColor ? ` color:${node.fillColor}` : "";
-    lines.push(`${indent}- TEXT: "${text}"${size}${weight}${color}`);
+    // Text alignment is critical for preserving styling
+    const align = node.textAlignHorizontal ? ` align:${node.textAlignHorizontal.toLowerCase()}` : "";
+    lines.push(`${indent}- TEXT: "${text}"${size}${weight}${color}${align}`);
   } else if (node.type === "RECTANGLE" || node.type === "ELLIPSE") {
     const img = node.imagePrompt ? ` [image: "${node.imagePrompt}"]` : "";
     const hasImage = node.imageData || (node.fillTypes && node.fillTypes.includes("IMAGE")) ? " [has image fill]" : "";
@@ -681,7 +683,11 @@ function describeSnapshotTree(node: any, depth: number): string {
     const bg = node.fillColor ? ` bg:${node.fillColor}` : "";
     const radius = node.cornerRadius ? ` radius:${node.cornerRadius}px` : "";
     const padding = (node.paddingTop || node.paddingLeft) ? ` pad:${node.paddingTop || 0}/${node.paddingRight || 0}/${node.paddingBottom || 0}/${node.paddingLeft || 0}` : "";
-    lines.push(`${indent}- ${name}: ${layout}${size}${bg}${radius}${padding}${img}${hasImage}`);
+    const gap = node.itemSpacing ? ` gap:${node.itemSpacing}px` : "";
+    // Flex alignment — maps to justify-content and align-items
+    const mainAlign = node.primaryAxisAlignItems && node.primaryAxisAlignItems !== "MIN" ? ` main-align:${node.primaryAxisAlignItems.toLowerCase()}` : "";
+    const crossAlign = node.counterAxisAlignItems && node.counterAxisAlignItems !== "MIN" ? ` cross-align:${node.counterAxisAlignItems.toLowerCase()}` : "";
+    lines.push(`${indent}- ${name}: ${layout}${size}${bg}${radius}${padding}${gap}${mainAlign}${crossAlign}${img}${hasImage}`);
 
     if (node.children && Array.isArray(node.children)) {
       for (const child of node.children.slice(0, 25)) {
@@ -949,7 +955,7 @@ export function buildGenerateHTMLPrompt(
     parts.push("### RULES FOR EDIT MODE:");
     parts.push("1. Output the COMPLETE HTML with ALL existing sections above reproduced faithfully.");
     parts.push("2. Apply ONLY the requested change — insert/modify/remove exactly what was asked.");
-    parts.push("3. Keep every existing section's text, images (data-image-prompt), colors, layout, and sizing.");
+    parts.push("3. PRESERVE STYLING of untouched elements exactly: text alignment (center/left/right), font sizes, font weights, colors, padding, gaps, background colors. The structure description above shows these — match them.");
     parts.push("4. If adding a new element (e.g. header/footer), INSERT it at the natural position and keep everything else intact.");
     parts.push("5. Do NOT simplify, rearrange, or omit any existing section. Treat the existing structure as sacred.");
     parts.push("6. NEW elements you add should be FULLY designed with the same creative quality as the rest of the page — proper styling, spacing, colors, icons. Don't make them bare or minimal.");
