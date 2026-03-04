@@ -4167,8 +4167,12 @@
     // These reflect actual time proportions more accurately.
     const JOB_PHASE_RANGES = {
       analyze:  [0, 5],
+      plan:     [5, 15],
       generate: [5, 92],
+      design:   [5, 80],
+      render:   [80, 92],
       create:   [92, 100],
+      refine:   [92, 98],
     };
 
     // Count how many jobs are concurrently "active" (not done/error/cancelled)
@@ -4254,7 +4258,15 @@
       job.phaseStartTime = Date.now();
       const el = jobListEl.querySelector('[data-job-id="' + jobId + '"]');
       if (!el) return;
-      const phaseLabels = { analyze: "Analyzing", generate: "Generating", create: "Creating" };
+      const phaseLabels = {
+        analyze: "Analyzing",
+        plan: "Planning",
+        design: "Designing",
+        generate: "Generating",
+        render: "Rendering",
+        create: "Creating",
+        refine: "Refining",
+      };
       const phaseEl = el.querySelector(".job-phase");
       if (phaseEl) phaseEl.textContent = phaseLabels[phase] || phase;
     }
