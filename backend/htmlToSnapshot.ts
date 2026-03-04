@@ -595,15 +595,27 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     const opacity = parseFloat(style.opacity);
     if (!isNaN(opacity) && opacity < 1) node.opacity = opacity;
 
-    // Sizing hints based on flex properties
+    // Sizing hints based on flex properties and parent direction
     const flexGrow = parseFloat(style.flexGrow);
-    if (flexGrow > 0) {
-      node.layoutSizingHorizontal = layoutMode === "VERTICAL" ? "FILL" : "FILL";
-    }
     if (depth === 0) {
       // Root element gets FIXED sizing
       node.layoutSizingHorizontal = "FIXED";
       node.layoutSizingVertical = "HUG";
+    } else {
+      // Child elements: in a VERTICAL layout, children fill horizontal by default
+      // (CSS align-items defaults to stretch). In HORIZONTAL, same for vertical.
+      // Also handle explicit flex-grow.
+      const parentAlignItems = style.alignSelf || "auto"; // "auto" means inherit parent's align-items
+      if (layoutMode === "VERTICAL") {
+        // Items in a column fill width (stretch is CSS default)
+        node.layoutSizingHorizontal = "FILL";
+        node.layoutSizingVertical = "HUG";
+        if (flexGrow > 0) node.layoutSizingVertical = "FILL";
+      } else {
+        // Items in a row
+        node.layoutSizingVertical = "HUG";
+        if (flexGrow > 0) node.layoutSizingHorizontal = "FILL";
+      }
     }
 
     return node;
@@ -648,11 +660,20 @@ export function postProcessHTMLSnapshot(
   // Build a simple textStyleName fallback map from dsSummary typeRoles
   // e.g. { heading: "Heading/Large", body: "Body/Medium", ... }
   const typeRoleFallbacks = new Map<string, string>();
+  const typeRoleSizes = new Map<string, number>();
   if (dsSummary?.typeRoles) {
     for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
       typeRoleFallbacks.set(role.toLowerCase(), styleName as string);
     }
   }
+  if (dsSummary?.typeRoleFontSizes) {
+    for (const [role, size] of Object.entries(dsSummary.typeRoleFontSizes)) {
+      typeRoleSizes.set(role.toLowerCase(), size as number);
+    }
+  }
+
+  // Build a sorted array of [role, fontSize] for closest-match assignment
+  const roleSizeEntries = [...typeRoleSizes.entries()].sort((a, b) => b[1] - a[1]);
 
   // Walk the snapshot tree and fill missing bindings
   function enrichNode(node: any): void {
@@ -664,21 +685,35 @@ export function postProcessHTMLSnapshot(
       if (styleName) node.fillStyleName = styleName;
     }
 
-    // If TEXT node has no textStyleName, try to infer from font size + dsSummary
+    // If TEXT node has no textStyleName, find the closest matching role by font size
     if (node.type === "TEXT" && !node.textStyleName && typeRoleFallbacks.size > 0) {
       const fontSize = node.fontSize || 16;
-      if (fontSize >= 28 && typeRoleFallbacks.has("display")) {
-        node.textStyleName = typeRoleFallbacks.get("display");
-      } else if (fontSize >= 22 && typeRoleFallbacks.has("heading")) {
-        node.textStyleName = typeRoleFallbacks.get("heading");
-      } else if (fontSize >= 18 && typeRoleFallbacks.has("title")) {
-        node.textStyleName = typeRoleFallbacks.get("title");
-      } else if (fontSize >= 14 && typeRoleFallbacks.has("body")) {
-        node.textStyleName = typeRoleFallbacks.get("body");
-      } else if (typeRoleFallbacks.has("caption")) {
-        node.textStyleName = typeRoleFallbacks.get("caption");
-      } else if (typeRoleFallbacks.has("label")) {
-        node.textStyleName = typeRoleFallbacks.get("label");
+
+      if (roleSizeEntries.length > 0) {
+        // Find the role whose font size is closest to this node's font size
+        let bestRole = roleSizeEntries[0][0];
+        let bestDiff = Math.abs(fontSize - roleSizeEntries[0][1]);
+        for (const [role, size] of roleSizeEntries) {
+          const diff = Math.abs(fontSize - size);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestRole = role;
+          }
+        }
+        node.textStyleName = typeRoleFallbacks.get(bestRole);
+      } else {
+        // Fallback: hardcoded thresholds when no DS font sizes available
+        if (fontSize >= 28 && typeRoleFallbacks.has("headline")) {
+          node.textStyleName = typeRoleFallbacks.get("headline");
+        } else if (fontSize >= 22 && typeRoleFallbacks.has("title")) {
+          node.textStyleName = typeRoleFallbacks.get("title");
+        } else if (fontSize >= 14 && typeRoleFallbacks.has("body")) {
+          node.textStyleName = typeRoleFallbacks.get("body");
+        } else if (typeRoleFallbacks.has("caption")) {
+          node.textStyleName = typeRoleFallbacks.get("caption");
+        } else if (typeRoleFallbacks.has("label")) {
+          node.textStyleName = typeRoleFallbacks.get("label");
+        }
       }
     }
 

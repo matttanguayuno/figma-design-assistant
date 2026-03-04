@@ -149,28 +149,43 @@
     }
     const spacingScale = [...spacingSet].sort((a, b) => a - b);
     const typeRoles = {};
+    const typeRoleFontSizes = {};
+    const sortedBySize = [...textStyles].sort((a, b) => (b.fontSize || 0) - (a.fontSize || 0));
     const rolePatterns = [
-      ["headline", [/headline|display/i]],
-      ["title", [/title|heading/i]],
-      ["body", [/body/i]],
-      ["label", [/label|button/i]],
-      ["caption", [/caption|small|footnote/i]]
+      ["headline", [/\bdisplay\b.*\blarge\b/i, /\bheadline\b/i, /\bdisplay\b/i]],
+      ["title", [/\btitle\b/i, /\bheading\b/i]],
+      ["body", [/\bbody\b/i]],
+      ["label", [/\blabel\b/i, /\bbutton\b/i]],
+      ["caption", [/\bcaption\b/i, /\bfootnote\b/i, /\bbody\b.*\bsmall\b/i, /\blabel\b.*\bsmall\b/i]]
     ];
     for (const [role, patterns] of rolePatterns) {
       for (const pat of patterns) {
-        const match = textStyles.find((s) => pat.test(s.name));
+        const match = textStyles.find((s) => pat.test(s.name) && !typeRoles[role]);
         if (match) {
           typeRoles[role] = match.name;
+          typeRoleFontSizes[role] = match.fontSize || 16;
           break;
         }
       }
     }
-    if (Object.keys(typeRoles).length === 0 && textStyles.length > 0) {
-      const sorted = [...textStyles].sort((a, b) => (b.fontSize || 0) - (a.fontSize || 0));
-      if (sorted[0]) typeRoles["headline"] = sorted[0].name;
-      if (sorted[1]) typeRoles["title"] = sorted[1].name;
-      if (sorted[Math.floor(sorted.length / 2)]) typeRoles["body"] = sorted[Math.floor(sorted.length / 2)].name;
-      if (sorted[sorted.length - 1]) typeRoles["caption"] = sorted[sorted.length - 1].name;
+    if (Object.keys(typeRoles).length === 0 && sortedBySize.length > 0) {
+      if (sortedBySize[0]) {
+        typeRoles["headline"] = sortedBySize[0].name;
+        typeRoleFontSizes["headline"] = sortedBySize[0].fontSize || 16;
+      }
+      if (sortedBySize[1]) {
+        typeRoles["title"] = sortedBySize[1].name;
+        typeRoleFontSizes["title"] = sortedBySize[1].fontSize || 16;
+      }
+      const midIdx = Math.floor(sortedBySize.length / 2);
+      if (sortedBySize[midIdx]) {
+        typeRoles["body"] = sortedBySize[midIdx].name;
+        typeRoleFontSizes["body"] = sortedBySize[midIdx].fontSize || 16;
+      }
+      if (sortedBySize[sortedBySize.length - 1]) {
+        typeRoles["caption"] = sortedBySize[sortedBySize.length - 1].name;
+        typeRoleFontSizes["caption"] = sortedBySize[sortedBySize.length - 1].fontSize || 16;
+      }
     }
     const blockedStyles = [];
     const blockedPattern = /states|focused|pressed|selected|hover|disabled|dragged|active/i;
@@ -179,7 +194,7 @@
         blockedStyles.push(s.name);
       }
     }
-    const summary = { surfaces, text, brand, radii, shadow, spacingScale, typeRoles, blockedStyles };
+    const summary = { surfaces, text, brand, radii, shadow, spacingScale, typeRoles, typeRoleFontSizes, blockedStyles };
     console.log(`[buildDSSummary] Built summary: ${Object.keys(typeRoles).length} typeRoles, ${blockedStyles.length} blocked styles, ${spacingScale.length} spacing values`);
     return summary;
   }
@@ -1826,8 +1841,13 @@
       } catch (_) {
       }
       try {
+        const snapshotFontSize = snap.fontSize && typeof snap.fontSize === "number" ? snap.fontSize : null;
         if (snap.textStyleName) {
           tryBindTextStyleByName(textNode, snap.textStyleName);
+          if (snapshotFontSize && textNode.fontSize !== snapshotFontSize) {
+            console.log(`[styleBinding] Restoring fontSize: style set ${textNode.fontSize}px, snapshot wants ${snapshotFontSize}px`);
+            textNode.fontSize = snapshotFontSize;
+          }
         } else {
           console.warn(`[styleBinding] TEXT node "${snap.characters || snap.name}" has NO textStyleName in snapshot`);
           const fn = textNode.fontName;

@@ -514,8 +514,14 @@ export function buildGeneratePrompt(
     // Typography roles
     if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
       parts.push("### Typography Roles (MANDATORY: set textStyleName on EVERY TEXT node)");
+      parts.push("Use the EXACT fontSize listed for each role — the Figma text style defines a specific size.");
       for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
-        parts.push(`- ${role}: textStyleName="${styleName}"`);
+        const fontSize = dsSummary.typeRoleFontSizes?.[role];
+        if (fontSize) {
+          parts.push(`- ${role}: textStyleName="${styleName}", fontSize: ${fontSize}`);
+        } else {
+          parts.push(`- ${role}: textStyleName="${styleName}"`);
+        }
       }
     }
 
@@ -803,11 +809,17 @@ export function buildGenerateHTMLPrompt(
 
     parts.push("}");
 
-    // Typography roles
+    // Typography roles with font sizes — LLM must use matching font-size for each role
     if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
       parts.push("", "### Typography Roles (add /* textStyleName: \"...\" */ comment above each text rule)");
+      parts.push("IMPORTANT: Use the EXACT font-size listed for each role. The Figma text style defines a specific size — your CSS must match it.");
       for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
-        parts.push(`- ${role}: textStyleName="${styleName}"`);
+        const fontSize = dsSummary.typeRoleFontSizes?.[role];
+        if (fontSize) {
+          parts.push(`- ${role}: textStyleName="${styleName}" → font-size: ${fontSize}px`);
+        } else {
+          parts.push(`- ${role}: textStyleName="${styleName}"`);
+        }
       }
     }
 

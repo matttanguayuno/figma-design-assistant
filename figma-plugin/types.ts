@@ -294,6 +294,7 @@ export type DSSummary = {
   };
   spacingScale: number[];
   typeRoles: Record<string, string>;  // role → textStyleName
+  typeRoleFontSizes?: Record<string, number>;  // role → fontSize from the DS text style
   blockedStyles: string[];            // style names that must NOT be used as default fills
 };
 
