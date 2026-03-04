@@ -8554,7 +8554,8 @@ async function runGenerateJobHTML(
   prompt: string,
   sourceSnapshot?: SelectionSnapshot,
   sourcePosition?: { x: number; y: number; width: number; height: number; name?: string },
-  sourceNodeIds?: string[]
+  sourceNodeIds?: string[],
+  sourceHtml?: string
 ): Promise<void> {
   try {
     // ── Phase 1: Analyze ──
@@ -8602,6 +8603,12 @@ async function runGenerateJobHTML(
       };
       payloadToSend.selection = truncatedSelection;
       console.log(`[job ${job.id}] [html] Including selection (${truncatedSelection.nodes.length} node(s)) for edit mode`);
+    }
+
+    // Include stored HTML from previous generation for surgical editing
+    if (sourceHtml) {
+      payloadToSend.sourceHtml = sourceHtml;
+      console.log(`[job ${job.id}] [html] Including sourceHtml (${sourceHtml.length} chars) for surgical edit`);
     }
 
     console.log(`[job ${job.id}] [html] Phase 2-3: Calling /generate-html...`);
@@ -8789,6 +8796,11 @@ async function runGenerateJobHTML(
     if ("setPluginData" in node) {
       (node as SceneNode).setPluginData("generated", "true");
       (node as SceneNode).setPluginData("generatedViaHTML", "true");
+      // Store the HTML so future edits can modify it surgically
+      if (result.html) {
+        (node as SceneNode).setPluginData("sourceHtml", result.html);
+        console.log(`[job ${job.id}] [html] Stored sourceHtml (${result.html.length} chars) on frame`);
+      }
     }
 
     // Edit mode: remove the old source frame now that the new one is created
@@ -12139,6 +12151,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             // Capture snapshot and position from selected frame for edit-mode support
             let singleSnapshot: SelectionSnapshot | undefined;
             let singlePosition: { x: number; y: number; width: number; height: number; name?: string } | undefined;
+            let singleSourceHtml: string | undefined;
             if (currentSelection.length === 1) {
               const selNode = currentSelection[0];
               singleSnapshot = { nodes: [snapshotNode(selNode, 0)] };
@@ -12149,6 +12162,14 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 height: Math.round(selNode.height),
                 name: selNode.name
               };
+              // Retrieve stored HTML for surgical editing
+              if ("getPluginData" in selNode) {
+                const storedHtml = (selNode as SceneNode).getPluginData("sourceHtml");
+                if (storedHtml) {
+                  singleSourceHtml = storedHtml;
+                  console.log(`[run] Retrieved stored sourceHtml (${storedHtml.length} chars) from frame "${selNode.name}"`);
+                }
+              }
               console.log(`[run] Captured single frame: "${selNode.name}" at ${singlePosition.x},${singlePosition.y} (${singlePosition.width}x${singlePosition.height})`);
             }
 
@@ -12156,7 +12177,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             sendToUI({ type: "job-started", jobId, prompt } as any);
             const runner = activeGenerateMode === "html" ? runGenerateJobHTML
               : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
-            runner(job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : undefined).catch((err: any) => {
+            const runnerArgs: any[] = [job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : undefined];
+            if (activeGenerateMode === "html" && singleSourceHtml) {
+              runnerArgs.push(singleSourceHtml);
+            }
+            (runner as any)(...runnerArgs).catch((err: any) => {
               console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
               if (!job.cancelled) {
                 sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);

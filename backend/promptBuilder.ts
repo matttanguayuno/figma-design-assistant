@@ -910,7 +910,8 @@ export function buildGenerateHTMLPrompt(
   designSystem: DesignSystemSnapshot,
   selection?: any,
   fullDesignSystem?: any,
-  dsSummary?: any
+  dsSummary?: any,
+  sourceHtml?: string
 ): string {
   const parts: string[] = [
     "## User Request",
@@ -946,19 +947,40 @@ export function buildGenerateHTMLPrompt(
     parts.push("", "## ⚠️ EDIT MODE — You are modifying an EXISTING page");
     parts.push(`Frame: "${selectedNode.name || 'Frame'}" (${selectedNode.width}x${selectedNode.height}px)`);
     parts.push("");
-    parts.push("### Existing sections that MUST be preserved:");
-    parts.push(describeSnapshotTree(selectedNode, 0));
-    parts.push("");
-    parts.push("### Requested change:");
-    parts.push(prompt);
-    parts.push("");
-    parts.push("### RULES FOR EDIT MODE:");
-    parts.push("1. Output the COMPLETE HTML with ALL existing sections above reproduced faithfully.");
-    parts.push("2. Apply ONLY the requested change — insert/modify/remove exactly what was asked.");
-    parts.push("3. PRESERVE STYLING of untouched elements exactly: text alignment (center/left/right), font sizes, font weights, colors, padding, gaps, background colors. The structure description above shows these — match them.");
-    parts.push("4. If adding a new element (e.g. header/footer), INSERT it at the natural position and keep everything else intact.");
-    parts.push("5. Do NOT simplify, rearrange, or omit any existing section. Treat the existing structure as sacred.");
-    parts.push("6. NEW elements you add should be FULLY designed with the same creative quality as the rest of the page — proper styling, spacing, colors, icons. Don't make them bare or minimal.");
+
+    if (sourceHtml) {
+      // We have the actual HTML from the previous generation — much more reliable than text description
+      parts.push("### Current HTML (EXACT source — modify surgically):");
+      parts.push("```html");
+      parts.push(sourceHtml);
+      parts.push("```");
+      parts.push("");
+      parts.push("### Requested change:");
+      parts.push(prompt);
+      parts.push("");
+      parts.push("### RULES FOR SURGICAL EDIT:");
+      parts.push("1. The HTML above is the EXACT current state. Make ONLY the requested change.");
+      parts.push("2. DO NOT rewrite or restructure ANY existing HTML unless the prompt explicitly asks for it.");
+      parts.push("3. Keep ALL existing CSS properties EXACTLY as-is: colors, font-sizes, font-weights, text-align, padding, gaps, backgrounds, border-radius — everything.");
+      parts.push("4. If ADDING a new element (header, footer, section, etc.), insert it at the natural position. Give it full creative styling consistent with the page's design language.");
+      parts.push("5. If MODIFYING an element, change ONLY the specific property/content requested. Leave everything else on that element untouched.");
+      parts.push("6. Return the COMPLETE modified HTML document. Do not omit any sections.");
+    } else {
+      // Fallback: describe from snapshot tree (lossy but better than nothing)
+      parts.push("### Existing sections that MUST be preserved:");
+      parts.push(describeSnapshotTree(selectedNode, 0));
+      parts.push("");
+      parts.push("### Requested change:");
+      parts.push(prompt);
+      parts.push("");
+      parts.push("### RULES FOR EDIT MODE:");
+      parts.push("1. Output the COMPLETE HTML with ALL existing sections above reproduced faithfully.");
+      parts.push("2. Apply ONLY the requested change — insert/modify/remove exactly what was asked.");
+      parts.push("3. PRESERVE STYLING of untouched elements exactly: text alignment (center/left/right), font sizes, font weights, colors, padding, gaps, background colors. The structure description above shows these — match them.");
+      parts.push("4. If adding a new element (e.g. header/footer), INSERT it at the natural position and keep everything else intact.");
+      parts.push("5. Do NOT simplify, rearrange, or omit any existing section. Treat the existing structure as sacred.");
+      parts.push("6. NEW elements you add should be FULLY designed with the same creative quality as the rest of the page — proper styling, spacing, colors, icons. Don't make them bare or minimal.");
+    }
   }
 
   parts.push("", `## Layout: ${isMobile ? 'MOBILE' : 'DESKTOP'} — set root <div> to width:${rootWidth}px.`);

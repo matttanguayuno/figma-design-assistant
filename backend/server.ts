@@ -625,7 +625,7 @@ app.post("/layout-audit", async (req: Request, res: Response) => {
 
 app.post("/generate-html", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, sourceHtml } = req.body;
 
     if (!apiKey || typeof apiKey !== "string") {
       res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
@@ -682,6 +682,9 @@ app.post("/generate-html", async (req: Request, res: Response) => {
 
     // ── Step 1: Creative HTML generation (no DS constraints) ──
     console.log(`[generate-html] Step 1: Calling LLM for creative HTML generation...`);
+    if (sourceHtml) {
+      console.log(`[generate-html] sourceHtml provided (${sourceHtml.length} chars) — surgical edit mode`);
+    }
     const rawHtml = await callLLMGenerateHTML(
       prompt,
       styleTokens || {},
@@ -691,7 +694,8 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       model,
       safeSelection,
       safeFullDS,
-      dsSummary
+      dsSummary,
+      sourceHtml || undefined
     );
     console.log(`[generate-html] Step 1 complete: ${rawHtml.length} chars`);
 

@@ -6632,7 +6632,7 @@ RULES:
       if (_activeJobs.size === 0) _nextPlaceX = null;
     }
   }
-  async function runGenerateJobHTML(job, prompt, sourceSnapshot, sourcePosition, sourceNodeIds) {
+  async function runGenerateJobHTML(job, prompt, sourceSnapshot, sourcePosition, sourceNodeIds, sourceHtml) {
     try {
       sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" });
       await yieldToUI();
@@ -6674,6 +6674,10 @@ RULES:
         };
         payloadToSend.selection = truncatedSelection;
         console.log(`[job ${job.id}] [html] Including selection (${truncatedSelection.nodes.length} node(s)) for edit mode`);
+      }
+      if (sourceHtml) {
+        payloadToSend.sourceHtml = sourceHtml;
+        console.log(`[job ${job.id}] [html] Including sourceHtml (${sourceHtml.length} chars) for surgical edit`);
       }
       console.log(`[job ${job.id}] [html] Phase 2-3: Calling /generate-html...`);
       let result;
@@ -6845,6 +6849,10 @@ RULES:
       if ("setPluginData" in node) {
         node.setPluginData("generated", "true");
         node.setPluginData("generatedViaHTML", "true");
+        if (result.html) {
+          node.setPluginData("sourceHtml", result.html);
+          console.log(`[job ${job.id}] [html] Stored sourceHtml (${result.html.length} chars) on frame`);
+        }
       }
       if (isEditMode && sourceNodeIds && sourceNodeIds.length > 0) {
         for (const oldId of sourceNodeIds) {
@@ -9679,6 +9687,7 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
               const singleNodeIds = currentSelection.map((n) => n.id);
               let singleSnapshot;
               let singlePosition;
+              let singleSourceHtml;
               if (currentSelection.length === 1) {
                 const selNode = currentSelection[0];
                 singleSnapshot = { nodes: [snapshotNode(selNode, 0)] };
@@ -9689,12 +9698,23 @@ Do NOT re-fix things that are already correct \u2014 only fix remaining problems
                   height: Math.round(selNode.height),
                   name: selNode.name
                 };
+                if ("getPluginData" in selNode) {
+                  const storedHtml = selNode.getPluginData("sourceHtml");
+                  if (storedHtml) {
+                    singleSourceHtml = storedHtml;
+                    console.log(`[run] Retrieved stored sourceHtml (${storedHtml.length} chars) from frame "${selNode.name}"`);
+                  }
+                }
                 console.log(`[run] Captured single frame: "${selNode.name}" at ${singlePosition.x},${singlePosition.y} (${singlePosition.width}x${singlePosition.height})`);
               }
               console.log(`[run] Starting generate job ${jobId}: "${prompt.slice(0, 60)}" (mode: ${activeGenerateMode})`);
               sendToUI({ type: "job-started", jobId, prompt });
               const runner = activeGenerateMode === "html" ? runGenerateJobHTML : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
-              runner(job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : void 0).catch((err) => {
+              const runnerArgs = [job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : void 0];
+              if (activeGenerateMode === "html" && singleSourceHtml) {
+                runnerArgs.push(singleSourceHtml);
+              }
+              runner(...runnerArgs).catch((err) => {
                 console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
                 if (!job.cancelled) {
                   sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` });

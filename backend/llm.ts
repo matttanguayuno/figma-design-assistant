@@ -571,9 +571,10 @@ export async function callLLMGenerateHTML(
   model?: string,
   selection?: any,
   fullDesignSystem?: any,
-  dsSummary?: any
+  dsSummary?: any,
+  sourceHtml?: string
 ): Promise<string> {
-  const userPrompt = buildGenerateHTMLPrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary);
+  const userPrompt = buildGenerateHTMLPrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, sourceHtml);
   console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
 
   const MAX_USER_PROMPT_CHARS = 500000;
