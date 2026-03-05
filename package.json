@@ -4,8 +4,8 @@
   "private": true,
   "description": "DesignOps AI — a safe, design-system-aware Figma plugin with structured AI operations",
   "scripts": {
-    "build:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife",
-    "watch:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --watch",
+    "build:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --minify",
+    "watch:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --minify --watch",
     "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk --external:openai --external:@google/generative-ai --external:puppeteer-core --external:@sparticuz/chromium",
     "start": "node dist/server.js",
     "start:backend": "npx tsx backend/server.ts",

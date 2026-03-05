@@ -129,10 +129,7 @@ const MIN_WIDTH = 340;
 const MIN_HEIGHT = 210;
 figma.showUI(__html__, { width: MIN_WIDTH, height: MIN_HEIGHT, title: "Uno Design Assistant" });
 
-// Clean up any leftover audit badges from a previous session
-clearAuditBadges();
-
-// DS cache loading is deferred until the UI sends "ui-ready"
+// Heavy init deferred until ui-ready to avoid blocking plugin appearance
 
 // ── Helpers: send message to UI ─────────────────────────────────────
 
@@ -8947,6 +8944,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
     switch (msg.type) {
       // ── UI ready handshake ────────────────────────────────
       case "ui-ready" as any: {
+        // Deferred startup tasks — runs after UI is visible and interactive
+        clearAuditBadges();
         loadCachedFullDesignSystem().catch(() => {});
         return;
       }

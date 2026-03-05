@@ -4931,6 +4931,11 @@
       }
     };
 
+    // Signal to plugin that UI is ready to receive messages
+    // Sent early (right after onmessage handler) so deferred loading starts while
+    // remaining event listeners are still being wired up below.
+    parent.postMessage({ pluginMessage: { type: "ui-ready" } }, "*");
+
     // ── HTML Preview Modal Logic ──────────────────────────────────────
     function openHTMLPreviewModal() {
       var modal = document.getElementById("html-preview-modal");
@@ -4972,8 +4977,6 @@
       tab.addEventListener("click", function() { showPreviewTab(this.getAttribute("data-tab")); });
     });
 
-    // Signal to plugin that UI is ready to receive messages
-    parent.postMessage({ pluginMessage: { type: "ui-ready" } }, "*");
   </script>
 </body>
 </html>
