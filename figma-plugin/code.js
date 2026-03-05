@@ -8053,8 +8053,35 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                     comboGroups.get(comboKey).push(child);
                   }
                   console.log(`[Variants] Found ${comboGroups.size} property combination(s) to clone for each new value`);
-                  for (const vValue of variantValues) {
+                  const allXPositions = /* @__PURE__ */ new Set();
+                  let maxRight = 0;
+                  for (const child of children) {
+                    allXPositions.add(Math.round(child.x));
+                    const right = child.x + child.width;
+                    if (right > maxRight) maxRight = right;
+                  }
+                  const sortedXPositions = [...allXPositions].sort((a, b) => a - b);
+                  let columnSpacing = 20;
+                  if (sortedXPositions.length >= 2) {
+                    const gaps = [];
+                    for (let i = 1; i < sortedXPositions.length; i++) {
+                      gaps.push(sortedXPositions[i] - sortedXPositions[i - 1]);
+                    }
+                    gaps.sort((a, b) => a - b);
+                    columnSpacing = gaps[Math.floor(gaps.length / 2)];
+                  }
+                  const typicalWidth = children[0].width;
+                  let columnGap = columnSpacing - typicalWidth;
+                  if (columnGap < 10) columnGap = 20;
+                  console.log(`[Variants] Grid analysis: ${sortedXPositions.length} columns, columnSpacing=${columnSpacing}, columnGap=${columnGap}, maxRight=${maxRight}, typicalWidth=${typicalWidth}`);
+                  const comboYPositions = /* @__PURE__ */ new Map();
+                  for (const [comboKey, groupChildren] of comboGroups) {
+                    comboYPositions.set(comboKey, groupChildren[0].y);
+                  }
+                  for (let vi = 0; vi < variantValues.length; vi++) {
+                    const vValue = variantValues[vi];
                     const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                    const newColumnX = maxRight + columnGap + vi * (typicalWidth + columnGap);
                     for (const [comboKey, groupChildren] of comboGroups) {
                       const defaultNames = ["default", "rest", "base", "normal", "enabled"];
                       let templateChild = groupChildren[0];
@@ -8076,6 +8103,10 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                       const fullName = buildVariantName2(newProps);
                       const comp = cloneAsComponent2(templateChild, fullName);
                       figma.currentPage.appendChild(comp);
+                      const targetY = comboYPositions.get(comboKey);
+                      comp.__targetX = newColumnX;
+                      comp.__targetY = targetY !== void 0 ? targetY : comp.y;
+                      console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${comp.__targetY}`);
                       if (!isDefault) {
                         await applyVariantStyleViaLLM(comp, vValue, currentPropName);
                       } else {
@@ -8101,6 +8132,12 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                 if (isAddingToExistingSet && existingSet) {
                   for (const comp of components) {
                     existingSet.appendChild(comp);
+                    if (comp.__targetX !== void 0) {
+                      comp.x = comp.__targetX;
+                      comp.y = comp.__targetY;
+                      delete comp.__targetX;
+                      delete comp.__targetY;
+                    }
                   }
                   allCreatedSets.push(existingSet);
                   summaryParts.push(`Added ${components.length} variant${components.length > 1 ? "s" : ""} to "${existingSet.name}"`);

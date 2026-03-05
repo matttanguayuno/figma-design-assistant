@@ -10213,8 +10213,48 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                 console.log(`[Variants] Found ${comboGroups.size} property combination(s) to clone for each new value`);
 
-                for (const vValue of variantValues) {
+                // ═══ ANALYZE EXISTING GRID LAYOUT ═══
+                // Figure out the column spacing by looking at the x positions of existing variants within each combo group.
+                // Each combo group (e.g. Selected=False, Type=Outlined) has variants at different x positions for each State value.
+                // We need to find: (1) the max x + width to know where new columns start, (2) the column spacing.
+                const allXPositions = new Set<number>();
+                let maxRight = 0; // rightmost edge of existing variants
+                for (const child of children) {
+                  allXPositions.add(Math.round(child.x));
+                  const right = child.x + child.width;
+                  if (right > maxRight) maxRight = right;
+                }
+                const sortedXPositions = [...allXPositions].sort((a, b) => a - b);
+                // Column spacing = gap between adjacent x positions (use median gap for robustness)
+                let columnSpacing = 20; // fallback
+                if (sortedXPositions.length >= 2) {
+                  const gaps: number[] = [];
+                  for (let i = 1; i < sortedXPositions.length; i++) {
+                    gaps.push(sortedXPositions[i] - sortedXPositions[i - 1]);
+                  }
+                  gaps.sort((a, b) => a - b);
+                  columnSpacing = gaps[Math.floor(gaps.length / 2)]; // median gap
+                }
+                // Determine typical variant width from the first child
+                const typicalWidth = children[0].width;
+                // Column gap = spacing between columns minus the variant width
+                let columnGap = columnSpacing - typicalWidth;
+                if (columnGap < 10) columnGap = 20; // fallback minimum gap
+                console.log(`[Variants] Grid analysis: ${sortedXPositions.length} columns, columnSpacing=${columnSpacing}, columnGap=${columnGap}, maxRight=${maxRight}, typicalWidth=${typicalWidth}`);
+
+                // For each combo group, find the y position of its variants (they share the same y)
+                // and build a map of comboKey -> y position
+                const comboYPositions = new Map<string, number>();
+                for (const [comboKey, groupChildren] of comboGroups) {
+                  // All children in a combo group have the same y (they're in the same row)
+                  comboYPositions.set(comboKey, groupChildren[0].y);
+                }
+
+                for (let vi = 0; vi < variantValues.length; vi++) {
+                  const vValue = variantValues[vi];
                   const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                  // Calculate x position for this new column
+                  const newColumnX = maxRight + columnGap + vi * (typicalWidth + columnGap);
 
                   for (const [comboKey, groupChildren] of comboGroups) {
                     // Pick the best template from this group (prefer enabled/default)
@@ -10241,6 +10281,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                     const comp = cloneAsComponent(templateChild, fullName);
                     figma.currentPage.appendChild(comp);
+
+                    // Store target position to apply after moving into the component set
+                    const targetY = comboYPositions.get(comboKey);
+                    (comp as any).__targetX = newColumnX;
+                    (comp as any).__targetY = targetY !== undefined ? targetY : comp.y;
+                    console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${(comp as any).__targetY}`);
 
                     // Each combo has different base visuals (e.g. Outlined vs Elevated), so each needs LLM styling
                     if (!isDefault) {
@@ -10273,6 +10319,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               if (isAddingToExistingSet && existingSet) {
                 for (const comp of components) {
                   existingSet.appendChild(comp);
+                  // Apply grid positioning after the component is inside the set
+                  if ((comp as any).__targetX !== undefined) {
+                    comp.x = (comp as any).__targetX;
+                    comp.y = (comp as any).__targetY;
+                    delete (comp as any).__targetX;
+                    delete (comp as any).__targetY;
+                  }
                 }
                 allCreatedSets.push(existingSet);
                 summaryParts.push(`Added ${components.length} variant${components.length > 1 ? "s" : ""} to "${existingSet.name}"`);
