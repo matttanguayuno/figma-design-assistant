@@ -7985,6 +7985,10 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                     continue;
                   }
                   existingParsedVariants = children.map((c) => parseVariantProps2(c.name));
+                  console.log(`[Variants] Component set "${sourceNode.name}" has ${children.length} children:`);
+                  for (const child of children) {
+                    console.log(`[Variants]   - "${child.name}" (id=${child.id})`);
+                  }
                   const allKeys = /* @__PURE__ */ new Set();
                   for (const vp of existingParsedVariants) {
                     for (const p of vp) allKeys.add(p.key);
@@ -7993,7 +7997,7 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                   } else if (allKeys.size === 1) {
                     currentPropName = [...allKeys][0];
                   }
-                  const defaultNames = ["default", "rest", "base", "normal"];
+                  const defaultNames = ["default", "rest", "base", "normal", "enabled"];
                   let bestTemplate = null;
                   for (const child of children) {
                     const childProps = parseVariantProps2(child.name);
@@ -8012,7 +8016,9 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                   console.log(`[Variants] Existing set: "${existingSet.name}" prop="${currentPropName}" existingValues=[${[...existingValuesForProp].join(", ")}], template="${templateSource.name}"`);
                   variantValues = variantValues.filter((v) => !existingValuesForProp.has(v.toLowerCase()));
                   if (variantValues.length === 0) {
+                    const existingList = [...existingValuesForProp].join(", ");
                     console.log(`[Variants] All variant values already exist for "${sourceNode.name}", skipping.`);
+                    figma.notify(`All requested states already exist in "${sourceNode.name}" (found: ${existingList}). Delete existing variants first to regenerate.`, { timeout: 5e3 });
                     continue;
                   }
                 } else {

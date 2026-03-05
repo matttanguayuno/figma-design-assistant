@@ -10121,6 +10121,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 // Parse ALL existing variant names into structured props
                 existingParsedVariants = children.map(c => parseVariantProps(c.name));
 
+                // Log all children for diagnostics
+                console.log(`[Variants] Component set "${sourceNode.name}" has ${children.length} children:`);
+                for (const child of children) {
+                  console.log(`[Variants]   - "${child.name}" (id=${child.id})`);
+                }
+
                 // Detect the property being varied — check if the LLM's propName matches an existing key
                 const allKeys = new Set<string>();
                 for (const vp of existingParsedVariants) {
@@ -10135,7 +10141,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 // If the LLM's propName doesn't match any existing key, it may be adding a NEW property axis — that's fine
 
                 // Select template: prefer Default/Rest/Base variant, otherwise first child
-                const defaultNames = ["default", "rest", "base", "normal"];
+                const defaultNames = ["default", "rest", "base", "normal", "enabled"];
                 let bestTemplate: ComponentNode | null = null;
                 for (const child of children) {
                   const childProps = parseVariantProps(child.name);
@@ -10159,7 +10165,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 // Filter out values that already exist for this property
                 variantValues = variantValues.filter(v => !existingValuesForProp.has(v.toLowerCase()));
                 if (variantValues.length === 0) {
+                  const existingList = [...existingValuesForProp].join(", ");
                   console.log(`[Variants] All variant values already exist for "${sourceNode.name}", skipping.`);
+                  figma.notify(`All requested states already exist in "${sourceNode.name}" (found: ${existingList}). Delete existing variants first to regenerate.`, { timeout: 5000 });
                   continue;
                 }
               } else {
