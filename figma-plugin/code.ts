@@ -10111,6 +10111,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"…` });
+              sendToUI({ type: "job-progress", jobId: nativeJobIdV, phase: "generate" } as any);
 
               // Build the full variant name for each new variant
               const components: ComponentNode[] = [];
@@ -10234,6 +10235,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   components.push(comp);
                 }
               }
+
+              sendToUI({ type: "job-progress", jobId: nativeJobIdV, phase: "create" } as any);
 
               if (isAddingToExistingSet && existingSet) {
                 // Ensure manual positioning works — component sets may have auto-layout
