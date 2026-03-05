@@ -10236,35 +10236,63 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               if (isAddingToExistingSet && existingSet) {
-                // Disable auto-layout so manual x/y positioning is respected
-                const prevLayout = existingSet.layoutMode;
-                if (prevLayout !== "NONE") {
-                  console.log(`[Variants] Disabling auto-layout (was "${prevLayout}") to allow manual positioning`);
-                  existingSet.layoutMode = "NONE";
+                // Ensure manual positioning works — component sets may have auto-layout
+                try {
+                  if (existingSet.layoutMode !== "NONE") {
+                    console.log(`[Variants] Disabling auto-layout (was "${existingSet.layoutMode}")`);
+                    existingSet.layoutMode = "NONE";
+                  }
+                } catch (e) {
+                  console.warn(`[Variants] Could not disable auto-layout:`, e);
                 }
-                for (const comp of components) {
-                  existingSet.appendChild(comp);
-                  const pos = targetPositions.get(comp);
-                  if (pos) {
-                    comp.x = pos.x;
-                    comp.y = pos.y;
-                    console.log(`[Variants] Positioned "${comp.name}" at x=${comp.x}, y=${comp.y}`);
-                  } else {
-                    console.warn(`[Variants] No target position for "${comp.name}"`);
+
+                // Pre-expand the component set so children at new column positions fit
+                const neededWidth = targetPositions.size > 0
+                  ? Math.max(existingSet.width, ...Array.from(targetPositions.values()).map(p => p.x + 100))
+                  : existingSet.width;
+                const neededHeight = targetPositions.size > 0
+                  ? Math.max(existingSet.height, ...Array.from(targetPositions.values()).map(p => p.y + 100))
+                  : existingSet.height;
+                if (neededWidth > existingSet.width || neededHeight > existingSet.height) {
+                  try {
+                    existingSet.resize(
+                      Math.max(neededWidth, existingSet.width),
+                      Math.max(neededHeight, existingSet.height)
+                    );
+                    console.log(`[Variants] Pre-expanded set to ${existingSet.width}×${existingSet.height}`);
+                  } catch (e) {
+                    console.warn(`[Variants] Could not pre-expand set:`, e);
                   }
                 }
-                // Resize the component set to fit the new columns
-                let maxR = 0, maxB = 0;
-                for (const child of existingSet.children as readonly SceneNode[]) {
-                  const r = child.x + child.width;
-                  const b = child.y + child.height;
-                  if (r > maxR) maxR = r;
-                  if (b > maxB) maxB = b;
+
+                const appended: ComponentNode[] = [];
+                for (const comp of components) {
+                  try {
+                    const pos = targetPositions.get(comp);
+                    // Set target position BEFORE appending — appendChild preserves x/y
+                    if (pos) {
+                      comp.x = pos.x;
+                      comp.y = pos.y;
+                    }
+                    existingSet.appendChild(comp);
+                    // Re-apply position AFTER appending in case appendChild reset it
+                    if (pos) {
+                      comp.x = pos.x;
+                      comp.y = pos.y;
+                      console.log(`[Variants] Appended+positioned "${comp.name}" at x=${comp.x}, y=${comp.y}`);
+                    } else {
+                      console.warn(`[Variants] Appended "${comp.name}" (no target position)`);
+                    }
+                    appended.push(comp);
+                  } catch (appendErr: any) {
+                    console.error(`[Variants] Failed to append "${comp.name}": ${appendErr.message}`);
+                    // Try to clean up the orphaned component on the page
+                    try { comp.remove(); } catch (_) {}
+                  }
                 }
-                const padding = 40;
-                existingSet.resize(maxR + padding, maxB + padding);
+                console.log(`[Variants] Successfully appended ${appended.length}/${components.length} variants`);
                 allCreatedSets.push(existingSet);
-                summaryParts.push(`Added ${components.length} variant${components.length > 1 ? "s" : ""} to "${existingSet.name}"`);
+                summaryParts.push(`Added ${appended.length} variant${appended.length > 1 ? "s" : ""} to "${existingSet.name}"`);
               } else if (components.length >= 2) {
                 const parentNode = sourceNode.parent as (BaseNode & ChildrenMixin) | null;
                 const targetParent = parentNode && "children" in parentNode ? parentNode : figma.currentPage;
