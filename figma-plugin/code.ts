@@ -10237,6 +10237,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               if (isAddingToExistingSet && existingSet) {
+                // Disable auto-layout so manual x/y positioning is respected
+                const prevLayout = existingSet.layoutMode;
+                if (prevLayout !== "NONE") {
+                  console.log(`[Variants] Disabling auto-layout (was "${prevLayout}") to allow manual positioning`);
+                  existingSet.layoutMode = "NONE";
+                }
                 for (const comp of components) {
                   existingSet.appendChild(comp);
                   // Apply grid positioning after the component is inside the set
