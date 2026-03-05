@@ -9836,7 +9836,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 provider: _selectedProvider,
                 model: _selectedModel,
               };
-              const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true", parsePayload) as any;
+              const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true&mode=extract", parsePayload) as any;
 
               let parsed: any = null;
 
@@ -9882,9 +9882,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             // Fallback: if LLM parsing failed, try basic local extraction
             if (variantValues.length === 0) {
               // Check for explicitly mentioned variant values in the text
-              const knownValues = ["default", "hover", "active", "pressed", "disabled", "focused", "focus",
+              const knownValues = ["default", "hover", "active", "pressed", "press", "disabled", "focused", "focus",
                 "selected", "error", "loading", "small", "medium", "large", "filled", "outlined", "text",
-                "primary", "secondary", "tertiary", "success", "warning", "danger", "info"];
+                "primary", "secondary", "tertiary", "success", "warning", "danger", "info",
+                "dragged", "elevated", "tonal", "rest", "normal", "checked", "unchecked",
+                "on", "off", "enabled", "compact", "expanded", "xl", "xs"];
               const foundValues = knownValues.filter(s => new RegExp(`\\b${s}\\b`, "i").test(intentText));
               if (foundValues.length > 0) {
                 variantValues = foundValues.map(s => s.charAt(0).toUpperCase() + s.slice(1));

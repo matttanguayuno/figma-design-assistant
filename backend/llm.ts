@@ -303,6 +303,11 @@ export async function callLLMAnalyze(
       "content jammed against edges, and elements that are obviously the wrong size. " +
       "Return a numbered list. Be thorough — list EVERY problem, even minor ones. Do NOT suggest fixes, just describe what you see.";
     returnRaw = true;
+  } else if (mode === "extract") {
+    // Free-form extraction — system prompt just asks for valid JSON matching the user prompt's schema
+    systemPrompt =
+      "You are a precise data extraction assistant. You MUST return ONLY valid JSON — no markdown fences, no prose, no explanation. " +
+      "Extract exactly the fields requested in the user's prompt and return them as a JSON object.";
   } else if (mode === "verify") {
     // Verification pass — skeptically check if problems remain, return fixes or empty
     systemPrompt =

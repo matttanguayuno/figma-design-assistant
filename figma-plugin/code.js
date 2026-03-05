@@ -7771,7 +7771,7 @@ Respond with ONLY valid JSON, no markdown:
                   provider: _selectedProvider,
                   model: _selectedModel
                 };
-                const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true", parsePayload);
+                const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true&mode=extract", parsePayload);
                 let parsed = null;
                 if (parseResult.variantValues) {
                   parsed = parseResult;
@@ -7812,6 +7812,7 @@ Respond with ONLY valid JSON, no markdown:
                   "hover",
                   "active",
                   "pressed",
+                  "press",
                   "disabled",
                   "focused",
                   "focus",
@@ -7830,7 +7831,21 @@ Respond with ONLY valid JSON, no markdown:
                   "success",
                   "warning",
                   "danger",
-                  "info"
+                  "info",
+                  "dragged",
+                  "elevated",
+                  "tonal",
+                  "rest",
+                  "normal",
+                  "checked",
+                  "unchecked",
+                  "on",
+                  "off",
+                  "enabled",
+                  "compact",
+                  "expanded",
+                  "xl",
+                  "xs"
                 ];
                 const foundValues = knownValues.filter((s) => new RegExp(`\\b${s}\\b`, "i").test(intentText));
                 if (foundValues.length > 0) {
