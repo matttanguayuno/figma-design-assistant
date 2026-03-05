@@ -10114,6 +10114,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
               // Build the full variant name for each new variant
               const components: ComponentNode[] = [];
+              const targetPositions = new Map<ComponentNode, { x: number; y: number }>();
 
               if (isAddingToExistingSet && existingSet) {
                 // ═══ MULTI-COMBO CLONING ═══
@@ -10167,8 +10168,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   // All children in a combo group have the same y (they're in the same row)
                   comboYPositions.set(comboKey, groupChildren[0].y);
                 }
-
-                const targetPositions = new Map<ComponentNode, { x: number; y: number }>();
 
                 for (let vi = 0; vi < variantValues.length; vi++) {
                   const vValue = variantValues[vi];
@@ -10245,13 +10244,25 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 }
                 for (const comp of components) {
                   existingSet.appendChild(comp);
-                  // Apply grid positioning after the component is inside the set
-                  const pos = targetPositions?.get(comp);
+                  const pos = targetPositions.get(comp);
                   if (pos) {
                     comp.x = pos.x;
                     comp.y = pos.y;
+                    console.log(`[Variants] Positioned "${comp.name}" at x=${comp.x}, y=${comp.y}`);
+                  } else {
+                    console.warn(`[Variants] No target position for "${comp.name}"`);
                   }
                 }
+                // Resize the component set to fit the new columns
+                let maxR = 0, maxB = 0;
+                for (const child of existingSet.children as readonly SceneNode[]) {
+                  const r = child.x + child.width;
+                  const b = child.y + child.height;
+                  if (r > maxR) maxR = r;
+                  if (b > maxB) maxB = b;
+                }
+                const padding = 40;
+                existingSet.resize(maxR + padding, maxB + padding);
                 allCreatedSets.push(existingSet);
                 summaryParts.push(`Added ${components.length} variant${components.length > 1 ? "s" : ""} to "${existingSet.name}"`);
               } else if (components.length >= 2) {
