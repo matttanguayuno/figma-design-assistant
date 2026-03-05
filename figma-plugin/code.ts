@@ -10294,6 +10294,86 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   }
                 }
                 console.log(`[Variants] Successfully appended ${appended.length}/${components.length} variants`);
+
+                // ═══ CREATE COLUMN HEADER LABELS ═══
+                // Add text labels above each new column, matching the position pattern of existing headers.
+                if (appended.length > 0) {
+                  try {
+                    await figma.loadFontAsync({ family: "Inter", style: "Medium" });
+
+                    // Build a map of new variant value → column X position
+                    const newColumnXMap = new Map<string, number>();
+                    for (const comp of appended) {
+                      const pos = targetPositions.get(comp);
+                      if (pos) {
+                        const parsed = parseVariantProps(comp.name);
+                        const propVal = parsed.find(p => p.key === currentPropName);
+                        if (propVal && !newColumnXMap.has(propVal.value)) {
+                          newColumnXMap.set(propVal.value, pos.x);
+                        }
+                      }
+                    }
+
+                    // Analyze Y positions of all children to find section header rows.
+                    // Sections are groups of rows separated by large Y gaps (e.g., Outlined vs Elevated).
+                    const allChildren = existingSet.children as ComponentNode[];
+                    const yPositions = [...new Set(allChildren.map(c => Math.round(c.y)))].sort((a, b) => a - b);
+                    const rowGaps: number[] = [];
+                    for (let i = 1; i < yPositions.length; i++) {
+                      rowGaps.push(yPositions[i] - yPositions[i - 1]);
+                    }
+                    const medianGap = rowGaps.length > 0
+                      ? rowGaps.slice().sort((a, b) => a - b)[Math.floor(rowGaps.length / 2)]
+                      : 80;
+                    const sectionBreakThreshold = medianGap * 2;
+
+                    // Split Y positions into sections
+                    const sections: number[][] = [[yPositions[0]]];
+                    for (let i = 1; i < yPositions.length; i++) {
+                      if (yPositions[i] - yPositions[i - 1] > sectionBreakThreshold) {
+                        sections.push([]);
+                      }
+                      sections[sections.length - 1].push(yPositions[i]);
+                    }
+
+                    // For each section, header Y = first row Y minus an offset
+                    const headerOffset = 46;
+                    const parentFrame = existingSet.parent;
+                    const canAppendToParent = parentFrame && "appendChild" in parentFrame;
+
+                    const typicalW = allChildren.length > 0 ? allChildren[0].width : 67;
+                    const createdLabels: SceneNode[] = [];
+
+                    for (const [valueName, columnX] of newColumnXMap) {
+                      for (const section of sections) {
+                        const headerY = section[0] - headerOffset;
+                        const textNode = figma.createText();
+                        textNode.fontName = { family: "Inter", style: "Medium" };
+                        textNode.characters = valueName;
+                        textNode.fontSize = 12;
+                        textNode.fills = [{ type: "SOLID", color: { r: 0.4, g: 0.4, b: 0.4 } }];
+                        textNode.textAlignHorizontal = "CENTER";
+                        textNode.resize(typicalW, textNode.height);
+
+                        if (canAppendToParent) {
+                          // Position in parent coordinate space
+                          textNode.x = existingSet.x + columnX;
+                          textNode.y = existingSet.y + headerY;
+                          (parentFrame as any).appendChild(textNode);
+                        } else {
+                          // Fallback: place on page near the component set
+                          textNode.x = existingSet.absoluteTransform[0][2] + columnX;
+                          textNode.y = existingSet.absoluteTransform[1][2] + headerY;
+                        }
+                        createdLabels.push(textNode);
+                      }
+                    }
+                    console.log(`[Variants] Created ${createdLabels.length} column header label(s) for new values`);
+                  } catch (headerErr: any) {
+                    console.warn(`[Variants] Could not create column headers: ${headerErr.message}`);
+                  }
+                }
+
                 allCreatedSets.push(existingSet);
                 summaryParts.push(`Added ${appended.length} variant${appended.length > 1 ? "s" : ""} to "${existingSet.name}"`);
               } else if (components.length >= 2) {
