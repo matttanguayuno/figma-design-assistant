@@ -5202,6 +5202,88 @@ function applySetSizeMode(op: Extract<Operation, { type: "SET_SIZE_MODE" }>) {
   console.log(`[setSizeMode] Set "${frame.name}" sizing: H=${op.horizontal ?? "unchanged"}, V=${op.vertical ?? "unchanged"}`);
 }
 
+// ── SET_OPACITY ─────────────────────────────────────────────────────
+
+function applySetOpacity(op: Extract<Operation, { type: "SET_OPACITY" }>) {
+  const node = figma.getNodeById(op.nodeId);
+  if (!node) {
+    throw new Error(`Node ${op.nodeId} not found`);
+  }
+  if (!("opacity" in node)) {
+    throw new Error(`Node ${op.nodeId} (${node.type}) does not support opacity`);
+  }
+  (node as SceneNode).opacity = Math.max(0, Math.min(1, op.opacity));
+  console.log(`[setOpacity] Set "${(node as SceneNode).name}" opacity to ${op.opacity}`);
+}
+
+// ── SET_STROKE ──────────────────────────────────────────────────────
+
+function applySetStroke(op: Extract<Operation, { type: "SET_STROKE" }>) {
+  const node = figma.getNodeById(op.nodeId);
+  if (!node) {
+    throw new Error(`Node ${op.nodeId} not found`);
+  }
+  if (!("strokes" in node)) {
+    throw new Error(`Node ${op.nodeId} (${node.type}) does not support strokes`);
+  }
+  const hex = op.color.replace("#", "");
+  const r = parseInt(hex.substring(0, 2), 16) / 255;
+  const g = parseInt(hex.substring(2, 4), 16) / 255;
+  const b = parseInt(hex.substring(4, 6), 16) / 255;
+  const stroke: SolidPaint = { type: "SOLID", color: { r, g, b }, opacity: 1 };
+  (node as GeometryMixin).strokes = [stroke];
+  if ("strokeWeight" in node && op.weight !== undefined) {
+    (node as GeometryMixin).strokeWeight = op.weight;
+  }
+  if ("strokeAlign" in node && op.alignment) {
+    (node as GeometryMixin).strokeAlign = op.alignment;
+  }
+  console.log(`[setStroke] Set "${(node as SceneNode).name}" stroke to ${op.color} weight=${op.weight ?? 1}`);
+}
+
+// ── SET_EFFECT ──────────────────────────────────────────────────────
+
+function applySetEffect(op: Extract<Operation, { type: "SET_EFFECT" }>) {
+  const node = figma.getNodeById(op.nodeId);
+  if (!node) {
+    throw new Error(`Node ${op.nodeId} not found`);
+  }
+  if (!("effects" in node)) {
+    throw new Error(`Node ${op.nodeId} (${node.type}) does not support effects`);
+  }
+  const effects: Effect[] = op.effects.map(e => {
+    const hex = e.color.replace("#", "");
+    const r = parseInt(hex.substring(0, 2), 16) / 255;
+    const g = parseInt(hex.substring(2, 4), 16) / 255;
+    const b = parseInt(hex.substring(4, 6), 16) / 255;
+    return {
+      type: e.type,
+      visible: true,
+      color: { r, g, b, a: e.opacity ?? 0.25 },
+      offset: { x: e.offsetX ?? 0, y: e.offsetY ?? 4 },
+      radius: e.radius ?? 8,
+      spread: 0,
+      blendMode: "NORMAL" as BlendMode,
+    } as DropShadowEffect | InnerShadowEffect;
+  });
+  (node as BlendMixin).effects = effects;
+  console.log(`[setEffect] Set "${(node as SceneNode).name}" effects: ${effects.map(e => e.type).join(", ")}`);
+}
+
+// ── SET_CORNER_RADIUS ───────────────────────────────────────────────
+
+function applySetCornerRadius(op: Extract<Operation, { type: "SET_CORNER_RADIUS" }>) {
+  const node = figma.getNodeById(op.nodeId);
+  if (!node) {
+    throw new Error(`Node ${op.nodeId} not found`);
+  }
+  if (!("cornerRadius" in node)) {
+    throw new Error(`Node ${op.nodeId} (${node.type}) does not support corner radius`);
+  }
+  (node as any).cornerRadius = op.radius;
+  console.log(`[setCornerRadius] Set "${(node as SceneNode).name}" radius to ${op.radius}`);
+}
+
 // ── CONTRAST SAFETY NET ─────────────────────────────────────────────
 
 /** Convert a hex colour string (#RRGGBB) to {r,g,b} in 0-1 range. */
@@ -7099,6 +7181,18 @@ async function applyOperation(op: Operation): Promise<void> {
     case "SET_SIZE_MODE":
       applySetSizeMode(op);
       break;
+    case "SET_OPACITY":
+      applySetOpacity(op);
+      break;
+    case "SET_STROKE":
+      applySetStroke(op);
+      break;
+    case "SET_EFFECT":
+      applySetEffect(op);
+      break;
+    case "SET_CORNER_RADIUS":
+      applySetCornerRadius(op);
+      break;
     case "DUPLICATE_FRAME":
       await applyDuplicateFrame(op);
       break;
@@ -7379,6 +7473,10 @@ async function applyBatch(
     SET_LAYOUT_PROPS: "Set layout props",
     SET_SIZE_MODE: "Set size mode",
     DUPLICATE_FRAME: "Duplicate frame",
+    SET_OPACITY: "Set opacity",
+    SET_STROKE: "Set stroke",
+    SET_EFFECT: "Set effect",
+    SET_CORNER_RADIUS: "Set corner radius",
   };
 
   for (const op of batch.operations) {
@@ -9944,10 +10042,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   `1. ONLY use the node IDs listed above — do NOT invent new IDs.\n` +
                   `2. Do NOT change text content, font family, or font size.\n` +
                   `3. Do NOT use DUPLICATE_FRAME, INSERT_COMPONENT, or RESIZE_NODE.\n` +
-                  `4. Use design system fill style names (via SET_FILL_STYLE) when available instead of arbitrary hex colors.\n` +
+                  `4. Use design system fill style names (via APPLY_FILL_STYLE) when available instead of arbitrary hex colors.\n` +
                   `5. The variant MUST look visibly different from the default/base variant.\n` +
                   `6. Determine what visual changes are appropriate for "${propNameForStyle}=${variantValue}" based on standard UI/UX conventions.\n` +
-                  `7. You may use SET_FILL_COLOR, SET_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.\n\n` +
+                  `7. You may use SET_FILL_COLOR, APPLY_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.\n\n` +
                   `Return ONLY the operations array. Every operation must target a real node ID from the list above.`;
 
                 const payload = {

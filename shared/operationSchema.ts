@@ -98,6 +98,35 @@ export type Operation =
       nodeId: string;
       horizontal?: "FIXED" | "FILL" | "HUG";
       vertical?: "FIXED" | "FILL" | "HUG";
+    }
+  | {
+      type: "SET_OPACITY";
+      nodeId: string;
+      opacity: number; // 0–1
+    }
+  | {
+      type: "SET_STROKE";
+      nodeId: string;
+      color: string; // hex
+      weight?: number;
+      alignment?: "INSIDE" | "OUTSIDE" | "CENTER";
+    }
+  | {
+      type: "SET_EFFECT";
+      nodeId: string;
+      effects: Array<{
+        type: "DROP_SHADOW" | "INNER_SHADOW";
+        color: string; // hex
+        opacity?: number;
+        offsetX?: number;
+        offsetY?: number;
+        radius?: number;
+      }>;
+    }
+  | {
+      type: "SET_CORNER_RADIUS";
+      nodeId: string;
+      radius: number;
     };
 
 export type OperationBatch = {

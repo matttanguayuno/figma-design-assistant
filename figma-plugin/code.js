@@ -4140,6 +4140,78 @@
     }
     console.log(`[setSizeMode] Set "${frame.name}" sizing: H=${(_a = op.horizontal) != null ? _a : "unchanged"}, V=${(_b = op.vertical) != null ? _b : "unchanged"}`);
   }
+  function applySetOpacity(op) {
+    const node = figma.getNodeById(op.nodeId);
+    if (!node) {
+      throw new Error(`Node ${op.nodeId} not found`);
+    }
+    if (!("opacity" in node)) {
+      throw new Error(`Node ${op.nodeId} (${node.type}) does not support opacity`);
+    }
+    node.opacity = Math.max(0, Math.min(1, op.opacity));
+    console.log(`[setOpacity] Set "${node.name}" opacity to ${op.opacity}`);
+  }
+  function applySetStroke(op) {
+    var _a;
+    const node = figma.getNodeById(op.nodeId);
+    if (!node) {
+      throw new Error(`Node ${op.nodeId} not found`);
+    }
+    if (!("strokes" in node)) {
+      throw new Error(`Node ${op.nodeId} (${node.type}) does not support strokes`);
+    }
+    const hex = op.color.replace("#", "");
+    const r = parseInt(hex.substring(0, 2), 16) / 255;
+    const g = parseInt(hex.substring(2, 4), 16) / 255;
+    const b = parseInt(hex.substring(4, 6), 16) / 255;
+    const stroke = { type: "SOLID", color: { r, g, b }, opacity: 1 };
+    node.strokes = [stroke];
+    if ("strokeWeight" in node && op.weight !== void 0) {
+      node.strokeWeight = op.weight;
+    }
+    if ("strokeAlign" in node && op.alignment) {
+      node.strokeAlign = op.alignment;
+    }
+    console.log(`[setStroke] Set "${node.name}" stroke to ${op.color} weight=${(_a = op.weight) != null ? _a : 1}`);
+  }
+  function applySetEffect(op) {
+    const node = figma.getNodeById(op.nodeId);
+    if (!node) {
+      throw new Error(`Node ${op.nodeId} not found`);
+    }
+    if (!("effects" in node)) {
+      throw new Error(`Node ${op.nodeId} (${node.type}) does not support effects`);
+    }
+    const effects = op.effects.map((e) => {
+      var _a, _b, _c, _d;
+      const hex = e.color.replace("#", "");
+      const r = parseInt(hex.substring(0, 2), 16) / 255;
+      const g = parseInt(hex.substring(2, 4), 16) / 255;
+      const b = parseInt(hex.substring(4, 6), 16) / 255;
+      return {
+        type: e.type,
+        visible: true,
+        color: { r, g, b, a: (_a = e.opacity) != null ? _a : 0.25 },
+        offset: { x: (_b = e.offsetX) != null ? _b : 0, y: (_c = e.offsetY) != null ? _c : 4 },
+        radius: (_d = e.radius) != null ? _d : 8,
+        spread: 0,
+        blendMode: "NORMAL"
+      };
+    });
+    node.effects = effects;
+    console.log(`[setEffect] Set "${node.name}" effects: ${effects.map((e) => e.type).join(", ")}`);
+  }
+  function applySetCornerRadius(op) {
+    const node = figma.getNodeById(op.nodeId);
+    if (!node) {
+      throw new Error(`Node ${op.nodeId} not found`);
+    }
+    if (!("cornerRadius" in node)) {
+      throw new Error(`Node ${op.nodeId} (${node.type}) does not support corner radius`);
+    }
+    node.cornerRadius = op.radius;
+    console.log(`[setCornerRadius] Set "${node.name}" radius to ${op.radius}`);
+  }
   function hexToRgb01(hex) {
     const h = hex.replace("#", "");
     return {
@@ -5479,6 +5551,18 @@ IMPORTANT: To change text color, use SET_FILL_COLOR on the TEXT node with the de
       case "SET_SIZE_MODE":
         applySetSizeMode(op);
         break;
+      case "SET_OPACITY":
+        applySetOpacity(op);
+        break;
+      case "SET_STROKE":
+        applySetStroke(op);
+        break;
+      case "SET_EFFECT":
+        applySetEffect(op);
+        break;
+      case "SET_CORNER_RADIUS":
+        applySetCornerRadius(op);
+        break;
       case "DUPLICATE_FRAME":
         await applyDuplicateFrame(op);
         break;
@@ -5687,7 +5771,11 @@ IMPORTANT: To change text color, use SET_FILL_COLOR on the TEXT node with the de
       SET_LAYOUT_MODE: "Set layout mode",
       SET_LAYOUT_PROPS: "Set layout props",
       SET_SIZE_MODE: "Set size mode",
-      DUPLICATE_FRAME: "Duplicate frame"
+      DUPLICATE_FRAME: "Duplicate frame",
+      SET_OPACITY: "Set opacity",
+      SET_STROKE: "Set stroke",
+      SET_EFFECT: "Set effect",
+      SET_CORNER_RADIUS: "Set corner radius"
     };
     for (const op of batch.operations) {
       const label = friendlyName[op.type] || op.type;
@@ -7818,10 +7906,10 @@ CRITICAL RULES:
 1. ONLY use the node IDs listed above \u2014 do NOT invent new IDs.
 2. Do NOT change text content, font family, or font size.
 3. Do NOT use DUPLICATE_FRAME, INSERT_COMPONENT, or RESIZE_NODE.
-4. Use design system fill style names (via SET_FILL_STYLE) when available instead of arbitrary hex colors.
+4. Use design system fill style names (via APPLY_FILL_STYLE) when available instead of arbitrary hex colors.
 5. The variant MUST look visibly different from the default/base variant.
 6. Determine what visual changes are appropriate for "${propNameForStyle}=${variantValue}" based on standard UI/UX conventions.
-7. You may use SET_FILL_COLOR, SET_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.
+7. You may use SET_FILL_COLOR, APPLY_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.
 
 Return ONLY the operations array. Every operation must target a real node ID from the list above.`;
                   const payload = __spreadProps(__spreadValues({

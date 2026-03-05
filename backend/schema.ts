@@ -119,6 +119,39 @@ const SetSizeModeSchema = z.object({
   vertical: z.enum(["FIXED", "FILL", "HUG"]).optional(),
 });
 
+const SetOpacitySchema = z.object({
+  type: z.literal("SET_OPACITY"),
+  nodeId: z.string().min(1),
+  opacity: z.number().min(0).max(1),
+});
+
+const SetStrokeSchema = z.object({
+  type: z.literal("SET_STROKE"),
+  nodeId: z.string().min(1),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a 6-digit hex color like #FF0000"),
+  weight: z.number().positive().optional(),
+  alignment: z.enum(["INSIDE", "OUTSIDE", "CENTER"]).optional(),
+});
+
+const SetEffectSchema = z.object({
+  type: z.literal("SET_EFFECT"),
+  nodeId: z.string().min(1),
+  effects: z.array(z.object({
+    type: z.enum(["DROP_SHADOW", "INNER_SHADOW"]),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Must be a 6-digit hex color"),
+    opacity: z.number().min(0).max(1).optional(),
+    offsetX: z.number().optional(),
+    offsetY: z.number().optional(),
+    radius: z.number().nonnegative().optional(),
+  })).min(1),
+});
+
+const SetCornerRadiusSchema = z.object({
+  type: z.literal("SET_CORNER_RADIUS"),
+  nodeId: z.string().min(1),
+  radius: z.number().nonnegative(),
+});
+
 // ── Discriminated Union ─────────────────────────────────────────────
 
 export const OperationSchema = z.discriminatedUnion("type", [
@@ -138,6 +171,10 @@ export const OperationSchema = z.discriminatedUnion("type", [
   SetLayoutModeSchema,
   SetLayoutPropsSchema,
   SetSizeModeSchema,
+  SetOpacitySchema,
+  SetStrokeSchema,
+  SetEffectSchema,
+  SetCornerRadiusSchema,
 ]);
 
 // ── Batch ────────────────────────────────────────────────────────────

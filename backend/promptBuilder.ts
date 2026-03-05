@@ -61,7 +61,7 @@ You MUST:
 The response MUST be a JSON object with a single key "operations" containing an array of operation objects.
 
 Each operation MUST have a "type" field that is one of:
-  "INSERT_COMPONENT" | "CREATE_FRAME" | "SET_TEXT" | "APPLY_TEXT_STYLE" | "APPLY_FILL_STYLE" | "RENAME_NODE" | "SET_IMAGE" | "RESIZE_NODE" | "MOVE_NODE" | "CLONE_NODE" | "DELETE_NODE" | "DUPLICATE_FRAME" | "SET_FILL_COLOR" | "SET_LAYOUT_MODE" | "SET_LAYOUT_PROPS" | "SET_SIZE_MODE"
+  "INSERT_COMPONENT" | "CREATE_FRAME" | "SET_TEXT" | "APPLY_TEXT_STYLE" | "APPLY_FILL_STYLE" | "RENAME_NODE" | "SET_IMAGE" | "RESIZE_NODE" | "MOVE_NODE" | "CLONE_NODE" | "DELETE_NODE" | "DUPLICATE_FRAME" | "SET_FILL_COLOR" | "SET_LAYOUT_MODE" | "SET_LAYOUT_PROPS" | "SET_SIZE_MODE" | "SET_OPACITY" | "SET_STROKE" | "SET_EFFECT" | "SET_CORNER_RADIUS"
 
 Operation schemas:
 
@@ -167,6 +167,22 @@ SET_SIZE_MODE:
   IMPORTANT: For responsive desktop layouts, containers often use "FILL" horizontally to stretch. For mobile, "FILL" or "FIXED" width with "HUG" height is common.
   IMPORTANT: The node's parent must have auto-layout enabled for FILL to work. HUG requires the node itself to have auto-layout.
   IMPORTANT: The snapshot includes current layoutSizingHorizontal and layoutSizingVertical for each node so you can see the existing sizing mode.
+
+SET_OPACITY:
+  { "type": "SET_OPACITY", "nodeId": "<node id from selection>", "opacity": <number 0–1> }
+  Note: Sets the opacity of the specified node. 1 = fully opaque, 0 = invisible. Use 0.38 for disabled states per Material Design conventions, or 0.5–0.7 for subtle de-emphasis.
+
+SET_STROKE:
+  { "type": "SET_STROKE", "nodeId": "<node id from selection>", "color": "<6-digit hex>", "weight": <number, optional, default 1>, "alignment": "INSIDE"|"OUTSIDE"|"CENTER" }
+  Note: Sets a solid stroke on the node. Use for focus rings, borders, outlines. Weight defaults to 1 if omitted. Alignment defaults to INSIDE.
+
+SET_EFFECT:
+  { "type": "SET_EFFECT", "nodeId": "<node id from selection>", "effects": [{ "type": "DROP_SHADOW"|"INNER_SHADOW", "color": "<hex>", "opacity": <0–1>, "offsetX": <number>, "offsetY": <number>, "radius": <number> }] }
+  Note: Replaces the node's effects with the specified shadow effects. Use DROP_SHADOW for elevation/pressed states, INNER_SHADOW for inset effects. Defaults: opacity=0.25, offsetX=0, offsetY=4, radius=8.
+
+SET_CORNER_RADIUS:
+  { "type": "SET_CORNER_RADIUS", "nodeId": "<node id from selection>", "radius": <number> }
+  Note: Sets uniform corner radius on the node. Use for adjusting roundness of buttons, cards, chips, etc.
 
 IMPORTANT CONTEXT:
 - The snapshot is a recursive tree. Each node has id, name, type, siblingIndex (0-based position among siblings), x, y (position relative to parent), width, height, and optionally children[].
