@@ -1458,8 +1458,6 @@ async function embedImagesInSnapshot(snap: NodeSnapshot, node: SceneNode): Promi
 
 // ── 1a-bis. Accessibility Audit ─────────────────────────────────────
 
-const AUDIT_BADGE_FRAME_NAME = "A11y Audit Badges";
-
 /** Extract the first solid fill colour from a node as {r,g,b} in 0-1 range */
 function extractFillColor(node: SceneNode): { r: number; g: number; b: number } | null {
   if (!("fills" in node)) return null;
@@ -1791,8 +1789,8 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
    * @param insideInstance  true when we are inside a component INSTANCE (skip most checks)
    */
   function walk(node: SceneNode, insideInstance: boolean = false) {
-    // Skip audit badge / changelog frames
-    if (node.name === AUDIT_BADGE_FRAME_NAME || node.name === CHANGE_LOG_FRAME_NAME) return;
+    // Skip changelog frames
+    if (node.name === CHANGE_LOG_FRAME_NAME) return;
 
     // Skip hidden nodes entirely
     if ("visible" in node && node.visible === false) return;
@@ -1919,72 +1917,7 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
   return deduped;
 }
 
-/** Create coloured badge annotations on the canvas next to flagged nodes (max 30) */
-function createAuditBadges(findings: AuditFinding[]): void {
-  // Remove any existing badges
-  clearAuditBadges();
 
-  if (findings.length === 0) return;
-
-  // Only create badges for the first 30 findings to avoid visual noise
-  const capped = findings.slice(0, 30);
-
-  for (const finding of capped) {
-    try {
-      const targetNode = figma.getNodeById(finding.nodeId) as SceneNode;
-      if (!targetNode) continue;
-
-      // Get absolute position of the target node
-      const abs = targetNode.absoluteTransform;
-      const nodeX = abs[0][2];
-      const nodeY = abs[1][2];
-
-      // Create badge
-      const badge = figma.createFrame();
-      badge.name = `a11y-badge: ${finding.nodeName}`;
-      badge.resize(20, 20);
-      badge.cornerRadius = 10;
-      badge.fills = [
-        {
-          type: "SOLID",
-          color: finding.severity === "error"
-            ? { r: 0.84, g: 0.19, b: 0.19 } // red
-            : { r: 0.95, g: 0.61, b: 0.07 }, // orange
-        },
-      ];
-
-      // Position at top-right corner of the target node
-      badge.x = nodeX + targetNode.width - 10;
-      badge.y = nodeY - 10;
-
-      // Add severity icon text (! or ⚠)
-      const iconText = figma.createText();
-      figma.loadFontAsync({ family: "Inter", style: "Bold" }).then(() => {
-        iconText.characters = "!";
-        iconText.fontSize = 12;
-        iconText.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
-        iconText.textAlignHorizontal = "CENTER";
-        iconText.textAlignVertical = "CENTER";
-        iconText.resize(20, 20);
-        badge.appendChild(iconText);
-      });
-
-      figma.currentPage.appendChild(badge);
-    } catch (e) {
-      console.warn("[a11y] Badge creation failed for", finding.nodeId, e);
-    }
-  }
-}
-
-/** Remove all audit badge annotations from the canvas */
-function clearAuditBadges(): void {
-  const badges = figma.currentPage.findAll(
-    (n) => n.name === AUDIT_BADGE_FRAME_NAME || n.name.startsWith("a11y-badge:")
-  );
-  for (const b of badges) {
-    b.remove();
-  }
-}
 
 // ── 1b. Create Nodes from Snapshot (Import) ─────────────────────────
 
@@ -8945,8 +8878,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       // ── UI ready handshake ────────────────────────────────
       case "ui-ready" as any: {
         // Deferred startup tasks — runs after UI is visible and interactive
-        clearAuditBadges();
-        loadCachedFullDesignSystem().catch(() => {});
+        setTimeout(() => loadCachedFullDesignSystem().catch(() => {}), 0);
         return;
       }
 
@@ -9136,13 +9068,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               auditScope = "component";
             }
           } else {
-            // All top-level frames (skip Change Log and Audit Badge frames)
+            // All top-level frames (skip Change Log frame)
             nodesToAudit = figma.currentPage.children.filter(
               (n) =>
                 n.type === "FRAME" &&
-                n.name !== CHANGE_LOG_FRAME_NAME &&
-                n.name !== AUDIT_BADGE_FRAME_NAME &&
-                !n.name.startsWith("a11y-badge:")
+                n.name !== CHANGE_LOG_FRAME_NAME
             ) as SceneNode[];
             auditScope = "all";
           }
@@ -9187,9 +9117,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             }
           }
 
-          // Create canvas badges
-          createAuditBadges(findings);
-
           // Send results to UI
           sendToUI({ type: "audit-results", findings } as any);
           figma.notify(`Accessibility audit: ${findings.length} issue(s) found.`, { timeout: 4000 });
@@ -9197,13 +9124,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           console.error("[a11y] Audit error:", err);
           sendToUI({ type: "audit-error", error: err.message || "Audit failed." } as any);
         }
-        break;
-      }
-
-      // ── Clear Audit Badges ────────────────────────────────
-      case "clear-audit" as any: {
-        clearAuditBadges();
-        figma.notify("Audit badges cleared.", { timeout: 2000 });
         break;
       }
 
@@ -9366,8 +9286,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           const roots: readonly SceneNode[] = sel.length > 0
             ? sel
             : figma.currentPage.children.filter(
-                (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME &&
-                  n.name !== AUDIT_BADGE_FRAME_NAME && !n.name.startsWith("a11y-badge:")
+                (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME
               ) as SceneNode[];
 
           function walkForStateAudit(node: SceneNode) {

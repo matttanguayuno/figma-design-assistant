@@ -800,21 +800,6 @@
       align-items: center;
       gap: 6px;
     }
-    .btn-clear-audit {
-      flex: none;
-      padding: 4px 10px;
-      font-size: 10px;
-      font-weight: 600;
-      border-radius: 4px;
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      cursor: pointer;
-    }
-    .btn-clear-audit:hover {
-      background: var(--border);
-      color: var(--text);
-    }
     .btn-close-audit {
       flex: none;
       width: 24px;
@@ -1945,7 +1930,6 @@
             </button>
           </div>
         </div>
-        <button id="btn-clear-audit" class="btn-clear-audit" title="Clear badges &amp; close" style="display:none;">Clear</button>
         <button id="btn-close-audit" class="btn-close-audit" title="Close panel" style="display:none;">
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
@@ -2225,7 +2209,6 @@
     const auditPanel = document.getElementById("audit-panel");
     const auditSummary = document.getElementById("audit-summary");
     const auditFindings = document.getElementById("audit-findings");
-    const btnClearAudit = document.getElementById("btn-clear-audit");
     const btnCloseAudit = document.getElementById("btn-close-audit");
     const auditProgressEl = document.getElementById("audit-progress");
     const stateAuditPanel = document.getElementById("state-audit-panel");
@@ -2324,12 +2307,10 @@
       btnCancelA11yAudit.style.display = "inline-flex";
       btnFixAll.style.display = "none";
       btnExportA11y.style.display = "none";
-      btnClearAudit.style.display = "none";
       btnCloseAudit.style.display = "none";
     }
     function showA11yResultsMode() {
       btnCancelA11yAudit.style.display = "none";
-      btnClearAudit.style.display = "inline-flex";
       btnCloseAudit.style.display = "inline-flex";
       // Fix All and Export are conditionally shown by the results handler
     }
@@ -2974,7 +2955,6 @@
     // ── Menu: Clear Accessibility Warnings ──────────────────────
     menuClearA11y.addEventListener("click", () => {
       closeMenu();
-      postToPlugin({ type: "clear-audit" });
       auditPanel.style.display = "none";
       setStatus("Accessibility warnings cleared.", "success");
     });
@@ -3394,13 +3374,6 @@
       auditPanel.style.display = "none";
     });
 
-    // ── Audit panel: Clear badges & close ───────────────────────
-    btnClearAudit.addEventListener("click", () => {
-      postToPlugin({ type: "clear-audit" });
-      auditPanel.style.display = "none";
-      setStatus("Audit cleared.", "success");
-    });
-
     // ── Audit panel: Fix All auto-fixable ───────────────────────
     btnFixAll.addEventListener("click", () => {
       if (!_lastA11yFindings || _lastA11yFindings.length === 0) return;
@@ -3413,7 +3386,6 @@
     btnCancelA11yAudit.addEventListener("click", () => {
       stopAuditProgress();
       auditPanel.style.display = "none";
-      postToPlugin({ type: "clear-audit" });
       setStatus("Audit cancelled.");
     });
 
