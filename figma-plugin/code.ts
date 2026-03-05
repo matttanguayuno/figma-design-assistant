@@ -10033,10 +10033,27 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   if (dsSummary.text?.secondary) dsTokenRef += `  - Text Secondary: ${dsSummary.text.secondary.hex} (style: "${dsSummary.text.secondary.styleName}")\n`;
                 }
 
+                // Build state convention hints so the LLM knows what each state looks like
+                const stateConventions: Record<string, string> = {
+                  hover: "Subtle surface tint overlay or slight color shift; may add faint elevation",
+                  focus: "Visible focus ring/border using primary or outline color; high contrast indicator",
+                  press: "Darker tint overlay on surface; pressed/active appearance; slightly subdued",
+                  pressed: "Darker tint overlay on surface; pressed/active appearance; slightly subdued",
+                  dragged: "Elevated shadow (SET_EFFECT with drop shadow), slight opacity change, lifted appearance; tinted surface",
+                  disabled: "Reduced opacity (0.38 for content, 0.12 for containers); muted colors; no interaction cues",
+                  selected: "Primary or accent fill; checkmark or filled indicator; on-primary text color",
+                  error: "Error/red color for borders and text; warning appearance",
+                };
+                const conventionKey = variantValue.toLowerCase();
+                const conventionHint = stateConventions[conventionKey]
+                  ? `\nSTANDARD VISUAL CONVENTION for "${variantValue}": ${stateConventions[conventionKey]}\nUse this as a guide — you MUST produce at least one operation.\n`
+                  : "";
+
                 // Build a generic, non-prescriptive prompt
                 const variantPrompt =
                   `This component variant has the property "${propNameForStyle}" set to "${variantValue}".\n` +
-                  `Apply appropriate visual styling to make this variant look correct for "${propNameForStyle}=${variantValue}".\n\n` +
+                  `Apply appropriate visual styling to make this variant look correct for "${propNameForStyle}=${variantValue}".\n` +
+                  `${conventionHint}\n` +
                   `COMPONENT STRUCTURE (current visual properties):\n${visualSummary}\n\n` +
                   `NODES WITH FILLS (main targets for visual changes):\n${fillNodeList}\n` +
                   `${dsTokenRef}\n` +
@@ -10047,7 +10064,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   `4. Use design system fill style names (via APPLY_FILL_STYLE) when available instead of arbitrary hex colors.\n` +
                   `5. The variant MUST look visibly different from the default/base variant.\n` +
                   `6. Determine what visual changes are appropriate for "${propNameForStyle}=${variantValue}" based on standard UI/UX conventions.\n` +
-                  `7. You may use SET_FILL_COLOR, APPLY_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.\n\n` +
+                  `7. You may use SET_FILL_COLOR, APPLY_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.\n` +
+                  `8. You MUST return at least one operation — an empty array is NEVER acceptable.\n\n` +
                   `Return ONLY the operations array. Every operation must target a real node ID from the list above.`;
 
                 const payload = {
@@ -10177,38 +10195,79 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"…` });
 
               // Build the full variant name for each new variant
-              // For existing sets: preserve all other properties from the template, change only the target property
-              const templateProps = isAddingToExistingSet ? parseVariantProps(templateSource.name) : [];
-
               const components: ComponentNode[] = [];
-              for (const vValue of variantValues) {
-                let fullName: string;
-                if (isAddingToExistingSet && templateProps.length > 0) {
-                  // Replace or add the target property value, preserve all others
-                  const newProps = templateProps.map(p =>
-                    p.key === currentPropName ? { key: p.key, value: vValue } : { ...p }
-                  );
-                  // If the property doesn't exist yet (new axis), add it
-                  if (!newProps.some(p => p.key === currentPropName)) {
-                    newProps.push({ key: currentPropName, value: vValue });
+
+              if (isAddingToExistingSet && existingSet) {
+                // ═══ MULTI-COMBO CLONING ═══
+                // Group existing children by their "other" properties (everything except the target property)
+                // so we create one clone per unique combination for each new variant value.
+                const children = existingSet.children as ComponentNode[];
+                const comboGroups = new Map<string, ComponentNode[]>();
+                for (const child of children) {
+                  const parsed = parseVariantProps(child.name);
+                  const otherProps = parsed.filter(p => p.key !== currentPropName);
+                  const comboKey = buildVariantName(otherProps);
+                  if (!comboGroups.has(comboKey)) comboGroups.set(comboKey, []);
+                  comboGroups.get(comboKey)!.push(child);
+                }
+
+                console.log(`[Variants] Found ${comboGroups.size} property combination(s) to clone for each new value`);
+
+                for (const vValue of variantValues) {
+                  const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+
+                  for (const [comboKey, groupChildren] of comboGroups) {
+                    // Pick the best template from this group (prefer enabled/default)
+                    const defaultNames = ["default", "rest", "base", "normal", "enabled"];
+                    let templateChild = groupChildren[0];
+                    for (const child of groupChildren) {
+                      const parsed = parseVariantProps(child.name);
+                      const targetProp = parsed.find(p => p.key === currentPropName);
+                      if (targetProp && defaultNames.includes(targetProp.value.toLowerCase())) {
+                        templateChild = child;
+                        break;
+                      }
+                    }
+
+                    // Build new variant name: replace target property value, preserve all others
+                    const parsed = parseVariantProps(templateChild.name);
+                    const newProps = parsed.map(p =>
+                      p.key === currentPropName ? { key: p.key, value: vValue } : { ...p }
+                    );
+                    if (!newProps.some(p => p.key === currentPropName)) {
+                      newProps.push({ key: currentPropName, value: vValue });
+                    }
+                    const fullName = buildVariantName(newProps);
+
+                    const comp = cloneAsComponent(templateChild, fullName);
+                    figma.currentPage.appendChild(comp);
+
+                    // Each combo has different base visuals (e.g. Outlined vs Elevated), so each needs LLM styling
+                    if (!isDefault) {
+                      await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                    } else {
+                      console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                    }
+
+                    components.push(comp);
                   }
-                  fullName = buildVariantName(newProps);
-                } else {
-                  fullName = `${currentPropName}=${vValue}`;
                 }
+              } else {
+                // ═══ SINGLE-TEMPLATE CLONING (new component set from scratch) ═══
+                for (const vValue of variantValues) {
+                  const fullName = `${currentPropName}=${vValue}`;
+                  const comp = cloneAsComponent(templateSource, fullName);
+                  figma.currentPage.appendChild(comp);
 
-                const comp = cloneAsComponent(templateSource, fullName);
-                figma.currentPage.appendChild(comp);
+                  const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                  if (!isDefault) {
+                    await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                  } else {
+                    console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                  }
 
-                // Skip LLM styling for default/base variants (they should look like the template)
-                const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
-                if (!isDefault) {
-                  await applyVariantStyleViaLLM(comp, vValue, currentPropName);
-                } else {
-                  console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                  components.push(comp);
                 }
-
-                components.push(comp);
               }
 
               if (isAddingToExistingSet && existingSet) {

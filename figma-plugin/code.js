@@ -7908,9 +7908,24 @@ DESIGN SYSTEM TOKENS:
                     if ((_f = dsSummary.text) == null ? void 0 : _f.secondary) dsTokenRef += `  - Text Secondary: ${dsSummary.text.secondary.hex} (style: "${dsSummary.text.secondary.styleName}")
 `;
                   }
+                  const stateConventions = {
+                    hover: "Subtle surface tint overlay or slight color shift; may add faint elevation",
+                    focus: "Visible focus ring/border using primary or outline color; high contrast indicator",
+                    press: "Darker tint overlay on surface; pressed/active appearance; slightly subdued",
+                    pressed: "Darker tint overlay on surface; pressed/active appearance; slightly subdued",
+                    dragged: "Elevated shadow (SET_EFFECT with drop shadow), slight opacity change, lifted appearance; tinted surface",
+                    disabled: "Reduced opacity (0.38 for content, 0.12 for containers); muted colors; no interaction cues",
+                    selected: "Primary or accent fill; checkmark or filled indicator; on-primary text color",
+                    error: "Error/red color for borders and text; warning appearance"
+                  };
+                  const conventionKey = variantValue.toLowerCase();
+                  const conventionHint = stateConventions[conventionKey] ? `
+STANDARD VISUAL CONVENTION for "${variantValue}": ${stateConventions[conventionKey]}
+Use this as a guide \u2014 you MUST produce at least one operation.
+` : "";
                   const variantPrompt = `This component variant has the property "${propNameForStyle}" set to "${variantValue}".
 Apply appropriate visual styling to make this variant look correct for "${propNameForStyle}=${variantValue}".
-
+${conventionHint}
 COMPONENT STRUCTURE (current visual properties):
 ${visualSummary}
 
@@ -7925,6 +7940,7 @@ CRITICAL RULES:
 5. The variant MUST look visibly different from the default/base variant.
 6. Determine what visual changes are appropriate for "${propNameForStyle}=${variantValue}" based on standard UI/UX conventions.
 7. You may use SET_FILL_COLOR, APPLY_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.
+8. You MUST return at least one operation \u2014 an empty array is NEVER acceptable.
 
 Return ONLY the operations array. Every operation must target a real node ID from the list above.`;
                   const payload = __spreadProps(__spreadValues({
@@ -8025,30 +8041,62 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                   templateSource = sourceNode;
                 }
                 sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"\u2026` });
-                const templateProps = isAddingToExistingSet ? parseVariantProps2(templateSource.name) : [];
                 const components = [];
-                for (const vValue of variantValues) {
-                  let fullName;
-                  if (isAddingToExistingSet && templateProps.length > 0) {
-                    const newProps = templateProps.map(
-                      (p) => p.key === currentPropName ? { key: p.key, value: vValue } : __spreadValues({}, p)
-                    );
-                    if (!newProps.some((p) => p.key === currentPropName)) {
-                      newProps.push({ key: currentPropName, value: vValue });
+                if (isAddingToExistingSet && existingSet) {
+                  const children = existingSet.children;
+                  const comboGroups = /* @__PURE__ */ new Map();
+                  for (const child of children) {
+                    const parsed = parseVariantProps2(child.name);
+                    const otherProps = parsed.filter((p) => p.key !== currentPropName);
+                    const comboKey = buildVariantName2(otherProps);
+                    if (!comboGroups.has(comboKey)) comboGroups.set(comboKey, []);
+                    comboGroups.get(comboKey).push(child);
+                  }
+                  console.log(`[Variants] Found ${comboGroups.size} property combination(s) to clone for each new value`);
+                  for (const vValue of variantValues) {
+                    const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                    for (const [comboKey, groupChildren] of comboGroups) {
+                      const defaultNames = ["default", "rest", "base", "normal", "enabled"];
+                      let templateChild = groupChildren[0];
+                      for (const child of groupChildren) {
+                        const parsed2 = parseVariantProps2(child.name);
+                        const targetProp = parsed2.find((p) => p.key === currentPropName);
+                        if (targetProp && defaultNames.includes(targetProp.value.toLowerCase())) {
+                          templateChild = child;
+                          break;
+                        }
+                      }
+                      const parsed = parseVariantProps2(templateChild.name);
+                      const newProps = parsed.map(
+                        (p) => p.key === currentPropName ? { key: p.key, value: vValue } : __spreadValues({}, p)
+                      );
+                      if (!newProps.some((p) => p.key === currentPropName)) {
+                        newProps.push({ key: currentPropName, value: vValue });
+                      }
+                      const fullName = buildVariantName2(newProps);
+                      const comp = cloneAsComponent2(templateChild, fullName);
+                      figma.currentPage.appendChild(comp);
+                      if (!isDefault) {
+                        await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                      } else {
+                        console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                      }
+                      components.push(comp);
                     }
-                    fullName = buildVariantName2(newProps);
-                  } else {
-                    fullName = `${currentPropName}=${vValue}`;
                   }
-                  const comp = cloneAsComponent2(templateSource, fullName);
-                  figma.currentPage.appendChild(comp);
-                  const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
-                  if (!isDefault) {
-                    await applyVariantStyleViaLLM(comp, vValue, currentPropName);
-                  } else {
-                    console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                } else {
+                  for (const vValue of variantValues) {
+                    const fullName = `${currentPropName}=${vValue}`;
+                    const comp = cloneAsComponent2(templateSource, fullName);
+                    figma.currentPage.appendChild(comp);
+                    const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                    if (!isDefault) {
+                      await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                    } else {
+                      console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                    }
+                    components.push(comp);
                   }
-                  components.push(comp);
                 }
                 if (isAddingToExistingSet && existingSet) {
                   for (const comp of components) {
