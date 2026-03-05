@@ -10168,6 +10168,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   comboYPositions.set(comboKey, groupChildren[0].y);
                 }
 
+                const targetPositions = new Map<ComponentNode, { x: number; y: number }>();
+
                 for (let vi = 0; vi < variantValues.length; vi++) {
                   const vValue = variantValues[vi];
                   const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
@@ -10202,9 +10204,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                     // Store target position to apply after moving into the component set
                     const targetY = comboYPositions.get(comboKey);
-                    (comp as any).__targetX = newColumnX;
-                    (comp as any).__targetY = targetY !== undefined ? targetY : comp.y;
-                    console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${(comp as any).__targetY}`);
+                    const posY = targetY !== undefined ? targetY : comp.y;
+                    targetPositions.set(comp, { x: newColumnX, y: posY });
+                    console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${posY}`);
 
                     // Each combo has different base visuals (e.g. Outlined vs Elevated), so each needs LLM styling
                     if (!isDefault) {
@@ -10238,11 +10240,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 for (const comp of components) {
                   existingSet.appendChild(comp);
                   // Apply grid positioning after the component is inside the set
-                  if ((comp as any).__targetX !== undefined) {
-                    comp.x = (comp as any).__targetX;
-                    comp.y = (comp as any).__targetY;
-                    delete (comp as any).__targetX;
-                    delete (comp as any).__targetY;
+                  const pos = targetPositions?.get(comp);
+                  if (pos) {
+                    comp.x = pos.x;
+                    comp.y = pos.y;
                   }
                 }
                 allCreatedSets.push(existingSet);
