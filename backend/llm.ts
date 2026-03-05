@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, buildGeneratePrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -532,10 +532,15 @@ export async function callLLMGenerate(
   selection?: any,
   fullDesignSystem?: any,
   dsSummary?: any,
-  layoutPlan?: any
+  layoutPlan?: any,
+  isComponentGeneration?: boolean
 ): Promise<unknown> {
-  const userPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
-  console.log(`[callLLMGenerate] System prompt: ${GENERATE_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
+  // Use component-specific prompt when generating component sets from scratch
+  const systemPrompt = isComponentGeneration ? GENERATE_COMPONENT_SYSTEM_PROMPT : GENERATE_SYSTEM_PROMPT;
+  const userPrompt = isComponentGeneration
+    ? buildGenerateComponentPrompt(prompt, designSystem, fullDesignSystem, dsSummary)
+    : buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
+  console.log(`[callLLMGenerate] isComponent=${!!isComponentGeneration}, System prompt: ${systemPrompt.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${systemPrompt.length + userPrompt.length} chars (~${Math.round((systemPrompt.length + userPrompt.length)/4)} tokens)`);
 
   // Hard safety: if the user prompt exceeds ~500K chars (~125K tokens), truncate it
   const MAX_USER_PROMPT_CHARS = 500000;
@@ -552,7 +557,7 @@ export async function callLLMGenerate(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, GENERATE_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
+    raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }

@@ -359,7 +359,7 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, layoutPlan } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, layoutPlan, isComponentGeneration } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -448,7 +448,8 @@ app.post("/generate", async (req: Request, res: Response) => {
       safeSelection,
       safeFullDS,
       dsSummary,
-      layoutPlan
+      layoutPlan,
+      isComponentGeneration
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));

@@ -453,6 +453,148 @@ When provided, reference snapshots are HIGHEST PRIORITY. Replicate their fillCol
 Generate the JSON now.`;
 
 
+// ── Component Set Generation System Prompt ──────────────────────────
+
+export const GENERATE_COMPONENT_SYSTEM_PROMPT = `You are an expert UI designer generating production-quality Figma component sets as JSON. Return ONLY valid JSON — no markdown, no prose, no explanation.
+
+═══ OUTPUT FORMAT ═══
+Return a single COMPONENT_SET containing COMPONENT children.
+Each COMPONENT child represents one variant of the component.
+
+═══ NODE TYPES & FIELDS ═══
+FRAME: name, type:"FRAME", width, layoutMode:"VERTICAL"|"HORIZONTAL", layoutSizingHorizontal:"FIXED"|"FILL"|"HUG", layoutSizingVertical:"FIXED"|"FILL"|"HUG", primaryAxisAlignItems:"MIN"|"CENTER"|"MAX"|"SPACE_BETWEEN", counterAxisAlignItems:"MIN"|"CENTER"|"MAX", paddingTop/Right/Bottom/Left, itemSpacing, fillColor:"#HEX", fillStyleName:"StyleName", strokeColor:"#HEX", strokeWeight, strokeTopWeight, strokeRightWeight, strokeBottomWeight, strokeLeftWeight, cornerRadius, clipsContent, opacity, effects[], children[]
+TEXT: name, type:"TEXT", characters, fontSize, fontFamily, fontStyle:"Regular"|"Medium"|"Semi Bold"|"Bold", fillColor, fillStyleName, textStyleName:"StyleName", textAlignHorizontal:"LEFT"|"CENTER"|"RIGHT", textDecoration:"UNDERLINE"|"STRIKETHROUGH", layoutSizingHorizontal, layoutSizingVertical:"HUG"
+RECTANGLE: name, type:"RECTANGLE", width, height, fillColor, fillStyleName, cornerRadius, layoutSizingHorizontal, layoutSizingVertical
+COMPONENT: name (MUST use Figma variant syntax — see below), type:"COMPONENT" — same fields as FRAME.
+COMPONENT_SET: name, type:"COMPONENT_SET", children[] of COMPONENTs only. Do NOT set fillColor/strokeColor on COMPONENT_SET itself.
+
+Effects: [{"type":"DROP_SHADOW","radius":8,"spread":0,"offset":{"x":0,"y":2},"color":{"r":0,"g":0,"b":0,"a":0.08}}]
+
+═══ VARIANT NAMING (CRITICAL) ═══
+Each COMPONENT child name MUST use Figma variant syntax: "Property1=Value1, Property2=Value2"
+Examples:
+  - Single property: "State=Default", "State=Hover", "State=Disabled"
+  - Multi-property: "Type=Filled, Size=Medium, State=Default"
+  - All variants must share the same property keys; only the values change.
+
+Choose appropriate variant properties based on the component type:
+  - Interactive components (buttons, inputs, toggles): include State variants (Default, Hover, Active/Pressed, Disabled, Focused)
+  - Sizing variants: Size (Small, Medium, Large)
+  - Style variants: Type/Variant (Filled, Outlined, Text/Ghost)
+  - Only include properties that make sense for the component being generated.
+
+═══ COMPONENT CONSTRUCTION RULES ═══
+1. Each COMPONENT variant MUST have FULL children[] — every variant is a complete, self-contained component.
+2. All variants of the same type MUST have the same dimensions (width, height).
+3. Variants should differ ONLY in visual properties (fillColor, opacity, effects, strokeColor) — NOT in structure or text content.
+4. Use auto-layout (layoutMode) on every COMPONENT and inner container FRAME.
+5. Buttons: minimum 44px height (touch target), paddingTop:10, paddingBottom:10, paddingLeft:16, paddingRight:16, cornerRadius:8.
+6. Inputs: minimum 44px height, appropriate padding, cornerRadius:8, strokeColor for borders.
+7. Use realistic placeholder text (e.g., "Submit", "Cancel", "Enter email...", not "Button" or "Text").
+
+═══ STATE STYLING CONVENTIONS ═══
+- Default: base styling with design system tokens
+- Hover: slightly lighter/adjusted fill, optional subtle shadow
+- Active/Pressed: slightly darker fill, optional inner shadow
+- Disabled: reduced opacity (0.4-0.5), desaturated fills
+- Focused: focus ring (DROP_SHADOW with spread:2-3, accent color, no offset)
+- Error: error/danger color for borders or fills
+- Selected: accent fill or highlight indication
+
+═══ STYLE BINDING (MANDATORY) ═══
+- EVERY node with a fillColor MUST also have fillStyleName if design system styles are provided.
+- EVERY TEXT node MUST have textStyleName if text styles are provided.
+- Use the curated palette from the user prompt — do NOT invent hex colors when DS styles exist.
+- When a dsSummary is provided, use its surface/text/brand roles to pick correct styles.
+
+═══ ANTI-PATTERNS (NEVER DO THESE) ═══
+- NEVER create variants with empty children[].
+- NEVER use different dimensions across variants of the same property group.
+- NEVER omit cornerRadius on buttons, inputs, cards.
+- NEVER use "STRETCH" for counterAxisAlignItems — invalid.
+- NEVER produce fewer than 3 variants unless explicitly asked for fewer.
+
+Generate the JSON now.`;
+
+
+// ── Component Generation User Prompt ────────────────────────────────
+
+export function buildGenerateComponentPrompt(
+  prompt: string,
+  designSystem: DesignSystemSnapshot,
+  fullDesignSystem?: any,
+  dsSummary?: any
+): string {
+  const parts: string[] = [
+    "## Component Request",
+    prompt,
+  ];
+
+  // ── DSSummary (curated palette) ──
+  if (dsSummary) {
+    parts.push("", "## Design System Summary (USE THESE STYLES)");
+
+    if (dsSummary.surfaces?.length > 0) {
+      parts.push("### Surface Colors");
+      for (const c of dsSummary.surfaces) {
+        parts.push("- " + c.name + ": " + c.hex + " → fillStyleName: \"" + c.name + "\"  role: " + c.role);
+      }
+    }
+    if (dsSummary.textColors?.length > 0) {
+      parts.push("### Text Colors");
+      for (const c of dsSummary.textColors) {
+        parts.push("- " + c.name + ": " + c.hex + " → fillStyleName: \"" + c.name + "\"  role: " + c.role);
+      }
+    }
+    if (dsSummary.brandColors?.length > 0) {
+      parts.push("### Brand / Accent Colors");
+      for (const c of dsSummary.brandColors) {
+        parts.push("- " + c.name + ": " + c.hex + " → fillStyleName: \"" + c.name + "\"  role: " + c.role);
+      }
+    }
+    if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
+      parts.push("### Typography Roles");
+      for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
+        const fontSize = dsSummary.typeRoleFontSizes?.[role];
+        parts.push("- " + role + ": textStyleName=\"" + styleName + "\"" + (fontSize ? ", fontSize: " + fontSize : ""));
+      }
+    }
+    if (dsSummary.spacingScale?.length > 0) {
+      parts.push("### Spacing Scale: " + dsSummary.spacingScale.join(", "));
+    }
+    if (dsSummary.radii?.length > 0) {
+      parts.push("### Corner Radii: " + dsSummary.radii.join(", "));
+    }
+    if (dsSummary.shadow) {
+      parts.push("### Default Shadow: " + JSON.stringify(dsSummary.shadow));
+    }
+  }
+
+  // ── Raw fill/text styles ──
+  const fillStyles = designSystem.fillStyles || [];
+  const textStyles = designSystem.textStyles || [];
+  if (fillStyles.length > 0) {
+    parts.push("", "## Available Fill Styles");
+    parts.push(JSON.stringify(fillStyles.slice(0, 30)));
+  }
+  if (textStyles.length > 0) {
+    parts.push("", "## Available Text Styles");
+    parts.push(JSON.stringify(textStyles.slice(0, 20)));
+  }
+
+  // ── Full design system context ──
+  if (fullDesignSystem) {
+    parts.push("", formatFullDesignSystemSection(fullDesignSystem));
+  }
+
+  parts.push("", "Generate the component set JSON now.");
+
+  const result = parts.join("\n");
+  console.log(`[buildGenerateComponentPrompt] total prompt size: ${result.length} chars (~${Math.round(result.length / 4)} tokens)`);
+  return result;
+}
+
+
 // ── Generation User Prompt ──────────────────────────────────────────
 
 export function buildGeneratePrompt(

@@ -7359,6 +7359,7 @@ RULES:
           const selectionIsComponentSet = figma.currentPage.selection.length > 0 && figma.currentPage.selection[0].type === "COMPONENT_SET";
           const isCreateVariantsIntent = hasVariantKeyword && hasCreateKeyword || selectionIsComponentSet && hasCreateKeyword && hasVariantKeyword;
           const isCreateComponentIntent = /\b(create|make|convert|turn)\b.+\bcomponent\b/i.test(intentText) && !/\bcomponent\s*set\b/i.test(intentText) && !isCreateVariantsIntent;
+          const isGenerateComponentSetIntent = !isCreateVariantsIntent && /\b(create|make|generate|design|build)\b/i.test(intentText) && /\bcomponent\s*set\b/i.test(intentText) && !selectionIsComponentSet;
           const isDetachInstanceIntent = /\b(detach|unlink|disconnect)\b.+\b(instance|component)\b/i.test(intentText) || /\binstance\b.+\b(detach|unlink)\b/i.test(intentText);
           const isGroupIntent = /\b(group)\b.+\b(selection|selected|these|nodes?|layers?|elements?)\b/i.test(intentText) || /\b(selection|selected|these)\b.+\bgroup\b/i.test(intentText);
           const isUngroupIntent = /\b(ungroup|un-group)\b/i.test(intentText);
@@ -7546,7 +7547,15 @@ RULES:
             const nativeJobIdV = ++_nextJobId;
             sendToUI({ type: "job-started", jobId: nativeJobIdV, prompt: intentText });
             try {
-              let cloneAsComponent2 = function(src, varName, pName) {
+              let parseVariantProps2 = function(variantName) {
+                return variantName.split(",").map((segment) => {
+                  const eqIdx = segment.indexOf("=");
+                  if (eqIdx < 0) return { key: segment.trim(), value: segment.trim() };
+                  return { key: segment.substring(0, eqIdx).trim(), value: segment.substring(eqIdx + 1).trim() };
+                });
+              }, buildVariantName2 = function(props) {
+                return props.map((p) => `${p.key}=${p.value}`).join(", ");
+              }, cloneAsComponent2 = function(src, fullName) {
                 var _a2;
                 let clone = src.clone();
                 if (clone.type === "INSTANCE") {
@@ -7567,12 +7576,12 @@ RULES:
                 }
                 detachNested(clone);
                 if (clone.type === "COMPONENT") {
-                  clone.name = `${pName}=${varName}`;
+                  clone.name = fullName;
                   console.log(`[Variants] cloneAsComponent: COMPONENT path \u2014 ${((_a2 = clone.children) == null ? void 0 : _a2.length) || 0} children preserved`);
                   return clone;
                 }
                 const comp = figma.createComponent();
-                comp.name = `${pName}=${varName}`;
+                comp.name = fullName;
                 comp.resize(clone.width, clone.height);
                 comp.fills = [];
                 comp.clipsContent = false;
@@ -7598,6 +7607,7 @@ RULES:
                 const lines = [];
                 let desc = `${indent}\u2022 "${snap.name}" (${snap.type}, id="${snap.id}")`;
                 if (snap.fillColor) desc += ` fill=${snap.fillColor}`;
+                if (snap.fillStyleName) desc += ` fillStyle="${snap.fillStyleName}"`;
                 if (snap.opacity !== void 0 && snap.opacity < 1) desc += ` opacity=${snap.opacity}`;
                 if (snap.strokeColor) desc += ` stroke=${snap.strokeColor}`;
                 if (snap.cornerRadius) desc += ` radius=${snap.cornerRadius}`;
@@ -7621,106 +7631,48 @@ RULES:
                   }
                 }
                 return result;
-              }, adjustHexColor2 = function(hex, factor) {
-                const r = parseInt(hex.slice(1, 3), 16);
-                const g = parseInt(hex.slice(3, 5), 16);
-                const b = parseInt(hex.slice(5, 7), 16);
-                const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
-                if (factor > 1) {
-                  const t = factor - 1;
-                  return `#${clamp(r + (255 - r) * t).toString(16).padStart(2, "0")}${clamp(g + (255 - g) * t).toString(16).padStart(2, "0")}${clamp(b + (255 - b) * t).toString(16).padStart(2, "0")}`.toUpperCase();
-                } else {
-                  return `#${clamp(r * factor).toString(16).padStart(2, "0")}${clamp(g * factor).toString(16).padStart(2, "0")}${clamp(b * factor).toString(16).padStart(2, "0")}`.toUpperCase();
-                }
-              }, applyFallbackVariantStyle2 = function(comp, varName) {
-                const state = varName.toLowerCase();
-                console.log(`[Variants] Applying fallback styling for "${varName}"`);
-                const compSnap = snapshotNode(comp, 0);
-                const fillNodes = collectFillNodes2(compSnap);
-                if (fillNodes.length === 0) return;
-                for (const fNode of fillNodes) {
-                  const node = figma.getNodeById(fNode.id);
-                  if (!node || !("fills" in node)) continue;
-                  const fills = node.fills;
-                  if (!Array.isArray(fills) || fills.length === 0) continue;
-                  const newFills = fills.map((f) => {
-                    if (f.type !== "SOLID") return f;
-                    const solid = f;
-                    const hexR = Math.round(solid.color.r * 255).toString(16).padStart(2, "0");
-                    const hexG = Math.round(solid.color.g * 255).toString(16).padStart(2, "0");
-                    const hexB = Math.round(solid.color.b * 255).toString(16).padStart(2, "0");
-                    const origHex = `#${hexR}${hexG}${hexB}`;
-                    let newHex = origHex;
-                    if (state === "hover") {
-                      newHex = adjustHexColor2(origHex, 1.25);
-                    } else if (state === "active" || state === "pressed") {
-                      newHex = adjustHexColor2(origHex, 0.65);
-                    } else if (state === "disabled") {
-                      newHex = adjustHexColor2(origHex, 1.4);
-                    } else if (state === "focused" || state === "focus") {
-                      newHex = adjustHexColor2(origHex, 1.1);
-                    } else if (state === "error" || state === "danger") {
-                      newHex = "#D32F2F";
-                    } else {
-                      newHex = adjustHexColor2(origHex, 0.85);
-                    }
-                    const nr = parseInt(newHex.slice(1, 3), 16) / 255;
-                    const ng = parseInt(newHex.slice(3, 5), 16) / 255;
-                    const nb = parseInt(newHex.slice(5, 7), 16) / 255;
-                    return __spreadProps(__spreadValues({}, solid), { color: { r: nr, g: ng, b: nb } });
-                  });
-                  node.fills = newFills;
-                }
-                if (state === "disabled") {
-                  comp.opacity = 0.5;
-                }
-                if (state === "hover") {
-                  comp.effects = [
-                    { type: "DROP_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.15 }, offset: { x: 0, y: 2 }, radius: 6, spread: 0, visible: true, blendMode: "NORMAL" }
-                  ];
-                } else if (state === "active" || state === "pressed") {
-                  comp.effects = [
-                    { type: "INNER_SHADOW", color: { r: 0, g: 0, b: 0, a: 0.25 }, offset: { x: 0, y: 2 }, radius: 4, spread: 0, visible: true, blendMode: "NORMAL" }
-                  ];
-                } else if (state === "focused" || state === "focus") {
-                  comp.effects = [
-                    { type: "DROP_SHADOW", color: { r: 0.25, g: 0.4, b: 1, a: 0.5 }, offset: { x: 0, y: 0 }, radius: 0, spread: 3, visible: true, blendMode: "NORMAL" }
-                  ];
-                }
-                figma.notify(`Applied fallback styling for "${varName}"`, { timeout: 2e3 });
               };
-              var cloneAsComponent = cloneAsComponent2, describeNodeVisuals = describeNodeVisuals2, collectFillNodes = collectFillNodes2, adjustHexColor = adjustHexColor2, applyFallbackVariantStyle = applyFallbackVariantStyle2;
+              var parseVariantProps = parseVariantProps2, buildVariantName = buildVariantName2, cloneAsComponent = cloneAsComponent2, describeNodeVisuals = describeNodeVisuals2, collectFillNodes = collectFillNodes2;
               sendToUI({ type: "status", message: "Understanding your request\u2026" });
               let existingVariantInfo = "";
               const componentSetNodes = [...selection].filter((n) => n.type === "COMPONENT_SET");
               if (componentSetNodes.length > 0) {
-                const allExisting = [];
+                const allParsed = [];
                 for (const csNode of componentSetNodes) {
                   const children = csNode.children;
                   for (const c of children) {
-                    const eqIndex = c.name.indexOf("=");
-                    allExisting.push(eqIndex >= 0 ? c.name.substring(eqIndex + 1).trim() : c.name);
+                    allParsed.push({ name: c.name, props: parseVariantProps2(c.name) });
                   }
                 }
-                if (allExisting.length > 0) {
+                if (allParsed.length > 0) {
+                  const propMap = /* @__PURE__ */ new Map();
+                  for (const v of allParsed) {
+                    for (const p of v.props) {
+                      if (!propMap.has(p.key)) propMap.set(p.key, /* @__PURE__ */ new Set());
+                      propMap.get(p.key).add(p.value);
+                    }
+                  }
+                  const propDesc = [...propMap.entries()].map(([key, vals]) => `  - "${key}": [${[...vals].join(", ")}]`).join("\n");
                   existingVariantInfo = `
-Some component sets already have these variants: [${[...new Set(allExisting)].join(", ")}]. Do NOT include variants that already exist.`;
+The component set already has these variant properties and values:
+${propDesc}
+Do NOT include variant values that already exist for the property being added to.`;
                 }
               }
               const parsePrompt = `The user said: "${intentText}"
-They are working with ${selection.length > 1 ? selection.length + " UI components" : "a UI component"} and want to create variant states.${existingVariantInfo}
+They are working with ${selection.length > 1 ? selection.length + " UI components" : "a UI component"} and want to create variants.${existingVariantInfo}
 
 Extract the following from the user's message:
-1. "variantNames": An array of state/variant names to create (e.g., ["Hover", "Active", "Disabled"]).
-   - Capitalize each name (e.g., "hover" \u2192 "Hover").
-   - If the user says "missing" or "all" without specifying names, infer common UI states: Default, Hover, Active, Disabled \u2014 but exclude any that already exist.
-   - If the user asks for a single state, return just that one.
-   - Only include actual UI state names, not filler words.
-2. "propertyName": The Figma variant property name (e.g., "State", "Size", "Type"). Default to "State" if not specified.
+1. "variantValues": An array of variant values to create (e.g., ["Hover", "Active", "Disabled"] or ["Small", "Medium", "Large"]).
+   - Capitalize each value (e.g., "hover" \u2192 "Hover").
+   - If the user says "missing" or "all" without specifying values, infer what's commonly missing for this type of component based on the existing variants shown above.
+   - If the user asks for a single variant, return just that one.
+   - Only include actual variant values, not filler words.
+2. "propertyName": The Figma variant property name this applies to (e.g., "State", "Size", "Type", "Variant"). Infer from context \u2014 if the user says sizes, use "Size"; if states, use "State"; etc. If not clear, default to "State".
 
 Respond with ONLY valid JSON, no markdown:
-{"variantNames": ["..."], "propertyName": "..."}`;
-              let variantNames = [];
+{"variantValues": ["..."], "propertyName": "..."}`;
+              let variantValues = [];
               let propName = "State";
               try {
                 const parsePayload = {
@@ -7733,83 +7685,144 @@ Respond with ONLY valid JSON, no markdown:
                 };
                 const parseResult = await fetchViaUI("/plan?lenient=true&analyze=true", parsePayload);
                 let parsed = null;
-                if (parseResult.variantNames) {
+                if (parseResult.variantValues) {
                   parsed = parseResult;
+                }
+                if (!parsed && parseResult.variantNames) {
+                  parsed = { variantValues: parseResult.variantNames, propertyName: parseResult.propertyName };
                 }
                 if (!parsed) {
                   const rawStr = JSON.stringify(parseResult);
-                  const jsonMatch = rawStr.match(/\{"variantNames"\s*:\s*\[.*?\]\s*,\s*"propertyName"\s*:\s*"[^"]*"\s*\}/);
+                  const jsonMatch = rawStr.match(/\{[^}]*"variant(?:Values|Names)"\s*:\s*\[.*?\][^}]*\}/);
                   if (jsonMatch) {
-                    parsed = JSON.parse(jsonMatch[0]);
+                    const j = JSON.parse(jsonMatch[0]);
+                    parsed = { variantValues: j.variantValues || j.variantNames, propertyName: j.propertyName };
                   }
                 }
                 if (!parsed && parseResult._raw) {
-                  const jsonMatch = parseResult._raw.match(/\{"variantNames"\s*:\s*\[.*?\]\s*,\s*"propertyName"\s*:\s*"[^"]*"\s*\}/);
+                  const jsonMatch = parseResult._raw.match(/\{[^}]*"variant(?:Values|Names)"\s*:\s*\[.*?\][^}]*\}/);
                   if (jsonMatch) {
-                    parsed = JSON.parse(jsonMatch[0]);
+                    const j = JSON.parse(jsonMatch[0]);
+                    parsed = { variantValues: j.variantValues || j.variantNames, propertyName: j.propertyName };
                   }
                 }
-                if (parsed && Array.isArray(parsed.variantNames) && parsed.variantNames.length > 0) {
-                  variantNames = parsed.variantNames.map((n) => String(n).charAt(0).toUpperCase() + String(n).slice(1));
+                if (parsed && Array.isArray(parsed.variantValues) && parsed.variantValues.length > 0) {
+                  variantValues = parsed.variantValues.map((n) => String(n).charAt(0).toUpperCase() + String(n).slice(1));
                   if (parsed.propertyName && typeof parsed.propertyName === "string") {
                     propName = parsed.propertyName;
                   }
-                  console.log(`[Variants] LLM parsed intent: names=[${variantNames.join(", ")}], property="${propName}"`);
+                  console.log(`[Variants] LLM parsed intent: values=[${variantValues.join(", ")}], property="${propName}"`);
                 } else {
-                  console.warn(`[Variants] LLM intent parsing returned no variant names, using fallback`);
+                  console.warn(`[Variants] LLM intent parsing returned no variant values, using fallback`);
                 }
               } catch (parseErr) {
                 console.warn(`[Variants] LLM intent parsing failed: ${parseErr.message}, using fallback`);
               }
-              if (variantNames.length === 0) {
-                const knownStates = ["default", "hover", "active", "pressed", "disabled", "focused", "focus", "selected", "error", "loading"];
-                const foundStates = knownStates.filter((s) => new RegExp(`\\b${s}\\b`, "i").test(intentText));
-                if (foundStates.length > 0) {
-                  variantNames = foundStates.map((s) => s.charAt(0).toUpperCase() + s.slice(1));
+              if (variantValues.length === 0) {
+                const knownValues = [
+                  "default",
+                  "hover",
+                  "active",
+                  "pressed",
+                  "disabled",
+                  "focused",
+                  "focus",
+                  "selected",
+                  "error",
+                  "loading",
+                  "small",
+                  "medium",
+                  "large",
+                  "filled",
+                  "outlined",
+                  "text",
+                  "primary",
+                  "secondary",
+                  "tertiary",
+                  "success",
+                  "warning",
+                  "danger",
+                  "info"
+                ];
+                const foundValues = knownValues.filter((s) => new RegExp(`\\b${s}\\b`, "i").test(intentText));
+                if (foundValues.length > 0) {
+                  variantValues = foundValues.map((s) => s.charAt(0).toUpperCase() + s.slice(1));
                 } else {
-                  variantNames = ["Default", "Hover", "Active", "Disabled"];
+                  variantValues = ["Default", "Hover", "Active", "Disabled"];
                 }
-                console.log(`[Variants] Fallback parsed: [${variantNames.join(", ")}]`);
+                console.log(`[Variants] Fallback parsed: [${variantValues.join(", ")}]`);
               }
-              async function applyVariantStyleViaLLM(comp, varName) {
-                const state = varName.toLowerCase();
-                if (state === "default" || state === "normal" || state === "rest" || state === "base") {
-                  console.log(`[Variants] Skipping LLM for "${varName}" (default state)`);
-                  return;
-                }
+              async function applyVariantStyleViaLLM(comp, variantValue, propNameForStyle) {
+                var _a2, _b2, _c2, _d2, _e, _f;
                 try {
                   const compSnapshot = snapshotNode(comp, 0);
                   const compSelection = { nodes: [compSnapshot] };
                   const designSystem = await extractDesignSystemSnapshot();
+                  const dsSummary = buildDSSummary(designSystem);
                   const visualSummary = describeNodeVisuals2(compSnapshot);
                   const fillNodes = collectFillNodes2(compSnapshot);
                   const fillNodeList = fillNodes.map((n) => `  - id="${n.id}" name="${n.name}" currentFill=${n.fillColor}`).join("\n");
-                  const variantPrompt = `Apply "${varName}" state styling to this UI component.
+                  let dsTokenRef = "";
+                  const fillStyles = designSystem.fillStyles || [];
+                  const textStyles = designSystem.textStyles || [];
+                  if (fillStyles.length > 0) {
+                    dsTokenRef += `
 
-COMPONENT STRUCTURE (node tree with current visual properties):
+AVAILABLE FILL STYLES (use fillStyleName when appropriate):
+`;
+                    for (const fs of fillStyles.slice(0, 30)) {
+                      dsTokenRef += `  - "${fs.name}"${fs.hex ? ` (${fs.hex})` : ""}
+`;
+                    }
+                  }
+                  if (textStyles.length > 0) {
+                    dsTokenRef += `
+AVAILABLE TEXT STYLES (use textStyleName when appropriate):
+`;
+                    for (const ts of textStyles.slice(0, 20)) {
+                      dsTokenRef += `  - "${ts.name}"${ts.fontSize ? ` (${ts.fontSize}px)` : ""}
+`;
+                    }
+                  }
+                  if ((_b2 = (_a2 = dsSummary.brand) == null ? void 0 : _a2.primary) == null ? void 0 : _b2.hex) {
+                    dsTokenRef += `
+DESIGN SYSTEM TOKENS:
+`;
+                    if (dsSummary.brand.primary) dsTokenRef += `  - Brand Primary: ${dsSummary.brand.primary.hex} (style: "${dsSummary.brand.primary.styleName}")
+`;
+                    if (dsSummary.brand.secondary) dsTokenRef += `  - Brand Secondary: ${dsSummary.brand.secondary.hex} (style: "${dsSummary.brand.secondary.styleName}")
+`;
+                    if (dsSummary.brand.accent) dsTokenRef += `  - Accent: ${dsSummary.brand.accent.hex} (style: "${dsSummary.brand.accent.styleName}")
+`;
+                    if (dsSummary.brand.onPrimary) dsTokenRef += `  - On Primary: ${dsSummary.brand.onPrimary.hex} (style: "${dsSummary.brand.onPrimary.styleName}")
+`;
+                    if ((_c2 = dsSummary.surfaces) == null ? void 0 : _c2.background) dsTokenRef += `  - Background: ${dsSummary.surfaces.background.hex} (style: "${dsSummary.surfaces.background.styleName}")
+`;
+                    if ((_d2 = dsSummary.surfaces) == null ? void 0 : _d2.surface) dsTokenRef += `  - Surface: ${dsSummary.surfaces.surface.hex} (style: "${dsSummary.surfaces.surface.styleName}")
+`;
+                    if ((_e = dsSummary.text) == null ? void 0 : _e.primary) dsTokenRef += `  - Text Primary: ${dsSummary.text.primary.hex} (style: "${dsSummary.text.primary.styleName}")
+`;
+                    if ((_f = dsSummary.text) == null ? void 0 : _f.secondary) dsTokenRef += `  - Text Secondary: ${dsSummary.text.secondary.hex} (style: "${dsSummary.text.secondary.styleName}")
+`;
+                  }
+                  const variantPrompt = `This component variant has the property "${propNameForStyle}" set to "${variantValue}".
+Apply appropriate visual styling to make this variant look correct for "${propNameForStyle}=${variantValue}".
+
+COMPONENT STRUCTURE (current visual properties):
 ${visualSummary}
 
-NODES WITH FILLS (these are the main targets for color changes):
+NODES WITH FILLS (main targets for visual changes):
 ${fillNodeList}
-
+${dsTokenRef}
 CRITICAL RULES:
 1. ONLY use the node IDs listed above \u2014 do NOT invent new IDs.
 2. Do NOT change text content, font family, or font size.
 3. Do NOT use DUPLICATE_FRAME, INSERT_COMPONENT, or RESIZE_NODE.
-4. You MUST return at least one SET_FILL_COLOR operation to visually differentiate this state.
-5. Use design system colors/tokens when available.
+4. Use design system fill style names (via SET_FILL_STYLE) when available instead of arbitrary hex colors.
+5. The variant MUST look visibly different from the default/base variant.
+6. Determine what visual changes are appropriate for "${propNameForStyle}=${variantValue}" based on standard UI/UX conventions.
+7. You may use SET_FILL_COLOR, SET_FILL_STYLE, SET_STROKE, SET_OPACITY, SET_EFFECT, SET_CORNER_RADIUS as needed.
 
-REQUIRED CHANGES for "${varName}" state:
-\u2022 The component MUST look visibly different from the default state.
-\u2022 Use SET_FILL_COLOR on the nodes listed above to change their fill colors.
-` + (state === "hover" ? `\u2022 HOVER state: lighten the primary fill color by 15-25%. Add a subtle DROP_SHADOW for elevation.
-` : state === "active" || state === "pressed" ? `\u2022 ACTIVE/PRESSED state: darken the primary fill color by 25-35%. Add an INNER_SHADOW for depth. The color should be noticeably darker than the default.
-` : state === "disabled" ? `\u2022 DISABLED state: desaturate/grey out all fill colors. Set opacity to 0.4-0.5 using SET_OPACITY.
-` : state === "focused" || state === "focus" ? `\u2022 FOCUSED state: add a visible focus ring (DROP_SHADOW with spread:3, no offset, blue/accent color). Slightly lighten the fill.
-` : state === "error" || state === "danger" ? `\u2022 ERROR state: change the primary fill to a red/danger color (e.g., #D32F2F or design system error color).
-` : state === "selected" ? `\u2022 SELECTED state: use accent/selection color for the fill. Consider adding a subtle border or highlight.
-` : `\u2022 For "${varName}": apply appropriate visual changes based on common UI patterns for this state.
-`) + `
 Return ONLY the operations array. Every operation must target a real node ID from the list above.`;
                   const payload = __spreadProps(__spreadValues({
                     intent: variantPrompt,
@@ -7820,37 +7833,37 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                     provider: _selectedProvider,
                     model: _selectedModel
                   });
-                  sendToUI({ type: "status", message: `Styling "${varName}" variant via AI\u2026` });
-                  console.log(`[Variants] Sending "${varName}" to LLM for styling...`);
+                  sendToUI({ type: "status", message: `Styling "${propNameForStyle}=${variantValue}" variant via AI\u2026` });
+                  console.log(`[Variants] Sending "${propNameForStyle}=${variantValue}" to LLM for styling...`);
                   console.log(`[Variants] Fill targets: ${fillNodes.map((n) => `${n.name}(${n.fillColor})`).join(", ")}`);
                   const batch = await fetchViaUI("/plan?lenient=true", payload);
                   if (batch.operations && batch.operations.length > 0) {
                     const safeOps = batch.operations.filter(
                       (o) => o.type !== "DUPLICATE_FRAME" && o.type !== "INSERT_COMPONENT" && o.type !== "RESIZE_NODE"
                     );
-                    console.log(`[Variants] Applying ${safeOps.length} LLM operations for "${varName}" (filtered ${batch.operations.length - safeOps.length} unsafe ops)`);
+                    console.log(`[Variants] Applying ${safeOps.length} LLM operations for "${variantValue}" (filtered ${batch.operations.length - safeOps.length} unsafe ops)`);
                     let appliedCount = 0;
                     for (const op of safeOps) {
                       try {
                         await applyOperation(op);
                         appliedCount++;
                       } catch (err) {
-                        console.warn(`[Variants] Op failed for "${varName}": ${err.message}`, JSON.stringify(op));
+                        console.warn(`[Variants] Op failed for "${variantValue}": ${err.message}`, JSON.stringify(op));
                       }
                     }
                     if (appliedCount === 0) {
-                      console.warn(`[Variants] All ${safeOps.length} LLM operations failed for "${varName}", using fallback`);
-                      applyFallbackVariantStyle2(comp, varName);
+                      console.warn(`[Variants] All ${safeOps.length} LLM operations failed for "${variantValue}", leaving as clone`);
+                      figma.notify(`Could not auto-style "${propNameForStyle}=${variantValue}" \u2014 left as clone for manual editing`, { timeout: 3e3 });
                     } else {
-                      console.log(`[Variants] Successfully applied ${appliedCount}/${safeOps.length} operations for "${varName}"`);
+                      console.log(`[Variants] Successfully applied ${appliedCount}/${safeOps.length} operations for "${variantValue}"`);
                     }
                   } else {
-                    console.warn(`[Variants] LLM returned no operations for "${varName}", using fallback`);
-                    applyFallbackVariantStyle2(comp, varName);
+                    console.warn(`[Variants] LLM returned no operations for "${variantValue}", leaving as clone`);
+                    figma.notify(`No styling changes returned for "${propNameForStyle}=${variantValue}" \u2014 left as clone`, { timeout: 3e3 });
                   }
                 } catch (err) {
-                  console.warn(`[Variants] LLM styling failed for "${varName}": ${err.message}, using fallback`);
-                  applyFallbackVariantStyle2(comp, varName);
+                  console.warn(`[Variants] LLM styling failed for "${variantValue}": ${err.message}, leaving as clone`);
+                  figma.notify(`Styling failed for "${propNameForStyle}=${variantValue}" \u2014 left as clone for manual editing`, { timeout: 3e3 });
                 }
               }
               const allCreatedSets = [];
@@ -7859,7 +7872,7 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                 const isAddingToExistingSet = sourceNode.type === "COMPONENT_SET";
                 let currentPropName = propName;
                 let templateSource;
-                let existingVariantNames = [];
+                let existingParsedVariants = [];
                 let existingSet = null;
                 if (isAddingToExistingSet) {
                   existingSet = sourceNode;
@@ -7868,34 +7881,64 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                     console.warn(`[Variants] Skipping empty component set "${sourceNode.name}"`);
                     continue;
                   }
-                  templateSource = children[0];
-                  const firstChildName = children[0].name;
-                  const eqIdx = firstChildName.indexOf("=");
-                  if (eqIdx >= 0 && currentPropName === "State") {
-                    currentPropName = firstChildName.substring(0, eqIdx).trim();
+                  existingParsedVariants = children.map((c) => parseVariantProps2(c.name));
+                  const allKeys = /* @__PURE__ */ new Set();
+                  for (const vp of existingParsedVariants) {
+                    for (const p of vp) allKeys.add(p.key);
                   }
-                  existingVariantNames = children.map((c) => {
-                    const eqIndex = c.name.indexOf("=");
-                    return eqIndex >= 0 ? c.name.substring(eqIndex + 1).trim().toLowerCase() : c.name.toLowerCase();
-                  });
-                  console.log(`[Variants] Existing set: "${existingSet.name}" variants: [${existingVariantNames.join(", ")}], prop="${currentPropName}"`);
+                  if (allKeys.has(currentPropName)) {
+                  } else if (allKeys.size === 1) {
+                    currentPropName = [...allKeys][0];
+                  }
+                  const defaultNames = ["default", "rest", "base", "normal"];
+                  let bestTemplate = null;
+                  for (const child of children) {
+                    const childProps = parseVariantProps2(child.name);
+                    const propForAxis = childProps.find((p) => p.key === currentPropName);
+                    if (propForAxis && defaultNames.includes(propForAxis.value.toLowerCase())) {
+                      bestTemplate = child;
+                      break;
+                    }
+                  }
+                  templateSource = bestTemplate || children[0];
+                  const existingValuesForProp = /* @__PURE__ */ new Set();
+                  for (const vp of existingParsedVariants) {
+                    const match = vp.find((p) => p.key === currentPropName);
+                    if (match) existingValuesForProp.add(match.value.toLowerCase());
+                  }
+                  console.log(`[Variants] Existing set: "${existingSet.name}" prop="${currentPropName}" existingValues=[${[...existingValuesForProp].join(", ")}], template="${templateSource.name}"`);
+                  variantValues = variantValues.filter((v) => !existingValuesForProp.has(v.toLowerCase()));
+                  if (variantValues.length === 0) {
+                    console.log(`[Variants] All variant values already exist for "${sourceNode.name}", skipping.`);
+                    continue;
+                  }
                 } else {
                   templateSource = sourceNode;
                 }
-                let nodeVariantNames = [...variantNames];
-                if (isAddingToExistingSet && existingVariantNames.length > 0) {
-                  nodeVariantNames = nodeVariantNames.filter((n) => !existingVariantNames.includes(n.toLowerCase()));
-                  if (nodeVariantNames.length === 0) {
-                    console.log(`[Variants] All variants already exist for "${sourceNode.name}", skipping.`);
-                    continue;
-                  }
-                }
                 sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"\u2026` });
+                const templateProps = isAddingToExistingSet ? parseVariantProps2(templateSource.name) : [];
                 const components = [];
-                for (const vName of nodeVariantNames) {
-                  const comp = cloneAsComponent2(templateSource, vName, currentPropName);
+                for (const vValue of variantValues) {
+                  let fullName;
+                  if (isAddingToExistingSet && templateProps.length > 0) {
+                    const newProps = templateProps.map(
+                      (p) => p.key === currentPropName ? { key: p.key, value: vValue } : __spreadValues({}, p)
+                    );
+                    if (!newProps.some((p) => p.key === currentPropName)) {
+                      newProps.push({ key: currentPropName, value: vValue });
+                    }
+                    fullName = buildVariantName2(newProps);
+                  } else {
+                    fullName = `${currentPropName}=${vValue}`;
+                  }
+                  const comp = cloneAsComponent2(templateSource, fullName);
                   figma.currentPage.appendChild(comp);
-                  await applyVariantStyleViaLLM(comp, vName);
+                  const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                  if (!isDefault) {
+                    await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                  } else {
+                    console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                  }
                   components.push(comp);
                 }
                 if (isAddingToExistingSet && existingSet) {
@@ -7921,7 +7964,7 @@ Return ONLY the operations array. Every operation must target a real node ID fro
                   componentSet.x = sourceNode.x;
                   componentSet.y = sourceNode.y + sourceNode.height + 80;
                   allCreatedSets.push(componentSet);
-                  summaryParts.push(`"${componentSet.name}" with ${nodeVariantNames.length} variants`);
+                  summaryParts.push(`"${componentSet.name}" with ${variantValues.length} variants`);
                 } else if (components.length === 1) {
                   allCreatedSets.push(components[0]);
                   summaryParts.push(`"${sourceNode.name}" (1 variant \u2014 need 2+ for a set)`);
@@ -7939,6 +7982,85 @@ Return ONLY the operations array. Every operation must target a real node ID fro
               figma.notify(`Failed to create variants: ${err.message}`, { timeout: 4e3 });
               sendToUI({ type: "job-error", jobId: nativeJobIdV, error: `Failed: ${err.message}` });
             }
+            break;
+          }
+          if (isGenerateComponentSetIntent) {
+            const jobId2 = ++_nextJobId;
+            const job2 = { id: jobId2, cancelled: false };
+            _activeJobs.set(jobId2, job2);
+            sendToUI({ type: "job-started", jobId: jobId2, prompt: intentText });
+            (async () => {
+              try {
+                sendToUI({ type: "job-progress", jobId: job2.id, phase: "analyze" });
+                await yieldToUI();
+                const designSystem = await extractDesignSystemSnapshot();
+                const dsSummary = buildDSSummary(designSystem);
+                sendToUI({ type: "job-progress", jobId: job2.id, phase: "generate" });
+                await yieldToUI();
+                if (job2.cancelled) {
+                  sendToUI({ type: "job-cancelled", jobId: job2.id });
+                  return;
+                }
+                const trimmedDesignSystem = {
+                  textStyles: (designSystem.textStyles || []).slice(0, 12),
+                  fillStyles: (designSystem.fillStyles || []).slice(0, 12),
+                  components: [],
+                  variables: []
+                };
+                const payloadToSend = __spreadProps(__spreadValues({
+                  prompt: intentText,
+                  styleTokens: {},
+                  designSystem: trimmedDesignSystem,
+                  dsSummary,
+                  selection: { nodes: [] },
+                  apiKey: _userApiKey,
+                  provider: _selectedProvider,
+                  model: _selectedModel
+                }, _fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {}), {
+                  isComponentGeneration: true
+                });
+                sendToUI({ type: "status", message: "Generating component set\u2026" });
+                console.log(`[GenerateComponentSet] Calling /generate with isComponentGeneration=true`);
+                const result = await fetchViaUIForJob("/generate", payloadToSend, job2.id);
+                if (job2.cancelled) {
+                  sendToUI({ type: "job-cancelled", jobId: job2.id });
+                  return;
+                }
+                const snapshot = result.snapshot;
+                if (!snapshot || !snapshot.type) {
+                  sendToUI({ type: "job-error", jobId: job2.id, error: "Backend returned invalid component data." });
+                  return;
+                }
+                console.log(`[GenerateComponentSet] Snapshot received:`, snapshot.name, snapshot.type);
+                const lintFixes = lintGeneratedSnapshot(snapshot, dsSummary);
+                if (lintFixes > 0) console.log(`[GenerateComponentSet] Lint pass applied ${lintFixes} fixes`);
+                sendToUI({ type: "job-progress", jobId: job2.id, phase: "create" });
+                assignTempIds(snapshot);
+                _importStats = { texts: 0, frames: 0, images: 0, failed: 0, errors: [] };
+                clearStyleMaps();
+                _currentThemeMode = detectThemeMode(intentText);
+                const viewport = figma.viewport.center;
+                const created = await createNodeFromSnapshot(snapshot, figma.currentPage, 0);
+                if (created) {
+                  created.x = Math.round(viewport.x - (created.width || 200) / 2);
+                  created.y = Math.round(viewport.y - (created.height || 200) / 2);
+                  figma.currentPage.selection = [created];
+                  figma.viewport.scrollAndZoomIntoView([created]);
+                  const summary = `Generated component set "${created.name}" with ${"children" in created ? created.children.length : 0} variants`;
+                  figma.notify(summary, { timeout: 5e3 });
+                  sendToUI({ type: "job-complete", jobId: job2.id, summary });
+                } else {
+                  sendToUI({ type: "job-error", jobId: job2.id, error: "Failed to create component set on canvas." });
+                }
+              } catch (err) {
+                if (!job2.cancelled) {
+                  figma.notify(`Failed to generate component set: ${err.message}`, { timeout: 4e3 });
+                  sendToUI({ type: "job-error", jobId: job2.id, error: `Failed: ${err.message}` });
+                }
+              } finally {
+                _activeJobs.delete(jobId2);
+              }
+            })();
             break;
           }
           if (isDetachInstanceIntent) {
