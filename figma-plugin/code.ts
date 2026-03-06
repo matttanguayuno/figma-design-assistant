@@ -10307,8 +10307,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 console.log(`[Variants] Successfully appended ${appended.length}/${components.length} variants`);
 
                 // ═══ CREATE COLUMN HEADER LABELS ═══
-                // Find existing column header text nodes in the parent frame and clone their
-                // style + Y position so new headers match exactly.
+                // Find existing column header text nodes in the parent (group/frame) and derive
+                // new header positions directly from them, using parent-local coordinates only.
                 if (appended.length > 0) {
                   try {
                     // Build a map of new variant value → column X position (in component-set-local coords)
@@ -10334,129 +10334,105 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     const parentFrame = existingSet.parent;
                     const canAppendToParent = parentFrame && "appendChild" in parentFrame;
 
-                    // Search for existing header text nodes in the parent frame
+                    // Search for existing header text nodes in the parent
                     // by matching text content to known existing variant values
-                    let referenceLabel: TextNode | null = null;
-                    const existingHeadersByText = new Map<string, TextNode>();
+                    const existingHeaders: TextNode[] = [];
                     if (canAppendToParent && "children" in parentFrame!) {
-                      const setAbsX = existingSet.absoluteTransform[0][2];
-                      const setAbsY = existingSet.absoluteTransform[1][2];
                       for (const sibling of (parentFrame as any).children) {
                         if (sibling.type === "TEXT" && sibling.id !== existingSet.id) {
                           const text = (sibling as TextNode).characters.trim();
-                          // Check if this text matches a known existing variant value for the target property
-                          // and is positioned above the component set (within reasonable range)
-                          const sibAbsY = sibling.absoluteTransform[1][2];
-                          if (existingPropValues.has(text) && sibAbsY >= setAbsY - 200 && sibAbsY <= setAbsY + existingSet.height) {
-                            existingHeadersByText.set(text, sibling as TextNode);
-                            if (!referenceLabel) referenceLabel = sibling as TextNode;
+                          if (existingPropValues.has(text)) {
+                            existingHeaders.push(sibling as TextNode);
                           }
                         }
                       }
                     }
 
-                    if (referenceLabel) {
-                      console.log(`[Variants] Found reference header label: "${referenceLabel.characters}" (font=${JSON.stringify(referenceLabel.fontName)}, size=${referenceLabel.fontSize})`);
+                    if (existingHeaders.length === 0) {
+                      console.log(`[Variants] No existing header labels found in parent, skipping header creation`);
                     } else {
-                      console.log(`[Variants] No existing header labels found in parent, using defaults`);
-                    }
-
-                    // Clone font from reference label, or use sensible defaults
-                    const refFontName = referenceLabel && typeof referenceLabel.fontName !== "symbol"
-                      ? referenceLabel.fontName : { family: "Inter", style: "Medium" };
-                    const refFontSize = referenceLabel && typeof referenceLabel.fontSize === "number"
-                      ? referenceLabel.fontSize : 14;
-                    const refFills = referenceLabel && Array.isArray(referenceLabel.fills)
-                      ? (referenceLabel.fills as Paint[]) : [{ type: "SOLID" as const, color: { r: 0.29, g: 0.29, b: 0.29 } }];
-                    const refAlign = referenceLabel ? referenceLabel.textAlignHorizontal : "CENTER";
-                    const refLetterSpacing = referenceLabel && typeof referenceLabel.letterSpacing !== "symbol"
-                      ? referenceLabel.letterSpacing : undefined;
-                    const refLineHeight = referenceLabel && typeof referenceLabel.lineHeight !== "symbol"
-                      ? referenceLabel.lineHeight : undefined;
-                    const refWidth = referenceLabel ? referenceLabel.width : (allChildren.length > 0 ? allChildren[0].width : 67);
-
-                    await figma.loadFontAsync(refFontName);
-
-                    // Determine Y positions for new headers.
-                    // Group existing headers by their absolute Y to identify section header rows.
-                    const headerAbsYs = [...new Set([...existingHeadersByText.values()].map(t => Math.round(t.absoluteTransform[1][2])))].sort((a, b) => a - b);
-
-                    // If we couldn't find existing headers, estimate section header Ys from the grid
-                    if (headerAbsYs.length === 0) {
-                      const allChildren2 = existingSet.children as ComponentNode[];
-                      const yPositions = [...new Set(allChildren2.map(c => Math.round(c.y)))].sort((a, b) => a - b);
-                      const rowGaps: number[] = [];
-                      for (let i = 1; i < yPositions.length; i++) rowGaps.push(yPositions[i] - yPositions[i - 1]);
-                      const medianGap = rowGaps.length > 0
-                        ? rowGaps.slice().sort((a, b) => a - b)[Math.floor(rowGaps.length / 2)] : 80;
-                      const sectionBreakThreshold = medianGap * 2;
-                      const sections: number[][] = [[yPositions[0]]];
-                      for (let i = 1; i < yPositions.length; i++) {
-                        if (yPositions[i] - yPositions[i - 1] > sectionBreakThreshold) sections.push([]);
-                        sections[sections.length - 1].push(yPositions[i]);
-                      }
-                      const setAbsY2 = existingSet.absoluteTransform[1][2];
-                      for (const section of sections) {
-                        headerAbsYs.push(setAbsY2 + section[0] - 46);
-                      }
-                    }
-
-                    // For each existing header, find its X relative to the component set
-                    // to compute the offset between the header center and the column center.
-                    // This lets us align new headers the same way.
-                    let headerXOffset = 0; // offset from column center to header center
-                    if (referenceLabel && existingHeadersByText.size > 0) {
+                      // Pick a reference header and find its corresponding column X in the component set
+                      const referenceLabel = existingHeaders[0];
                       const refText = referenceLabel.characters.trim();
-                      // Find which column X this existing header corresponds to
-                      const allChildren2 = existingSet.children as ComponentNode[];
-                      for (const child of allChildren2) {
+                      console.log(`[Variants] Found ${existingHeaders.length} existing header label(s), reference: "${refText}"`);
+
+                      // Find the column X (component-set-local) that corresponds to the reference label
+                      let refColumnX = 0;
+                      const allCSChildren = existingSet.children as ComponentNode[];
+                      for (const child of allCSChildren) {
                         const parsed = parseVariantProps(child.name);
                         const propVal = parsed.find(p => p.key === currentPropName);
                         if (propVal && propVal.value === refText) {
-                          // child center in absolute coords
-                          const childCenterAbsX = existingSet.absoluteTransform[0][2] + child.x + child.width / 2;
-                          const headerCenterAbsX = referenceLabel.absoluteTransform[0][2] + referenceLabel.width / 2;
-                          headerXOffset = headerCenterAbsX - childCenterAbsX;
+                          refColumnX = child.x;
                           break;
                         }
                       }
-                    }
 
-                    const createdLabels: SceneNode[] = [];
-                    const setAbsX = existingSet.absoluteTransform[0][2];
-                    const typicalW = appended.length > 0 ? appended[0].width : 67;
+                      // Clone font from reference label
+                      const refFontName = typeof referenceLabel.fontName !== "symbol"
+                        ? referenceLabel.fontName : { family: "Inter", style: "Medium" };
+                      const refFontSize = typeof referenceLabel.fontSize === "number"
+                        ? referenceLabel.fontSize : 14;
+                      const refFills = Array.isArray(referenceLabel.fills)
+                        ? (referenceLabel.fills as Paint[]) : [{ type: "SOLID" as const, color: { r: 0.29, g: 0.29, b: 0.29 } }];
+                      const refAlign = referenceLabel.textAlignHorizontal;
+                      const refLetterSpacing = typeof referenceLabel.letterSpacing !== "symbol"
+                        ? referenceLabel.letterSpacing : undefined;
+                      const refLineHeight = typeof referenceLabel.lineHeight !== "symbol"
+                        ? referenceLabel.lineHeight : undefined;
 
-                    for (const [valueName, columnX] of newColumnXMap) {
-                      for (const absY of headerAbsYs) {
+                      await figma.loadFontAsync(refFontName);
+
+                      // Group existing headers by their parent-local Y to find section header rows
+                      const headersByY = new Map<number, TextNode>();
+                      for (const h of existingHeaders) {
+                        const roundedY = Math.round(h.y);
+                        if (!headersByY.has(roundedY)) {
+                          headersByY.set(roundedY, h);
+                        }
+                      }
+                      const sectionYs = [...headersByY.keys()].sort((a, b) => a - b);
+                      console.log(`[Variants] Found ${sectionYs.length} section header row(s) at Y=${sectionYs.join(", ")}`);
+
+                      // Compute all label specs BEFORE adding anything to the group
+                      // (adding children to a group shifts its bounds/origin)
+                      const labelSpecs: Array<{ text: string; x: number; y: number }> = [];
+                      for (const [valueName, columnX] of newColumnXMap) {
+                        for (const sectionY of sectionYs) {
+                          const refAtY = headersByY.get(sectionY)!;
+                          // New header X = reference header X + (new column X - reference column X)
+                          const newX = refAtY.x + (columnX - refColumnX);
+                          labelSpecs.push({ text: valueName, x: newX, y: refAtY.y });
+                        }
+                      }
+
+                      // Now create and add all labels at once
+                      const createdLabels: SceneNode[] = [];
+                      for (const spec of labelSpecs) {
                         const textNode = figma.createText();
                         textNode.fontName = refFontName;
-                        textNode.characters = valueName;
+                        textNode.characters = spec.text;
                         textNode.fontSize = refFontSize;
                         textNode.fills = refFills;
                         textNode.textAlignHorizontal = refAlign;
+                        textNode.textAutoResize = "WIDTH_AND_HEIGHT";
                         if (refLetterSpacing) textNode.letterSpacing = refLetterSpacing;
                         if (refLineHeight) textNode.lineHeight = refLineHeight;
-                        textNode.resize(refWidth, textNode.height);
 
-                        // Position: column center + same offset as existing headers
-                        const columnCenterAbsX = setAbsX + columnX + typicalW / 2;
-                        const headerAbsX = columnCenterAbsX + headerXOffset - refWidth / 2;
+                        // Set position before appending
+                        textNode.x = spec.x;
+                        textNode.y = spec.y;
 
                         if (canAppendToParent) {
-                          // Convert absolute coords to parent-local coords
-                          const parentAbsX = (parentFrame as any).absoluteTransform[0][2];
-                          const parentAbsY = (parentFrame as any).absoluteTransform[1][2];
-                          textNode.x = headerAbsX - parentAbsX;
-                          textNode.y = absY - parentAbsY;
                           (parentFrame as any).appendChild(textNode);
-                        } else {
-                          textNode.x = headerAbsX;
-                          textNode.y = absY;
                         }
+                        // Re-apply position after appendChild (group may shift)
+                        textNode.x = spec.x;
+                        textNode.y = spec.y;
                         createdLabels.push(textNode);
                       }
+                      console.log(`[Variants] Created ${createdLabels.length} column header label(s) for new values`);
                     }
-                    console.log(`[Variants] Created ${createdLabels.length} column header label(s) for new values`);
                   } catch (headerErr: any) {
                     console.warn(`[Variants] Could not create column headers: ${headerErr.message}`);
                   }
