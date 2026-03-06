@@ -10040,17 +10040,28 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             const summaryParts: string[] = [];
 
             for (const sourceNode of [...selection]) {
-              const isAddingToExistingSet = sourceNode.type === "COMPONENT_SET";
+              // If the user selected a group/frame that wraps a component set, unwrap to the component set
+              let effectiveSource: SceneNode = sourceNode;
+              if ((sourceNode.type === "GROUP" || sourceNode.type === "FRAME" || sourceNode.type === "SECTION") &&
+                  "children" in sourceNode) {
+                const csChild = (sourceNode as any).children.find((c: SceneNode) => c.type === "COMPONENT_SET");
+                if (csChild) {
+                  console.log(`[Variants] Selected ${sourceNode.type} "${sourceNode.name}" contains component set "${csChild.name}" — using it`);
+                  effectiveSource = csChild;
+                }
+              }
+
+              const isAddingToExistingSet = effectiveSource.type === "COMPONENT_SET";
               let currentPropName = propName;
               let templateSource: SceneNode;
               let existingParsedVariants: Array<Array<{ key: string; value: string }>> = [];
               let existingSet: ComponentSetNode | null = null;
 
               if (isAddingToExistingSet) {
-                existingSet = sourceNode as ComponentSetNode;
+                existingSet = effectiveSource as ComponentSetNode;
                 const children = existingSet.children as ComponentNode[];
                 if (children.length === 0) {
-                  console.warn(`[Variants] Skipping empty component set "${sourceNode.name}"`);
+                  console.warn(`[Variants] Skipping empty component set "${effectiveSource.name}"`);
                   continue;
                 }
 
@@ -10058,7 +10069,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 existingParsedVariants = children.map(c => parseVariantProps(c.name));
 
                 // Log all children for diagnostics
-                console.log(`[Variants] Component set "${sourceNode.name}" has ${children.length} children:`);
+                console.log(`[Variants] Component set "${effectiveSource.name}" has ${children.length} children:`);
                 for (const child of children) {
                   console.log(`[Variants]   - "${child.name}" (id=${child.id})`);
                 }
@@ -10102,15 +10113,15 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 variantValues = variantValues.filter(v => !existingValuesForProp.has(v.toLowerCase()));
                 if (variantValues.length === 0) {
                   const existingList = [...existingValuesForProp].join(", ");
-                  console.log(`[Variants] All variant values already exist for "${sourceNode.name}", skipping.`);
-                  figma.notify(`All requested states already exist in "${sourceNode.name}" (found: ${existingList}). Delete existing variants first to regenerate.`, { timeout: 5000 });
+                  console.log(`[Variants] All variant values already exist for "${effectiveSource.name}", skipping.`);
+                  figma.notify(`All requested states already exist in "${effectiveSource.name}" (found: ${existingList}). Delete existing variants first to regenerate.`, { timeout: 5000 });
                   continue;
                 }
               } else {
                 templateSource = sourceNode;
               }
 
-              sendToUI({ type: "status", message: `Creating variants for "${sourceNode.name}"…` });
+              sendToUI({ type: "status", message: `Creating variants for "${effectiveSource.name}"…` });
               sendToUI({ type: "job-progress", jobId: nativeJobIdV, phase: "generate" } as any);
 
               // Build the full variant name for each new variant
