@@ -10070,12 +10070,31 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 figma.notify(`Styling failed for "${propNameForStyle}=${variantValue}" — left as clone for manual editing`, { timeout: 3000 });
               }
 
-              // ── Post-LLM override: apply user-specified paint style to all fill-bearing descendants ──
+              // ── Post-LLM override: apply user-specified paint style or variable to all fill-bearing descendants ──
               if (userHint) {
                 try {
                   const hintLower = userHint.toLowerCase();
+
+                  // Walk all descendants of the component with fills (non-text)
+                  function collectFillDescendants(node: SceneNode): SceneNode[] {
+                    const result: SceneNode[] = [];
+                    if ("fills" in node && node.type !== "TEXT") {
+                      const fills = (node as any).fills;
+                      if (Array.isArray(fills) && fills.length > 0) {
+                        result.push(node);
+                      }
+                    }
+                    if ("children" in node) {
+                      for (const child of (node as any).children) {
+                        result.push(...collectFillDescendants(child));
+                      }
+                    }
+                    return result;
+                  }
+                  const fillDescendants = collectFillDescendants(comp);
+
+                  // 1. Try paint styles first
                   const allPaintStyles = figma.getLocalPaintStyles();
-                  // Find the longest paint style name that appears in the user hint
                   let bestStyle: PaintStyle | null = null;
                   let bestLen = 0;
                   for (const s of allPaintStyles) {
@@ -10085,23 +10104,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     }
                   }
                   if (bestStyle) {
-                    // Walk all descendants of the component and apply to non-text fill nodes
-                    function collectFillDescendants(node: SceneNode): SceneNode[] {
-                      const result: SceneNode[] = [];
-                      if ("fills" in node && node.type !== "TEXT") {
-                        const fills = (node as any).fills;
-                        if (Array.isArray(fills) && fills.length > 0) {
-                          result.push(node);
-                        }
-                      }
-                      if ("children" in node) {
-                        for (const child of (node as any).children) {
-                          result.push(...collectFillDescendants(child));
-                        }
-                      }
-                      return result;
-                    }
-                    const fillDescendants = collectFillDescendants(comp);
                     let overrideCount = 0;
                     for (const n of fillDescendants) {
                       try {
@@ -10112,12 +10114,48 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       } catch (_) {}
                     }
                     if (overrideCount > 0) {
-                      console.log(`[Variants] Overrode ${overrideCount} node fill(s) with user-specified style "${bestStyle.name}"`);
-                    } else {
-                      console.warn(`[Variants] No fill-bearing descendants found in component for style override`);
+                      console.log(`[Variants] Overrode ${overrideCount} node fill(s) with paint style "${bestStyle.name}"`);
                     }
                   } else {
-                    console.warn(`[Variants] No matching paint style found for user hint: "${userHint}"`);
+                    // 2. Try Figma variables (color variables)
+                    let bestVar: Variable | null = null;
+                    let bestVarLen = 0;
+                    try {
+                      const collections = await figma.variables.getLocalVariableCollectionsAsync();
+                      for (const col of collections) {
+                        for (const varId of col.variableIds) {
+                          const v = await figma.variables.getVariableByIdAsync(varId);
+                          if (v && v.resolvedType === "COLOR" && v.name.length > bestVarLen && hintLower.includes(v.name.toLowerCase())) {
+                            bestVar = v;
+                            bestVarLen = v.name.length;
+                          }
+                        }
+                      }
+                    } catch (_) {}
+
+                    if (bestVar) {
+                      let overrideCount = 0;
+                      for (const n of fillDescendants) {
+                        try {
+                          if ("fills" in n) {
+                            const fills = (n as any).fills;
+                            if (Array.isArray(fills) && fills.length > 0) {
+                              const solidFill = fills.find((f: Paint) => f.type === "SOLID") as SolidPaint | undefined;
+                              if (solidFill) {
+                                const boundPaint = figma.variables.setBoundVariableForPaint(solidFill, "color", bestVar);
+                                (n as any).fills = fills.map((f: Paint) => f === solidFill ? boundPaint : f);
+                                overrideCount++;
+                              }
+                            }
+                          }
+                        } catch (_) {}
+                      }
+                      if (overrideCount > 0) {
+                        console.log(`[Variants] Overrode ${overrideCount} node fill(s) with color variable "${bestVar.name}"`);
+                      }
+                    } else {
+                      console.warn(`[Variants] No matching paint style or color variable found for user hint: "${userHint}"`);
+                    }
                   }
                 } catch (styleErr: any) {
                   console.warn(`[Variants] User style override failed: ${styleErr.message}`);
