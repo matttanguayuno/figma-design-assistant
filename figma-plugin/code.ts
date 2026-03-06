@@ -10321,9 +10321,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       const comp = cloneAsComponent(templateChild, fullName);
                       figma.currentPage.appendChild(comp);
 
-                      // Position: same X as the combo group, new row below the last Y in this group
-                      const comboMaxY = Math.max(...groupChildren.map(c => c.y));
-                      const newRowY = comboMaxY + rowSpacing * (vi + 1);
+                      // Position: same X as the combo group, new row below the last bottom edge in this group
+                      const comboMaxBottom = Math.max(...groupChildren.map(c => c.y + c.height));
+                      const rowGap = Math.max(rowSpacing - typicalHeight, 10);
+                      const newRowY = comboMaxBottom + rowGap + vi * rowSpacing;
                       const posX = templateChild.x;
                       targetPositions.set(comp, { x: posX, y: newRowY });
                       console.log(`[Variants] Will position "${fullName}" at x=${posX}, y=${newRowY}`);
@@ -10336,6 +10337,70 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                       components.push(comp);
                     }
+                  }
+                }
+
+                // ═══ COLLISION CHECK — ensure no new variant overlaps existing ones ═══
+                if (targetPositions.size > 0) {
+                  // Compute visual gap from existing grid spacing
+                  let visualGap = 20;
+                  const sortedAllPositions = layoutAxis === "x"
+                    ? [...allXPositions].sort((a, b) => a - b)
+                    : [...allYPositions].sort((a, b) => a - b);
+                  if (sortedAllPositions.length >= 2) {
+                    const steps: number[] = [];
+                    for (let i = 1; i < sortedAllPositions.length; i++) {
+                      steps.push(sortedAllPositions[i] - sortedAllPositions[i - 1]);
+                    }
+                    steps.sort((a, b) => a - b);
+                    const medianStep = steps[Math.floor(steps.length / 2)];
+                    const typicalDim = layoutAxis === "x" ? typicalWidth : typicalHeight;
+                    visualGap = Math.max(medianStep - typicalDim, 10);
+                  }
+
+                  const existingBounds = children.map(c => ({
+                    x: c.x, y: c.y, right: c.x + c.width, bottom: c.y + c.height
+                  }));
+
+                  // Sort new variants by position on layout axis for deterministic resolution
+                  const sortedEntries = [...targetPositions.entries()].sort((a, b) =>
+                    layoutAxis === "x"
+                      ? (a[1].x - b[1].x || a[1].y - b[1].y)
+                      : (a[1].y - b[1].y || a[1].x - b[1].x)
+                  );
+
+                  const settled: Array<{ x: number; y: number; right: number; bottom: number }> = [];
+                  let adjustCount = 0;
+
+                  for (const [comp, pos] of sortedEntries) {
+                    const w = comp.width || typicalWidth;
+                    const h = comp.height || typicalHeight;
+
+                    let moved = true;
+                    let safetyLimit = 200;
+                    while (moved && --safetyLimit > 0) {
+                      moved = false;
+                      for (const b of [...existingBounds, ...settled]) {
+                        // Check 2D bounding box overlap
+                        if (pos.x < b.right && pos.x + w > b.x &&
+                            pos.y < b.bottom && pos.y + h > b.y) {
+                          if (layoutAxis === "x") {
+                            pos.x = b.right + visualGap;
+                          } else {
+                            pos.y = b.bottom + visualGap;
+                          }
+                          moved = true;
+                          adjustCount++;
+                          break;
+                        }
+                      }
+                    }
+
+                    settled.push({ x: pos.x, y: pos.y, right: pos.x + w, bottom: pos.y + h });
+                  }
+
+                  if (adjustCount > 0) {
+                    console.log(`[Variants] Collision check: adjusted ${adjustCount} position(s) to avoid overlap`);
                   }
                 }
               } else {
