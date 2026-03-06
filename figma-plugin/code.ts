@@ -10061,48 +10061,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   } else {
                     console.log(`[Variants] Successfully applied ${appliedCount}/${safeOps.length} operations for "${variantValue}"`);
                   }
-
-                  // ── Post-LLM override: apply user-specified paint style if present ──
-                  if (userHint) {
-                    try {
-                      const hintLower = userHint.toLowerCase();
-                      const allPaintStyles = figma.getLocalPaintStyles();
-                      // Find the longest paint style name that appears in the user hint
-                      let bestStyle: PaintStyle | null = null;
-                      let bestLen = 0;
-                      for (const s of allPaintStyles) {
-                        if (s.name.length > bestLen && hintLower.includes(s.name.toLowerCase())) {
-                          bestStyle = s;
-                          bestLen = s.name.length;
-                        }
-                      }
-                      if (bestStyle) {
-                        // Collect node IDs that the LLM targeted with fill operations
-                        const fillOpIds = safeOps
-                          .filter(o => o.type === "SET_FILL_COLOR" || o.type === "APPLY_FILL_STYLE")
-                          .map(o => (o as any).nodeId as string);
-                        // Fall back to fillNodes if LLM didn't emit fill ops
-                        const targetIds = fillOpIds.length > 0
-                          ? [...new Set(fillOpIds)]
-                          : fillNodes.map(n => n.id);
-                        let overrideCount = 0;
-                        for (const nid of targetIds) {
-                          try {
-                            const node = figma.getNodeById(nid);
-                            if (node && "fillStyleId" in node) {
-                              (node as any).fillStyleId = bestStyle.id;
-                              overrideCount++;
-                            }
-                          } catch (_) {}
-                        }
-                        if (overrideCount > 0) {
-                          console.log(`[Variants] Overrode ${overrideCount} node fill(s) with user-specified style "${bestStyle.name}"`);
-                        }
-                      }
-                    } catch (styleErr: any) {
-                      console.warn(`[Variants] User style override failed: ${styleErr.message}`);
-                    }
-                  }
                 } else {
                   console.warn(`[Variants] LLM returned no operations for "${variantValue}", leaving as clone`);
                   figma.notify(`No styling changes returned for "${propNameForStyle}=${variantValue}" — left as clone`, { timeout: 3000 });
@@ -10110,6 +10068,60 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               } catch (err: any) {
                 console.warn(`[Variants] LLM styling failed for "${variantValue}": ${err.message}, leaving as clone`);
                 figma.notify(`Styling failed for "${propNameForStyle}=${variantValue}" — left as clone for manual editing`, { timeout: 3000 });
+              }
+
+              // ── Post-LLM override: apply user-specified paint style to all fill-bearing descendants ──
+              if (userHint) {
+                try {
+                  const hintLower = userHint.toLowerCase();
+                  const allPaintStyles = figma.getLocalPaintStyles();
+                  // Find the longest paint style name that appears in the user hint
+                  let bestStyle: PaintStyle | null = null;
+                  let bestLen = 0;
+                  for (const s of allPaintStyles) {
+                    if (s.name.length > bestLen && hintLower.includes(s.name.toLowerCase())) {
+                      bestStyle = s;
+                      bestLen = s.name.length;
+                    }
+                  }
+                  if (bestStyle) {
+                    // Walk all descendants of the component and apply to non-text fill nodes
+                    function collectFillDescendants(node: SceneNode): SceneNode[] {
+                      const result: SceneNode[] = [];
+                      if ("fills" in node && node.type !== "TEXT") {
+                        const fills = (node as any).fills;
+                        if (Array.isArray(fills) && fills.length > 0) {
+                          result.push(node);
+                        }
+                      }
+                      if ("children" in node) {
+                        for (const child of (node as any).children) {
+                          result.push(...collectFillDescendants(child));
+                        }
+                      }
+                      return result;
+                    }
+                    const fillDescendants = collectFillDescendants(comp);
+                    let overrideCount = 0;
+                    for (const n of fillDescendants) {
+                      try {
+                        if ("fillStyleId" in n) {
+                          (n as any).fillStyleId = bestStyle.id;
+                          overrideCount++;
+                        }
+                      } catch (_) {}
+                    }
+                    if (overrideCount > 0) {
+                      console.log(`[Variants] Overrode ${overrideCount} node fill(s) with user-specified style "${bestStyle.name}"`);
+                    } else {
+                      console.warn(`[Variants] No fill-bearing descendants found in component for style override`);
+                    }
+                  } else {
+                    console.warn(`[Variants] No matching paint style found for user hint: "${userHint}"`);
+                  }
+                } catch (styleErr: any) {
+                  console.warn(`[Variants] User style override failed: ${styleErr.message}`);
+                }
               }
             }
 
