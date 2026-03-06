@@ -10117,21 +10117,63 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       console.log(`[Variants] Overrode ${overrideCount} node fill(s) with paint style "${bestStyle.name}"`);
                     }
                   } else {
-                    // 2. Try Figma variables (color variables)
+                    // 2. Try Figma variables (local + library) by scanning existing siblings in the component set
                     let bestVar: Variable | null = null;
                     let bestVarLen = 0;
+
+                    // 2a. Scan existing sibling components for bound fill variables matching the hint
                     try {
-                      const collections = await figma.variables.getLocalVariableCollectionsAsync();
-                      for (const col of collections) {
-                        for (const varId of col.variableIds) {
-                          const v = await figma.variables.getVariableByIdAsync(varId);
-                          if (v && v.resolvedType === "COLOR" && v.name.length > bestVarLen && hintLower.includes(v.name.toLowerCase())) {
-                            bestVar = v;
-                            bestVarLen = v.name.length;
+                      const parent = comp.parent;
+                      if (parent && "children" in parent) {
+                        const siblings = (parent as any).children as SceneNode[];
+                        outerScan:
+                        for (const sibling of siblings) {
+                          if (sibling.id === comp.id) continue;
+                          // Walk descendant nodes of each sibling
+                          const queue: SceneNode[] = [sibling];
+                          while (queue.length > 0) {
+                            const node = queue.shift()!;
+                            if ("fills" in node) {
+                              const fills = (node as any).fills;
+                              if (Array.isArray(fills)) {
+                                for (const fill of fills) {
+                                  const bv = fill.boundVariables?.color;
+                                  if (bv && bv.id) {
+                                    try {
+                                      const v = await figma.variables.getVariableByIdAsync(bv.id);
+                                      if (v && v.resolvedType === "COLOR" && v.name.length > bestVarLen && hintLower.includes(v.name.toLowerCase())) {
+                                        bestVar = v;
+                                        bestVarLen = v.name.length;
+                                        break outerScan;
+                                      }
+                                    } catch (_) {}
+                                  }
+                                }
+                              }
+                            }
+                            if ("children" in node) {
+                              queue.push(...(node as any).children);
+                            }
                           }
                         }
                       }
                     } catch (_) {}
+
+                    // 2b. If not found in siblings, try local variable collections
+                    if (!bestVar) {
+                      try {
+                        const collections = await figma.variables.getLocalVariableCollectionsAsync();
+                        for (const col of collections) {
+                          for (const varId of col.variableIds) {
+                            const v = await figma.variables.getVariableByIdAsync(varId);
+                            if (v && v.resolvedType === "COLOR" && v.name.length > bestVarLen && hintLower.includes(v.name.toLowerCase())) {
+                              bestVar = v;
+                              bestVarLen = v.name.length;
+                            }
+                          }
+                        }
+                      } catch (_) {}
+                    }
 
                     if (bestVar) {
                       let overrideCount = 0;
@@ -10140,10 +10182,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                           if ("fills" in n) {
                             const fills = (n as any).fills;
                             if (Array.isArray(fills) && fills.length > 0) {
-                              const solidFill = fills.find((f: Paint) => f.type === "SOLID") as SolidPaint | undefined;
-                              if (solidFill) {
-                                const boundPaint = figma.variables.setBoundVariableForPaint(solidFill, "color", bestVar);
-                                (n as any).fills = fills.map((f: Paint) => f === solidFill ? boundPaint : f);
+                              const solidIdx = fills.findIndex((f: Paint) => f.type === "SOLID");
+                              if (solidIdx >= 0) {
+                                const boundPaint = figma.variables.setBoundVariableForPaint(fills[solidIdx], "color", bestVar);
+                                const newFills = [...fills];
+                                newFills[solidIdx] = boundPaint;
+                                (n as any).fills = newFills;
                                 overrideCount++;
                               }
                             }
