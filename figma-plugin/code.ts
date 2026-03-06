@@ -10144,89 +10144,198 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                 console.log(`[Variants] Found ${comboGroups.size} property combination(s) to clone for each new value`);
 
+                // ═══ DETECT LAYOUT AXIS ═══
+                // Determine whether the target property varies along X (column-based) or Y (row-based).
+                // Look at one combo group: for different target property values, check if they differ in X or Y.
+                let layoutAxis: "x" | "y" = "x"; // default to column-based
+                const firstComboChildren = [...comboGroups.values()][0];
+                if (firstComboChildren && firstComboChildren.length >= 2) {
+                  const positionsByValue = new Map<string, { x: number; y: number }>();
+                  for (const child of firstComboChildren) {
+                    const parsed = parseVariantProps(child.name);
+                    const targetProp = parsed.find(p => p.key === currentPropName);
+                    if (targetProp) {
+                      positionsByValue.set(targetProp.value, { x: Math.round(child.x), y: Math.round(child.y) });
+                    }
+                  }
+                  const positions = [...positionsByValue.values()];
+                  const uniqueXs = new Set(positions.map(p => p.x));
+                  const uniqueYs = new Set(positions.map(p => p.y));
+                  // If target property values share the same X but have different Ys → row-based
+                  // If they share the same Y but have different Xs → column-based
+                  if (uniqueYs.size > uniqueXs.size) {
+                    layoutAxis = "y";
+                  }
+                  console.log(`[Variants] Layout axis for "${currentPropName}": ${layoutAxis} (uniqueXs=${uniqueXs.size}, uniqueYs=${uniqueYs.size})`);
+                }
+
                 // ═══ ANALYZE EXISTING GRID LAYOUT ═══
-                // Figure out the column spacing by looking at the x positions of existing variants within each combo group.
-                // Each combo group (e.g. Selected=False, Type=Outlined) has variants at different x positions for each State value.
-                // We need to find: (1) the max x + width to know where new columns start, (2) the column spacing.
                 const allXPositions = new Set<number>();
-                let maxRight = 0; // rightmost edge of existing variants
+                const allYPositions = new Set<number>();
+                let maxRight = 0;
+                let maxBottom = 0;
                 for (const child of children) {
                   allXPositions.add(Math.round(child.x));
+                  allYPositions.add(Math.round(child.y));
                   const right = child.x + child.width;
                   if (right > maxRight) maxRight = right;
+                  const bottom = child.y + child.height;
+                  if (bottom > maxBottom) maxBottom = bottom;
                 }
-                const sortedXPositions = [...allXPositions].sort((a, b) => a - b);
-                // Column spacing = gap between adjacent x positions (use median gap for robustness)
-                let columnSpacing = 20; // fallback
-                if (sortedXPositions.length >= 2) {
-                  const gaps: number[] = [];
-                  for (let i = 1; i < sortedXPositions.length; i++) {
-                    gaps.push(sortedXPositions[i] - sortedXPositions[i - 1]);
-                  }
-                  gaps.sort((a, b) => a - b);
-                  columnSpacing = gaps[Math.floor(gaps.length / 2)]; // median gap
-                }
-                // Determine typical variant width from the first child
+
                 const typicalWidth = children[0].width;
-                // Column gap = spacing between columns minus the variant width
-                let columnGap = columnSpacing - typicalWidth;
-                if (columnGap < 10) columnGap = 20; // fallback minimum gap
-                console.log(`[Variants] Grid analysis: ${sortedXPositions.length} columns, columnSpacing=${columnSpacing}, columnGap=${columnGap}, maxRight=${maxRight}, typicalWidth=${typicalWidth}`);
+                const typicalHeight = children[0].height;
 
-                // For each combo group, find the y position of its variants (they share the same y)
-                // and build a map of comboKey -> y position
-                const comboYPositions = new Map<string, number>();
-                for (const [comboKey, groupChildren] of comboGroups) {
-                  // All children in a combo group have the same y (they're in the same row)
-                  comboYPositions.set(comboKey, groupChildren[0].y);
-                }
+                if (layoutAxis === "x") {
+                  // ═══ COLUMN-BASED LAYOUT (target property varies along X) ═══
+                  const sortedXPositions = [...allXPositions].sort((a, b) => a - b);
+                  let columnSpacing = 20;
+                  if (sortedXPositions.length >= 2) {
+                    const gaps: number[] = [];
+                    for (let i = 1; i < sortedXPositions.length; i++) {
+                      gaps.push(sortedXPositions[i] - sortedXPositions[i - 1]);
+                    }
+                    gaps.sort((a, b) => a - b);
+                    columnSpacing = gaps[Math.floor(gaps.length / 2)];
+                  }
+                  let columnGap = columnSpacing - typicalWidth;
+                  if (columnGap < 10) columnGap = 20;
+                  console.log(`[Variants] Column layout: ${sortedXPositions.length} columns, columnSpacing=${columnSpacing}, columnGap=${columnGap}, maxRight=${maxRight}`);
 
-                for (let vi = 0; vi < variantValues.length; vi++) {
-                  const vValue = variantValues[vi];
-                  const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
-                  // Calculate x position for this new column
-                  const newColumnX = maxRight + columnGap + vi * (typicalWidth + columnGap);
-
+                  // comboYPositions: each combo group shares the same Y
+                  const comboYPositions = new Map<string, number>();
                   for (const [comboKey, groupChildren] of comboGroups) {
-                    // Pick the best template from this group (prefer enabled/default)
-                    const defaultNames = ["default", "rest", "base", "normal", "enabled"];
-                    let templateChild = groupChildren[0];
-                    for (const child of groupChildren) {
-                      const parsed = parseVariantProps(child.name);
-                      const targetProp = parsed.find(p => p.key === currentPropName);
-                      if (targetProp && defaultNames.includes(targetProp.value.toLowerCase())) {
-                        templateChild = child;
-                        break;
+                    comboYPositions.set(comboKey, groupChildren[0].y);
+                  }
+
+                  for (let vi = 0; vi < variantValues.length; vi++) {
+                    const vValue = variantValues[vi];
+                    const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+                    const newColumnX = maxRight + columnGap + vi * (typicalWidth + columnGap);
+
+                    for (const [comboKey, groupChildren] of comboGroups) {
+                      const defaultNames = ["default", "rest", "base", "normal", "enabled"];
+                      let templateChild = groupChildren[0];
+                      for (const child of groupChildren) {
+                        const parsed = parseVariantProps(child.name);
+                        const targetProp = parsed.find(p => p.key === currentPropName);
+                        if (targetProp && defaultNames.includes(targetProp.value.toLowerCase())) {
+                          templateChild = child;
+                          break;
+                        }
                       }
+
+                      const parsed = parseVariantProps(templateChild.name);
+                      const newProps = parsed.map(p =>
+                        p.key === currentPropName ? { key: p.key, value: vValue } : { ...p }
+                      );
+                      if (!newProps.some(p => p.key === currentPropName)) {
+                        newProps.push({ key: currentPropName, value: vValue });
+                      }
+                      const fullName = buildVariantName(newProps);
+
+                      const comp = cloneAsComponent(templateChild, fullName);
+                      figma.currentPage.appendChild(comp);
+
+                      const targetY = comboYPositions.get(comboKey);
+                      const posY = targetY !== undefined ? targetY : comp.y;
+                      targetPositions.set(comp, { x: newColumnX, y: posY });
+                      console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${posY}`);
+
+                      if (!isDefault) {
+                        await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                      } else {
+                        console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                      }
+
+                      components.push(comp);
                     }
+                  }
+                } else {
+                  // ═══ ROW-BASED LAYOUT (target property varies along Y) ═══
+                  // Each combo group contains children at different Y positions (one per target prop value).
+                  // We need to place new variants below the existing ones in each combo group,
+                  // maintaining the same X and row spacing.
 
-                    // Build new variant name: replace target property value, preserve all others
-                    const parsed = parseVariantProps(templateChild.name);
-                    const newProps = parsed.map(p =>
-                      p.key === currentPropName ? { key: p.key, value: vValue } : { ...p }
-                    );
-                    if (!newProps.some(p => p.key === currentPropName)) {
-                      newProps.push({ key: currentPropName, value: vValue });
+                  // Find the row spacing within combo groups (gap between successive Y values for the target prop)
+                  let rowSpacing = 20;
+                  if (firstComboChildren && firstComboChildren.length >= 2) {
+                    const ys = firstComboChildren.map(c => c.y).sort((a, b) => a - b);
+                    const gaps: number[] = [];
+                    for (let i = 1; i < ys.length; i++) {
+                      gaps.push(ys[i] - ys[i - 1]);
                     }
-                    const fullName = buildVariantName(newProps);
+                    gaps.sort((a, b) => a - b);
+                    rowSpacing = gaps[Math.floor(gaps.length / 2)]; // median
+                  }
+                  console.log(`[Variants] Row layout: rowSpacing=${rowSpacing}, maxBottom=${maxBottom}`);
 
-                    const comp = cloneAsComponent(templateChild, fullName);
-                    figma.currentPage.appendChild(comp);
+                  // Group combo groups into sections by detecting large Y gaps between sections.
+                  // A "section" is a set of combo groups that share the same Y position pattern
+                  // (e.g., Level=1 combos are at top, Level=2 combos are at bottom).
+                  // We detect sections by looking at the starting Y of each combo group.
+                  const comboStartYs = new Map<string, number>();
+                  for (const [comboKey, groupChildren] of comboGroups) {
+                    const minY = Math.min(...groupChildren.map(c => c.y));
+                    comboStartYs.set(comboKey, minY);
+                  }
 
-                    // Store target position to apply after moving into the component set
-                    const targetY = comboYPositions.get(comboKey);
-                    const posY = targetY !== undefined ? targetY : comp.y;
-                    targetPositions.set(comp, { x: newColumnX, y: posY });
-                    console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${posY}`);
-
-                    // Each combo has different base visuals (e.g. Outlined vs Elevated), so each needs LLM styling
-                    if (!isDefault) {
-                      await applyVariantStyleViaLLM(comp, vValue, currentPropName);
-                    } else {
-                      console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                  // Sort combos by their starting Y and detect section breaks
+                  const sortedCombos = [...comboStartYs.entries()].sort((a, b) => a[1] - b[1]);
+                  const sectionBreaks: number[] = [0]; // indices into sortedCombos where sections start
+                  for (let i = 1; i < sortedCombos.length; i++) {
+                    const prevComboKey = sortedCombos[i - 1][0];
+                    const currComboKey = sortedCombos[i][0];
+                    const prevMaxY = Math.max(...comboGroups.get(prevComboKey)!.map(c => c.y + c.height));
+                    const currMinY = comboStartYs.get(currComboKey)!;
+                    if (currMinY - prevMaxY > rowSpacing * 1.5) {
+                      sectionBreaks.push(i);
                     }
+                  }
 
-                    components.push(comp);
+                  for (let vi = 0; vi < variantValues.length; vi++) {
+                    const vValue = variantValues[vi];
+                    const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
+
+                    for (const [comboKey, groupChildren] of comboGroups) {
+                      const defaultNames = ["default", "rest", "base", "normal", "enabled"];
+                      let templateChild = groupChildren[0];
+                      for (const child of groupChildren) {
+                        const parsed = parseVariantProps(child.name);
+                        const targetProp = parsed.find(p => p.key === currentPropName);
+                        if (targetProp && defaultNames.includes(targetProp.value.toLowerCase())) {
+                          templateChild = child;
+                          break;
+                        }
+                      }
+
+                      const parsed = parseVariantProps(templateChild.name);
+                      const newProps = parsed.map(p =>
+                        p.key === currentPropName ? { key: p.key, value: vValue } : { ...p }
+                      );
+                      if (!newProps.some(p => p.key === currentPropName)) {
+                        newProps.push({ key: currentPropName, value: vValue });
+                      }
+                      const fullName = buildVariantName(newProps);
+
+                      const comp = cloneAsComponent(templateChild, fullName);
+                      figma.currentPage.appendChild(comp);
+
+                      // Position: same X as the combo group, new row below the last Y in this group
+                      const comboMaxY = Math.max(...groupChildren.map(c => c.y));
+                      const newRowY = comboMaxY + rowSpacing * (vi + 1);
+                      const posX = templateChild.x;
+                      targetPositions.set(comp, { x: posX, y: newRowY });
+                      console.log(`[Variants] Will position "${fullName}" at x=${posX}, y=${newRowY}`);
+
+                      if (!isDefault) {
+                        await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                      } else {
+                        console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
+                      }
+
+                      components.push(comp);
+                    }
                   }
                 }
               } else {
