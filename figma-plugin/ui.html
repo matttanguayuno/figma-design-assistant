@@ -516,6 +516,61 @@
       flex-shrink: 0;
     }
 
+    /* ── Prompt History Menu ─────────────────────────── */
+    .history-list {
+      max-height: 260px;
+      overflow-y: auto;
+      padding: 2px 0;
+    }
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 6px 12px;
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--text);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .history-item:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    .history-empty {
+      padding: 12px;
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+    .history-clear {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      padding: 6px 12px;
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--danger, #e74c3c);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.1s;
+    }
+    .history-clear:hover {
+      background: rgba(231, 76, 60, 0.15);
+    }
+
     /* ── Loading Overlay ─────────────────────────────── */
     .loading-overlay {
       position: fixed;
@@ -1772,10 +1827,24 @@
               <svg class="menu-chevron" viewBox="0 0 8 12" fill="none"><path d="M1.5 1l5 5-5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
             <div class="menu-separator"></div>
+            <button class="menu-item menu-item-sub" id="menu-history-drill">
+              <svg viewBox="0 0 16 16" fill="none"><path d="M8 1a7 7 0 100 14A7 7 0 008 1z" stroke="currentColor" stroke-width="1.2"/><path d="M8 4v4.5l3 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Prompt History
+              <svg class="menu-chevron" viewBox="0 0 8 12" fill="none"><path d="M1.5 1l5 5-5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <div class="menu-separator"></div>
             <button class="menu-item" id="menu-settings">
               <svg viewBox="0 0 16 16" fill="none"><path d="M6.5 1h3l.4 2 1.3.7 1.8-1 2.1 2.1-1 1.8.7 1.3 2 .4v3l-2 .4-1.3.7 1 1.8-2.1 2.1-1.8-1-.7 1.3-.4 2h-3l-.4-2-1.3-.7-1.8 1L.9 13.1l1-1.8L1.2 10l-2-.4v-3l2-.4.7-1.3-1-1.8L3 .9l1.8 1L6.1 1.2l.4-2z" stroke="currentColor" stroke-width="1.1"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.1"/></svg>
               Settings
             </button>
+          </div>
+          <div id="menu-page-history" class="menu-page" style="display:none;">
+            <button class="menu-item menu-item-back" id="menu-back-history">
+              <svg class="menu-back-chevron" viewBox="0 0 8 12" fill="none"><path d="M6.5 1l-5 5 5 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Back
+            </button>
+            <div class="menu-separator"></div>
+            <div id="history-list" class="history-list"></div>
           </div>
           <div id="menu-page-importexport" class="menu-page" style="display:none;">
             <button class="menu-item menu-item-back" id="menu-back-ie">
@@ -2206,6 +2275,10 @@
     const menuPageRoot = document.getElementById("menu-page-root");
     const menuPageAnalyze = document.getElementById("menu-page-analyze");
     const menuPageImportExport = document.getElementById("menu-page-importexport");
+    const menuHistoryDrill = document.getElementById("menu-history-drill");
+    const menuBackHistory = document.getElementById("menu-back-history");
+    const menuPageHistory = document.getElementById("menu-page-history");
+    const historyListEl = document.getElementById("history-list");
     const auditPanel = document.getElementById("audit-panel");
     const auditSummary = document.getElementById("audit-summary");
     const auditFindings = document.getElementById("audit-findings");
@@ -2699,6 +2772,7 @@
       menuPageRoot.style.display = "";
       menuPageAnalyze.style.display = "none";
       menuPageImportExport.style.display = "none";
+      menuPageHistory.style.display = "none";
       restoreMenuHeight();
     }
 
@@ -2711,6 +2785,7 @@
         menuPageRoot.style.display = "";
         menuPageAnalyze.style.display = "none";
         menuPageImportExport.style.display = "none";
+        menuPageHistory.style.display = "none";
         ensureMenuFits();
       } else {
         restoreMenuHeight();
@@ -2748,6 +2823,82 @@
       menuPageRoot.style.display = "";
       ensureMenuFits();
     });
+
+    // Drill into Prompt History submenu
+    menuHistoryDrill.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuPageRoot.style.display = "none";
+      renderHistoryList();
+      menuPageHistory.style.display = "";
+      ensureMenuFits();
+    });
+
+    // Back from Prompt History
+    menuBackHistory.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menuPageHistory.style.display = "none";
+      menuPageRoot.style.display = "";
+      ensureMenuFits();
+    });
+
+    // ── Prompt History Logic ──────────────────────────────────────
+    var MAX_HISTORY = 30;
+    var _promptHistory = []; // array of strings, newest first
+
+    function addToHistory(prompt) {
+      if (!prompt) return;
+      // Remove duplicate if exists
+      _promptHistory = _promptHistory.filter(function(p) { return p !== prompt; });
+      // Add to front
+      _promptHistory.unshift(prompt);
+      // Trim
+      if (_promptHistory.length > MAX_HISTORY) _promptHistory.length = MAX_HISTORY;
+      // Persist
+      postToPlugin({ type: "save-prompt-history", history: _promptHistory });
+    }
+
+    function renderHistoryList() {
+      historyListEl.innerHTML = "";
+      if (_promptHistory.length === 0) {
+        var empty = document.createElement("div");
+        empty.className = "history-empty";
+        empty.textContent = "No prompts yet";
+        historyListEl.appendChild(empty);
+        return;
+      }
+      for (var i = 0; i < _promptHistory.length; i++) {
+        (function(prompt) {
+          var btn = document.createElement("button");
+          btn.className = "history-item";
+          btn.textContent = prompt;
+          btn.title = prompt;
+          btn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            intentEl.value = prompt;
+            closeMenu();
+            intentEl.focus();
+            // Enable apply button
+            btnApply.disabled = false;
+          });
+          historyListEl.appendChild(btn);
+        })(_promptHistory[i]);
+      }
+      // Add clear button
+      var sep = document.createElement("div");
+      sep.className = "menu-separator";
+      historyListEl.appendChild(sep);
+      var clearBtn = document.createElement("button");
+      clearBtn.className = "history-clear";
+      clearBtn.innerHTML = '<svg viewBox="0 0 16 16" fill="none" width="12" height="12"><path d="M2 4h12M5 4V3a1 1 0 011-1h4a1 1 0 011 1v1M6 7v5M10 7v5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 4l1 10a1 1 0 001 1h6a1 1 0 001-1l1-10" stroke="currentColor" stroke-width="1.2"/></svg> Clear History';
+      clearBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        _promptHistory = [];
+        postToPlugin({ type: "save-prompt-history", history: [] });
+        renderHistoryList();
+        ensureMenuFits();
+      });
+      historyListEl.appendChild(clearBtn);
+    }
 
     // Close menu when clicking outside
     document.addEventListener("click", (e) => {
@@ -4393,6 +4544,7 @@
         if (_dsExpandedExtra) { _dsExpandedExtra = 0; }
         dsBanner.style.display = "none";
       }
+      addToHistory(intent);
       postToPlugin({ type: "run", intent, generateMode: _generateMode });
     });
 
@@ -4849,6 +5001,12 @@
             generateModeSelect.value = _generateMode;
             genModeDesc.textContent = GEN_MODE_DESCRIPTIONS[_generateMode] || "";
             updateProgressSegments();
+          }
+          break;
+        }
+        case "load-prompt-history": {
+          if (Array.isArray(msg.history)) {
+            _promptHistory = msg.history;
           }
           break;
         }

@@ -7656,6 +7656,20 @@ setTimeout(async () => {
     } as any);
     console.log(`[startup] Loaded provider=${_selectedProvider}, model=${_selectedModel}, key=${_userApiKey ? "set" : "empty"}`);
 
+    // Load prompt history
+    try {
+      const rawHistory = await figma.clientStorage.getAsync("promptHistory");
+      if (rawHistory) {
+        const history = JSON.parse(rawHistory);
+        if (Array.isArray(history)) {
+          sendToUI({ type: "load-prompt-history", history } as any);
+          console.log(`[startup] Loaded ${history.length} prompt history item(s)`);
+        }
+      }
+    } catch (e) {
+      console.warn("[startup] Failed to load prompt history:", e);
+    }
+
   } catch (e) {
     console.warn("[startup] Failed to load API key/provider:", e);
   }
@@ -9051,6 +9065,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Persist prompt history ────────────────────────────
+      case "save-prompt-history" as any: {
+        try {
+          const history = (msg as any).history || [];
+          await figma.clientStorage.setAsync("promptHistory", JSON.stringify(history));
+          console.log(`[history] Saved ${history.length} prompt(s)`);
+        } catch (e) {
+          console.warn("[history] Failed to save prompt history:", e);
+        }
+        return;
+      }
+
       // ── Accessibility Audit ───────────────────────────────
       case "audit-a11y" as any: {
         try {
@@ -9909,7 +9935,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
             // ═══ LLM-DRIVEN VARIANT STYLING (GENERIC, DS-AWARE) ═══
 
-            async function applyVariantStyleViaLLM(comp: ComponentNode, variantValue: string, propNameForStyle: string): Promise<void> {
+            async function applyVariantStyleViaLLM(comp: ComponentNode, variantValue: string, propNameForStyle: string, userHint?: string): Promise<void> {
               try {
                 // Snapshot the component so the LLM can see its structure
                 const compSnapshot = snapshotNode(comp, 0);
@@ -9967,11 +9993,21 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   ? `\nSTANDARD VISUAL CONVENTION for "${variantValue}": ${stateConventions[conventionKey]}\nUse this as a guide — you MUST produce at least one operation.\n`
                   : "";
 
+                // Build user hint from the original prompt (e.g. color/style references)
+                let userHintSection = "";
+                if (userHint) {
+                  userHintSection = `\nUSER INSTRUCTION (HIGHEST PRIORITY — follow this exactly):\n"${userHint}"\n` +
+                    `If the user references a specific color, style name, or fill (e.g. "Fix/HD/Primary", "#FF0000", "Dark/Fill Color/..."), ` +
+                    `you MUST use that exact style name (via APPLY_FILL_STYLE) or color for the primary fill of this variant. ` +
+                    `The user's explicit color/style request overrides default conventions.\n`;
+                }
+
                 // Build a generic, non-prescriptive prompt
                 const variantPrompt =
                   `This component variant has the property "${propNameForStyle}" set to "${variantValue}".\n` +
                   `Apply appropriate visual styling to make this variant look correct for "${propNameForStyle}=${variantValue}".\n` +
-                  `${conventionHint}\n` +
+                  `${conventionHint}` +
+                  `${userHintSection}\n` +
                   `COMPONENT STRUCTURE (current visual properties):\n${visualSummary}\n\n` +
                   `NODES WITH FILLS (main targets for visual changes):\n${fillNodeList}\n` +
                   `${dsTokenRef}\n` +
@@ -10243,7 +10279,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       console.log(`[Variants] Will position "${fullName}" at x=${newColumnX}, y=${posY}`);
 
                       if (!isDefault) {
-                        await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                        await applyVariantStyleViaLLM(comp, vValue, currentPropName, intentText);
                       } else {
                         console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
                       }
@@ -10330,7 +10366,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       console.log(`[Variants] Will position "${fullName}" at x=${posX}, y=${newRowY}`);
 
                       if (!isDefault) {
-                        await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                        await applyVariantStyleViaLLM(comp, vValue, currentPropName, intentText);
                       } else {
                         console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
                       }
@@ -10412,7 +10448,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                   const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
                   if (!isDefault) {
-                    await applyVariantStyleViaLLM(comp, vValue, currentPropName);
+                    await applyVariantStyleViaLLM(comp, vValue, currentPropName, intentText);
                   } else {
                     console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
                   }
