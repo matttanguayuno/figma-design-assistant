@@ -2239,7 +2239,7 @@
 
     // ── DOM References ────────────────────────────────────────────
     const intentEl = document.getElementById("intent");
-    if (intentEl) requestAnimationFrame(() => (intentEl as HTMLTextAreaElement).focus());
+    if (intentEl) requestAnimationFrame(() => intentEl.focus());
     const btnApply = document.getElementById("btn-apply");
     const btnCancel = document.getElementById("btn-cancel");
     const statusBar = document.getElementById("status-bar");
