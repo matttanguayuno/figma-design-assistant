@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -541,50 +541,23 @@ export async function callLLMGenerate(
   isComponentGeneration?: boolean,
   referenceImageBase64?: string
 ): Promise<unknown> {
-  // Use component-specific prompt when generating component sets from scratch
-  const systemPrompt = isComponentGeneration ? GENERATE_COMPONENT_SYSTEM_PROMPT : GENERATE_SYSTEM_PROMPT;
+  // Use reference-image-specific prompt when a reference image is attached (removes competing generic templates).
+  // Use component-specific prompt when generating component sets from scratch.
+  // Otherwise use the standard generation prompt.
+  const systemPrompt = referenceImageBase64
+    ? GENERATE_WITH_REFERENCE_SYSTEM_PROMPT
+    : (isComponentGeneration ? GENERATE_COMPONENT_SYSTEM_PROMPT : GENERATE_SYSTEM_PROMPT);
   const userPrompt = isComponentGeneration
     ? buildGenerateComponentPrompt(prompt, designSystem, fullDesignSystem, dsSummary)
     : buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
 
-  // Append reference image instruction if present
+  // Append a short reminder in the user prompt when a reference image is present
   let finalUserPrompt = userPrompt;
   if (referenceImageBase64) {
-    finalUserPrompt += `\n\n## Reference Image (HIGH PRIORITY — ANALYZE CAREFULLY)
-
-A reference image is attached. This is your PRIMARY visual inspiration. You MUST deeply analyze it before generating.
-
-STEP 1 — ANALYZE the reference image and identify:
-- VIEWPORT TYPE: Is this a desktop/wide layout (sidebar + main content, multi-column grids) or a mobile/narrow layout (single column, stacked cards)?
-- Overall layout structure (sidebar + main content? single column? multi-panel?)
-- Specific sections visible (navigation, stat cards, charts, tables, lists, etc.)
-- Component arrangement and spatial relationships
-- Visual hierarchy: what's prominent, what's secondary, what's tertiary
-- Spacing patterns: how dense/spacious the layout is
-- Card styles, border treatments, shadow usage
-- Color scheme approach (dark sidebar? light content area? accent usage?)
-
-STEP 2 — MATCH THE VIEWPORT:
-- If the reference shows a DESKTOP layout (sidebar navigation, multi-column stat cards, wide charts), generate a DESKTOP frame (width: 1440).
-- If the reference shows a MOBILE layout (single column, stacked cards, bottom tabs), generate a MOBILE frame (width: 390).
-- The reference image's viewport type OVERRIDES any mention of "mobile" or "desktop" in the user's prompt. The reference image is the truth.
-- IMPORTANT: Words like "app", "screen", or "mobile" in the prompt do NOT mean you should force a mobile layout if the reference image clearly shows a desktop/wide design.
-
-STEP 3 — REPLICATE the reference's structure with FULL VISUAL DETAIL:
-- Match the NUMBER and TYPE of sections (if the reference has 4 stat cards in a row, create 4 stat cards in a row)
-- Match the LAYOUT PATTERN (if the reference uses a sidebar + main content, use that pattern — do NOT stack them vertically)
-- Match the COMPONENT TYPES (if the reference shows a line chart, create a chart area; if it shows a transaction list, create a transaction list)
-- Match PROPORTIONS: a narrow sidebar (~15% of width = ~200-250px FIXED), stat cards equally sharing the remaining width (layoutSizingHorizontal:"FILL"), etc.
-- Match VISUAL RICHNESS: create icon placeholders (colored RECTANGLE nodes with cornerRadius), card surfaces (white/surface FRAME with cornerRadius + DROP_SHADOW), progress bars (layered RECTANGLEs for track + fill), colored amount indicators (green for positive, red for negative)
-- Match DENSITY: a rich dashboard reference needs 80-150+ nodes. Every distinct visual element (icon, label, value, indicator, separator, bar segment) should be its own node.
-- Charts cannot be drawn as actual lines — represent chart areas as a RECTANGLE with a very light fill inside a card FRAME.
-
-STEP 4 — ADAPT to the user's request:
-- Apply the user's requested theme, branding, and content (e.g., "personal finance app called CashFlow")
-- Use the design system colors and typography tokens if provided, but match the COLOR ROLES from the reference (e.g., if reference has a dark sidebar with light text, use your dark surface color + light text color)
-- If no design system is provided, replicate the reference's visual style closely
-
-CRITICAL: The reference image defines the STRUCTURE, LAYOUT, and VIEWPORT SIZE. The user's prompt defines the CONTENT and BRANDING. Do NOT ignore the reference's layout in favor of a generic template. Do NOT convert a desktop reference into a mobile layout unless the user EXPLICITLY asks for a mobile adaptation.`;
+    finalUserPrompt += `\n\n## Reference Image Attached
+A reference image is attached. Follow the REFERENCE IMAGE ANALYSIS instructions in the system prompt.
+Remember: include "_referenceAnalysis" as the first field in your JSON output describing what you see in the reference image BEFORE generating nodes.
+The reference image defines the STRUCTURE, PROPORTIONS, DENSITY, and VIEWPORT. The user prompt above defines the CONTENT and BRANDING.`;
   }
 
   console.log(`[callLLMGenerate] isComponent=${!!isComponentGeneration}, System prompt: ${systemPrompt.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${systemPrompt.length + finalUserPrompt.length} chars (~${Math.round((systemPrompt.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
@@ -613,7 +586,16 @@ CRITICAL: The reference image defines the STRUCTURE, LAYOUT, and VIEWPORT SIZE. 
     if (_activeAbort === abort) _activeAbort = null;
   }
 
-  return parseJsonResponse(raw, "llm-generate");
+  const result = parseJsonResponse(raw, "llm-generate");
+
+  // Strip the _referenceAnalysis chain-of-thought field before returning to the plugin
+  if (result && typeof result === "object" && "_referenceAnalysis" in (result as any)) {
+    const analysis = (result as any)._referenceAnalysis;
+    console.log(`[callLLMGenerate] Reference analysis: ${typeof analysis === "string" ? analysis.slice(0, 500) : JSON.stringify(analysis).slice(0, 500)}`);
+    delete (result as any)._referenceAnalysis;
+  }
+
+  return result;
 }
 
 // ── Call LLM for HTML Generation ────────────────────────────────────
