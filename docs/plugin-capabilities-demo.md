@@ -22,7 +22,7 @@ a "Forgot Password?" link, and a "Sign up" option at the bottom.
 
 *(attach a screenshot of any app you like):*
 ```
-Create a mobile dashboard screen inspired by this reference image.
+Create a desktop dashboard screen inspired by this reference image.
 Use a similar card layout and navigation style but for a personal
 finance tracking app called "CashFlow".
 ```

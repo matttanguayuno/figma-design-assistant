@@ -555,6 +555,7 @@ export async function callLLMGenerate(
 A reference image is attached. This is your PRIMARY visual inspiration. You MUST deeply analyze it before generating.
 
 STEP 1 — ANALYZE the reference image and identify:
+- VIEWPORT TYPE: Is this a desktop/wide layout (sidebar + main content, multi-column grids) or a mobile/narrow layout (single column, stacked cards)?
 - Overall layout structure (sidebar + main content? single column? multi-panel?)
 - Specific sections visible (navigation, stat cards, charts, tables, lists, etc.)
 - Component arrangement and spatial relationships
@@ -563,19 +564,27 @@ STEP 1 — ANALYZE the reference image and identify:
 - Card styles, border treatments, shadow usage
 - Color scheme approach (dark sidebar? light content area? accent usage?)
 
-STEP 2 — REPLICATE the reference's structure:
-- Match the NUMBER and TYPE of sections (if the reference has 4 stat cards, create 4 stat cards)
-- Match the LAYOUT PATTERN (if the reference uses a sidebar + main content, use that pattern)
-- Match the COMPONENT TYPES (if the reference shows a line chart, create a chart area; if it shows a transaction list, create a transaction list)
-- Match the VISUAL HIERARCHY and spacing rhythm
-- Match the overall density and feel
+STEP 2 — MATCH THE VIEWPORT:
+- If the reference shows a DESKTOP layout (sidebar navigation, multi-column stat cards, wide charts), generate a DESKTOP frame (width: 1440).
+- If the reference shows a MOBILE layout (single column, stacked cards, bottom tabs), generate a MOBILE frame (width: 390).
+- The reference image's viewport type OVERRIDES any mention of "mobile" or "desktop" in the user's prompt. The reference image is the truth.
+- IMPORTANT: Words like "app", "screen", or "mobile" in the prompt do NOT mean you should force a mobile layout if the reference image clearly shows a desktop/wide design.
 
-STEP 3 — ADAPT to the user's request:
+STEP 3 — REPLICATE the reference's structure with FULL VISUAL DETAIL:
+- Match the NUMBER and TYPE of sections (if the reference has 4 stat cards in a row, create 4 stat cards in a row)
+- Match the LAYOUT PATTERN (if the reference uses a sidebar + main content, use that pattern — do NOT stack them vertically)
+- Match the COMPONENT TYPES (if the reference shows a line chart, create a chart area; if it shows a transaction list, create a transaction list)
+- Match PROPORTIONS: a narrow sidebar (~15% of width = ~200-250px FIXED), stat cards equally sharing the remaining width (layoutSizingHorizontal:"FILL"), etc.
+- Match VISUAL RICHNESS: create icon placeholders (colored RECTANGLE nodes with cornerRadius), card surfaces (white/surface FRAME with cornerRadius + DROP_SHADOW), progress bars (layered RECTANGLEs for track + fill), colored amount indicators (green for positive, red for negative)
+- Match DENSITY: a rich dashboard reference needs 80-150+ nodes. Every distinct visual element (icon, label, value, indicator, separator, bar segment) should be its own node.
+- Charts cannot be drawn as actual lines — represent chart areas as a RECTANGLE with a very light fill inside a card FRAME.
+
+STEP 4 — ADAPT to the user's request:
 - Apply the user's requested theme, branding, and content (e.g., "personal finance app called CashFlow")
 - Use the design system colors and typography tokens if provided, but match the COLOR ROLES from the reference (e.g., if reference has a dark sidebar with light text, use your dark surface color + light text color)
 - If no design system is provided, replicate the reference's visual style closely
 
-CRITICAL: The reference image defines the STRUCTURE and LAYOUT. The user's prompt defines the CONTENT and BRANDING. Do NOT ignore the reference's layout in favor of a generic template.`;
+CRITICAL: The reference image defines the STRUCTURE, LAYOUT, and VIEWPORT SIZE. The user's prompt defines the CONTENT and BRANDING. Do NOT ignore the reference's layout in favor of a generic template. Do NOT convert a desktop reference into a mobile layout unless the user EXPLICITLY asks for a mobile adaptation.`;
   }
 
   console.log(`[callLLMGenerate] isComponent=${!!isComponentGeneration}, System prompt: ${systemPrompt.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${systemPrompt.length + finalUserPrompt.length} chars (~${Math.round((systemPrompt.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
@@ -632,14 +641,18 @@ export async function callLLMGenerateHTML(
 A reference image is attached. This is your PRIMARY visual inspiration for the HTML output.
 
 ANALYZE the reference and REPLICATE:
-1. **Layout structure**: sidebar vs. top-nav, panel arrangements, grid patterns
-2. **Section types**: identify every distinct section (stat cards, charts, tables, lists, navigation, etc.) and recreate them
-3. **Component count**: if the reference shows 4 metric cards, create 4. If it shows 5 transaction rows, create 5.
-4. **Visual hierarchy**: match prominence, sizing, and spacing relationships
-5. **Spacing and density**: match the overall feel — compact vs. spacious
-6. **Color approach**: match the color ROLES (dark sidebar, light content area, colored accents) using the design system palette
+1. **Viewport type**: Is this desktop (wide, sidebar, multi-column) or mobile (narrow, stacked)? MATCH the reference's viewport — if it's desktop, generate a wide desktop layout. If the reference is desktop but the prompt says "mobile", still generate desktop because the reference image is the truth.
+2. **Layout structure**: sidebar vs. top-nav, panel arrangements, grid patterns — replicate exactly
+3. **Section types**: identify every distinct section (stat cards, charts, tables, lists, navigation, etc.) and recreate them
+4. **Component count**: if the reference shows 4 metric cards in a row, create 4 in a row. If it shows 5 transaction rows, create 5.
+5. **Visual hierarchy**: match prominence, sizing, and spacing relationships
+6. **Spacing and density**: match the overall feel — compact vs. spacious
+7. **Color approach**: match the color ROLES (dark sidebar, light content area, colored accents) using the design system palette
+8. **Proportions**: match relative sizing — if the sidebar is narrow (~15% of width), keep it narrow. If stat cards share the row equally, make them equal-width. Do NOT make a sidebar take 50% of the screen when the reference shows it at ~15%.
+9. **Visual richness**: if the reference shows card surfaces with shadows, icons with colored backgrounds, progress bars, chart placeholders — recreate ALL of them. Do NOT simplify the reference into plain text. Use CSS to create rounded colored icon containers, progress bar tracks with fills, card shadows, colored amount indicators.
+10. **Density**: a rich dashboard reference should produce dense HTML with many elements. Every distinct visual element in the reference (icon, label, value, indicator, bar, separator) should be represented.
 
-The reference defines the STRUCTURE and LAYOUT. The user's prompt defines the CONTENT and BRANDING. Generate HTML that closely mirrors the reference's layout while adapting content to the user's request.`;
+The reference defines the STRUCTURE, LAYOUT, and VIEWPORT SIZE. The user's prompt defines the CONTENT and BRANDING. Generate HTML that closely mirrors the reference's layout while adapting content to the user's request. Do NOT convert a desktop reference into a mobile layout.`;
   }
 
   console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + finalUserPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
@@ -1146,13 +1159,16 @@ export async function callLLMPlan(
 A reference image is attached. Your layout plan MUST be based on this image.
 
 ANALYZE the reference image and create blocks that match its ACTUAL structure:
-- If the reference has a sidebar navigation, include a sidebar block
-- If the reference has stat/metric cards in a row, include a stats-row block
+- FIRST: determine if the reference is DESKTOP (wide, sidebar, multi-column) or MOBILE (narrow, stacked). Set the plan viewport accordingly — do NOT force mobile if the reference is desktop, even if the prompt mentions "mobile" or "app".
+- If the reference has a sidebar navigation, include a sidebar block (~200-250px FIXED width, NOT 50% of the screen)
+- If the reference has stat/metric cards in a row, include a stats-row block (HORIZONTAL, not stacked vertically)
 - If the reference has a chart section, include a chart block
 - If the reference has a data table or transaction list, include that block
 - Match the NUMBER of sections and their ARRANGEMENT from the reference
+- Match PROPORTIONS: if the sidebar is narrow (~15%), specify ~200-250px. If content sections share a row, specify equal widths.
+- For EACH block, note the visual richness needed: icons, card surfaces, progress bars, colored indicators, shadows
 
-Do NOT fall back to a generic "hero → features → CTA" template. The plan must reflect what is ACTUALLY VISIBLE in the reference image.`;
+Do NOT fall back to a generic "hero → features → CTA" template. The plan must reflect what is ACTUALLY VISIBLE in the reference image. The reference image's viewport type OVERRIDES any mention of "mobile" or "desktop" in the user's prompt.`;
   }
 
   console.log(`[callLLMPlan] System: ${PLAN_SYSTEM_PROMPT.length} chars, User: ${userPrompt.length} chars${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);

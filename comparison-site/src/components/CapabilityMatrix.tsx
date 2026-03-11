@@ -171,9 +171,13 @@ export default function CapabilityMatrix() {
                     style={{ cursor: "default" }}
                     onMouseEnter={(e) => {
                       e.currentTarget.style.background = "rgba(21, 155, 255, 0.06)";
+                      const stickyTd = e.currentTarget.querySelector('td:first-child') as HTMLElement;
+                      if (stickyTd) stickyTd.style.background = "rgba(21, 155, 255, 0.06)";
                     }}
                     onMouseLeave={(e) => {
                       e.currentTarget.style.background = "";
+                      const stickyTd = e.currentTarget.querySelector('td:first-child') as HTMLElement;
+                      if (stickyTd) stickyTd.style.background = "var(--surface)";
                     }}
                   >
                     <td

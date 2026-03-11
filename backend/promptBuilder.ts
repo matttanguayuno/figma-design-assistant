@@ -459,21 +459,36 @@ Use an 8px base grid. Common values: 4, 8, 12, 16, 24, 32, 48.
 
 ═══ DESKTOP LAYOUT ═══
 When creating or converting to desktop (1440px):
-- HORIZONTAL split: left brand panel (720px FIXED, accent bg, centered brand text) + right content panel (720px FIXED, padding 80/60/100/100, inner form wrapper 440px VERTICAL).
+- LOGIN/AUTH pages: HORIZONTAL split with left brand panel (720px FIXED, accent bg) + right content panel (720px FIXED, form wrapper).
+- DASHBOARD/APP pages with sidebar navigation: HORIZONTAL root with narrow sidebar (200-250px FIXED, dark bg) + main content area (layoutSizingHorizontal:"FILL"). The sidebar should be ~14-17% of total width, NOT 50%.
 - Or centered single-column: counterAxisAlignItems:"CENTER", content wrapper 440-800px.
 - All inputs/buttons in wrapper: layoutSizingHorizontal:"FILL".
+
+═══ VISUAL COMPONENT PATTERNS ═══
+When the reference image shows specific UI elements, represent them as follows:
+- STAT/METRIC CARDS: FRAME with white/surface fill, cornerRadius:12, padding:20-24, DROP_SHADOW. Children: icon placeholder (RECTANGLE 40x40 with colored fill + cornerRadius:8-20), label TEXT (12-14px caption), value TEXT (24-32px bold), change indicator FRAME (HORIZONTAL, green/red TEXT).
+- CHARTS/GRAPHS: FRAME with surface fill, cornerRadius:12, padding:20-24. Children: title TEXT, tab/filter row FRAME, chart area RECTANGLE (fill with very light color, height:200-300). Add axis labels as small TEXT nodes. You cannot draw actual chart lines, so represent the chart area as a colored RECTANGLE placeholder.
+- TRANSACTION/DATA LISTS: FRAME with surface fill, cornerRadius:12, padding:16-20. Each row is a HORIZONTAL FRAME with: icon RECTANGLE (36-40px, colored fill, cornerRadius:8-20), text column FRAME (VERTICAL: name TEXT bold + category TEXT caption), amount TEXT (right-aligned, colored green/red), date TEXT (caption).
+- PROGRESS BARS: FRAME (HORIZONTAL, height:8-12, cornerRadius:4-6, light gray fill) containing a RECTANGLE child (percentage width FIXED, full height, colored fill, cornerRadius:4-6). Add label TEXT + value TEXT above/beside.
+- NAVIGATION SIDEBAR: FRAME (VERTICAL, FIXED width 200-250, dark fill, padding:24). Children: logo/brand TEXT, nav items as HORIZONTAL FRAMEs with icon RECTANGLE + label TEXT. Active item gets a subtle highlight fill.
+- BUTTONS: FRAME with padding, cornerRadius:8, colored fill. Primary buttons use brand/accent color, secondary use surface/outline.
 
 ═══ REFERENCE SNAPSHOTS ═══
 When provided, reference snapshots are HIGHEST PRIORITY. Replicate their fillColor, strokeColor, cornerRadius, padding, spacing, fonts exactly.
 
 ═══ REFERENCE IMAGE HANDLING ═══
 When a reference image is attached:
-- The reference image defines the TARGET layout structure. Analyze it carefully.
+- The reference image defines the TARGET layout structure AND viewport. Analyze it carefully.
+- VIEWPORT OVERRIDE: If the reference shows a desktop layout (sidebar, multi-column, wide panels), use width:1440 REGARDLESS of whether the prompt says "mobile" or "app". If the reference shows mobile (single column, stacked), use width:390. The reference image determines the viewport, not keywords in the prompt.
 - MATCH the section types, component arrangement, and visual hierarchy from the reference.
-- COUNT the elements: if the reference shows 4 stat cards, create 4. If it shows a sidebar, create a sidebar.
+- COUNT the elements: if the reference shows 4 stat cards in a row, create 4 in a row. If it shows a sidebar, create a sidebar.
+- MATCH PROPORTIONS: if the sidebar is narrow (~15% of width), make it ~200-250px FIXED. If stat cards are equal-width in a row, use layoutSizingHorizontal:"FILL" on each. Match the relative sizes of sections.
+- MATCH VISUAL RICHNESS: if the reference has colored icons, card shadows, colored indicators, progress bars — create them using the Visual Component Patterns above. Do NOT simplify the reference into plain text. Every visual element in the reference should have a corresponding node.
+- MATCH DENSITY: if the reference is information-dense with many elements, generate a HIGH node count (80-150+ nodes). Do NOT create a sparse layout with 30 nodes when the reference clearly has dozens of distinct UI elements.
 - DO NOT fall back to generic templates (hero → features → CTA). Follow the reference's actual structure.
+- DO NOT convert a desktop reference into a mobile layout by stacking everything vertically.
 - Use the design system colors/typography but match the color ROLES from the reference (e.g., dark sidebar → use your darkest surface color).
-- The reference image takes PRIORITY over the default "Design Recipe" blocks above.
+- The reference image takes PRIORITY over the default "Design Recipe" blocks above AND any viewport hints in the user prompt.
 
 Generate the JSON now.`;
 

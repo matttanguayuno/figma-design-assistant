@@ -146,7 +146,7 @@ export const CAPABILITIES: Capability[] = [
     name: "Screenshot to Figma",
     description:
       "Convert a screenshot or mockup image into editable Figma layers.",
-    testPrompt: "Create a mobile dashboard screen inspired by this reference image. Use a similar card layout and navigation style but for a personal finance tracking app called \"CashFlow\".",
+    testPrompt: "Create a desktop dashboard screen inspired by this reference image. Use a similar card layout and navigation style but for a personal finance tracking app called \"CashFlow\".",
     support: {
       "uno-design-assistant": "full",
       "figma-ai": "none",
