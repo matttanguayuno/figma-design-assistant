@@ -105,11 +105,11 @@ export type BackendPayload = {
 export type GenerateMode = "standard" | "multi-step" | "html";
 
 export type UIToPluginMessage =
-  | { type: "run"; intent: string; generateMode?: GenerateMode }
+  | { type: "run"; intent: string; generateMode?: GenerateMode; referenceImageBase64?: string }
   | { type: "revert-last" }
   | { type: "export-json" }
   | { type: "import-json"; data: { selection: { nodes: any[] }; [key: string]: any } }
-  | { type: "generate"; prompt: string }
+  | { type: "generate"; prompt: string; referenceImageBase64?: string }
   | { type: "generate-docs" }
   | { type: "cancel-job"; jobId: number }
   | { type: "audit-a11y" }
@@ -238,6 +238,22 @@ export type FullDesignSystemTypography = {
   role?: string;        // "heading1", "body", "caption", etc.
 };
 
+export type FullDesignSystemLayout = {
+  name: string;
+  page: string;
+  width: number;
+  height: number;
+  layoutMode?: string;
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
+  itemSpacing?: number;
+  primaryAxisAlignItems?: string;
+  counterAxisAlignItems?: string;
+  fillColor?: string;
+};
+
 export type FullDesignSystem = {
   extractedAt: number;
   documentHash: string;
@@ -254,6 +270,7 @@ export type FullDesignSystem = {
   variables: FullDesignSystemVariable[];
   buttonStyles: any[];
   inputStyles: any[];
+  rootFrameLayouts?: FullDesignSystemLayout[];
 };
 
 // ── Canonical Design System Summary (for V2 generation pipeline) ────

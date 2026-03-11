@@ -3,3 +3,7 @@ dist/
 figma-plugin/code.js
 *.js.map
 .env
+
+.next/
+comparison-site/.next/
+comparison-site/backup/

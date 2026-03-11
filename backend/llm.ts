@@ -538,21 +538,54 @@ export async function callLLMGenerate(
   fullDesignSystem?: any,
   dsSummary?: any,
   layoutPlan?: any,
-  isComponentGeneration?: boolean
+  isComponentGeneration?: boolean,
+  referenceImageBase64?: string
 ): Promise<unknown> {
   // Use component-specific prompt when generating component sets from scratch
   const systemPrompt = isComponentGeneration ? GENERATE_COMPONENT_SYSTEM_PROMPT : GENERATE_SYSTEM_PROMPT;
   const userPrompt = isComponentGeneration
     ? buildGenerateComponentPrompt(prompt, designSystem, fullDesignSystem, dsSummary)
     : buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
-  console.log(`[callLLMGenerate] isComponent=${!!isComponentGeneration}, System prompt: ${systemPrompt.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${systemPrompt.length + userPrompt.length} chars (~${Math.round((systemPrompt.length + userPrompt.length)/4)} tokens)`);
+
+  // Append reference image instruction if present
+  let finalUserPrompt = userPrompt;
+  if (referenceImageBase64) {
+    finalUserPrompt += `\n\n## Reference Image (HIGH PRIORITY — ANALYZE CAREFULLY)
+
+A reference image is attached. This is your PRIMARY visual inspiration. You MUST deeply analyze it before generating.
+
+STEP 1 — ANALYZE the reference image and identify:
+- Overall layout structure (sidebar + main content? single column? multi-panel?)
+- Specific sections visible (navigation, stat cards, charts, tables, lists, etc.)
+- Component arrangement and spatial relationships
+- Visual hierarchy: what's prominent, what's secondary, what's tertiary
+- Spacing patterns: how dense/spacious the layout is
+- Card styles, border treatments, shadow usage
+- Color scheme approach (dark sidebar? light content area? accent usage?)
+
+STEP 2 — REPLICATE the reference's structure:
+- Match the NUMBER and TYPE of sections (if the reference has 4 stat cards, create 4 stat cards)
+- Match the LAYOUT PATTERN (if the reference uses a sidebar + main content, use that pattern)
+- Match the COMPONENT TYPES (if the reference shows a line chart, create a chart area; if it shows a transaction list, create a transaction list)
+- Match the VISUAL HIERARCHY and spacing rhythm
+- Match the overall density and feel
+
+STEP 3 — ADAPT to the user's request:
+- Apply the user's requested theme, branding, and content (e.g., "personal finance app called CashFlow")
+- Use the design system colors and typography tokens if provided, but match the COLOR ROLES from the reference (e.g., if reference has a dark sidebar with light text, use your dark surface color + light text color)
+- If no design system is provided, replicate the reference's visual style closely
+
+CRITICAL: The reference image defines the STRUCTURE and LAYOUT. The user's prompt defines the CONTENT and BRANDING. Do NOT ignore the reference's layout in favor of a generic template.`;
+  }
+
+  console.log(`[callLLMGenerate] isComponent=${!!isComponentGeneration}, System prompt: ${systemPrompt.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${systemPrompt.length + finalUserPrompt.length} chars (~${Math.round((systemPrompt.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
 
   // Hard safety: if the user prompt exceeds ~500K chars (~125K tokens), truncate it
   const MAX_USER_PROMPT_CHARS = 500000;
-  let safeUserPrompt = userPrompt;
-  if (userPrompt.length > MAX_USER_PROMPT_CHARS) {
-    console.warn(`[callLLMGenerate] User prompt too long (${userPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
-    safeUserPrompt = userPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
+  let safeUserPrompt = finalUserPrompt;
+  if (finalUserPrompt.length > MAX_USER_PROMPT_CHARS) {
+    console.warn(`[callLLMGenerate] User prompt too long (${finalUserPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
+    safeUserPrompt = finalUserPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
   }
 
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
@@ -562,7 +595,11 @@ export async function callLLMGenerate(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
+    if (referenceImageBase64) {
+      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, 16384, apiKey, abort, true);
+    } else {
+      raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
+    }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }
@@ -582,16 +619,36 @@ export async function callLLMGenerateHTML(
   selection?: any,
   fullDesignSystem?: any,
   dsSummary?: any,
-  sourceHtml?: string
+  sourceHtml?: string,
+  referenceImageBase64?: string
 ): Promise<string> {
   const userPrompt = buildGenerateHTMLPrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, sourceHtml);
-  console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
+
+  // Append reference image instruction if present
+  let finalUserPrompt = userPrompt;
+  if (referenceImageBase64) {
+    finalUserPrompt += `\n\n## Reference Image (HIGH PRIORITY — ANALYZE CAREFULLY)
+
+A reference image is attached. This is your PRIMARY visual inspiration for the HTML output.
+
+ANALYZE the reference and REPLICATE:
+1. **Layout structure**: sidebar vs. top-nav, panel arrangements, grid patterns
+2. **Section types**: identify every distinct section (stat cards, charts, tables, lists, navigation, etc.) and recreate them
+3. **Component count**: if the reference shows 4 metric cards, create 4. If it shows 5 transaction rows, create 5.
+4. **Visual hierarchy**: match prominence, sizing, and spacing relationships
+5. **Spacing and density**: match the overall feel — compact vs. spacious
+6. **Color approach**: match the color ROLES (dark sidebar, light content area, colored accents) using the design system palette
+
+The reference defines the STRUCTURE and LAYOUT. The user's prompt defines the CONTENT and BRANDING. Generate HTML that closely mirrors the reference's layout while adapting content to the user's request.`;
+  }
+
+  console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + finalUserPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
 
   const MAX_USER_PROMPT_CHARS = 500000;
-  let safeUserPrompt = userPrompt;
-  if (userPrompt.length > MAX_USER_PROMPT_CHARS) {
-    console.warn(`[callLLMGenerateHTML] User prompt too long (${userPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
-    safeUserPrompt = userPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
+  let safeUserPrompt = finalUserPrompt;
+  if (finalUserPrompt.length > MAX_USER_PROMPT_CHARS) {
+    console.warn(`[callLLMGenerateHTML] User prompt too long (${finalUserPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
+    safeUserPrompt = finalUserPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
   }
 
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
@@ -601,8 +658,12 @@ export async function callLLMGenerateHTML(
 
   let raw: string;
   try {
-    // Higher max tokens since HTML can be verbose; temperature 0.5 for creativity
-    raw = await callProvider(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, false, 0.5);
+    if (referenceImageBase64) {
+      raw = await callProviderWithImage(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, referenceImageBase64, resolvedModel, 16384, apiKey, abort, false);
+    } else {
+      // Higher max tokens since HTML can be verbose; temperature 0.5 for creativity
+      raw = await callProvider(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, false, 0.5);
+    }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }
@@ -1073,10 +1134,28 @@ export async function callLLMPlan(
   apiKey: string,
   provider: Provider = "anthropic",
   model?: string,
-  dsSummary?: any
+  dsSummary?: any,
+  referenceImageBase64?: string
 ): Promise<unknown> {
-  const userPrompt = buildPlanPrompt(prompt, dsSummary);
-  console.log(`[callLLMPlan] System: ${PLAN_SYSTEM_PROMPT.length} chars, User: ${userPrompt.length} chars`);
+  let userPrompt = buildPlanPrompt(prompt, dsSummary);
+
+  // Append reference image instruction if present
+  if (referenceImageBase64) {
+    userPrompt += `\n\n## Reference Image (HIGHEST PRIORITY FOR LAYOUT PLANNING)
+
+A reference image is attached. Your layout plan MUST be based on this image.
+
+ANALYZE the reference image and create blocks that match its ACTUAL structure:
+- If the reference has a sidebar navigation, include a sidebar block
+- If the reference has stat/metric cards in a row, include a stats-row block
+- If the reference has a chart section, include a chart block
+- If the reference has a data table or transaction list, include that block
+- Match the NUMBER of sections and their ARRANGEMENT from the reference
+
+Do NOT fall back to a generic "hero → features → CTA" template. The plan must reflect what is ACTUALLY VISIBLE in the reference image.`;
+  }
+
+  console.log(`[callLLMPlan] System: ${PLAN_SYSTEM_PROMPT.length} chars, User: ${userPrompt.length} chars${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
 
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
   const abort = new AbortController();
@@ -1084,7 +1163,11 @@ export async function callLLMPlan(
 
   let raw: string;
   try {
-    raw = await callProvider(provider, PLAN_SYSTEM_PROMPT, userPrompt, resolvedModel, 4096, apiKey, abort, true, 0.4);
+    if (referenceImageBase64) {
+      raw = await callProviderWithImage(provider, PLAN_SYSTEM_PROMPT, userPrompt, referenceImageBase64, resolvedModel, 4096, apiKey, abort, true);
+    } else {
+      raw = await callProvider(provider, PLAN_SYSTEM_PROMPT, userPrompt, resolvedModel, 4096, apiKey, abort, true, 0.4);
+    }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }

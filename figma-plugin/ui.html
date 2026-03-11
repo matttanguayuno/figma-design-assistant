@@ -53,7 +53,7 @@
       width: 100%;
       min-height: 60px;
       flex: 1 1 auto;
-      padding: 10px;
+      padding: 10px 30px 10px 10px;
       font-family: var(--font);
       font-size: 12px;
       background: var(--surface);
@@ -67,6 +67,120 @@
 
     textarea:focus {
       border-color: var(--accent);
+    }
+
+    /* ── Prompt Input Wrapper (textarea + attachment) ─────── */
+    .prompt-wrapper {
+      display: flex;
+      flex-direction: column;
+      flex: 1 1 auto;
+      min-height: 60px;
+      position: relative;
+    }
+    .prompt-wrapper.drag-over textarea {
+      border-color: var(--accent);
+      border-style: dashed;
+    }
+    .prompt-wrapper.drag-over::after {
+      content: "Drop image here";
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(108, 92, 231, 0.12);
+      border: 2px dashed var(--accent);
+      border-radius: 6px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 600;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* ── Attach button (inside textarea, bottom-right) ──── */
+    .btn-attach {
+      position: absolute;
+      right: 6px;
+      bottom: 6px;
+      flex: none;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0.5;
+      transition: opacity 0.15s, color 0.15s, background 0.15s;
+      z-index: 1;
+    }
+    .btn-attach:hover {
+      opacity: 1;
+      color: var(--accent);
+      background: rgba(108, 92, 231, 0.1);
+    }
+    /* ── Attachment chips (below textarea) ──────── */
+    .ref-thumb-container {
+      display: none;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 4px 6px;
+      margin-top: 4px;
+    }
+    .ref-thumb-container.visible {
+      display: flex;
+    }
+    .attachment-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      animation: menuFadeIn 0.15s ease;
+      max-width: 160px;
+    }
+    .attachment-chip img {
+      width: 28px;
+      height: 20px;
+      border-radius: 2px;
+      object-fit: cover;
+      flex: none;
+    }
+    .attachment-chip-label {
+      font-size: 10px;
+      color: var(--text-muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .attachment-chip .btn-remove-chip {
+      flex: none;
+      width: 14px;
+      height: 14px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 9px;
+      border-radius: 50%;
+      transition: color 0.15s, background 0.15s;
+    }
+    .attachment-chip .btn-remove-chip:hover {
+      color: var(--danger);
+      background: rgba(214, 48, 49, 0.15);
     }
 
     .btn-row {
@@ -524,8 +638,8 @@
     }
     .history-item {
       display: flex;
-      align-items: center;
-      gap: 8px;
+      flex-direction: column;
+      gap: 2px;
       width: 100%;
       padding: 6px 12px;
       font-family: var(--font);
@@ -537,12 +651,38 @@
       cursor: pointer;
       text-align: left;
       transition: background 0.1s;
+    }
+    .history-item-prompt {
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .history-item-target {
+      font-size: 9px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .history-item-target-link {
+      color: var(--primary);
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .history-item-target-link:hover {
+      text-decoration: underline;
+    }
     .history-item:hover {
       background: var(--accent);
+      color: #fff;
+    }
+    .history-item:hover .history-item-target {
+      color: rgba(255,255,255,0.7);
+    }
+    .history-item:hover .history-item-target-link {
       color: #fff;
     }
     .history-empty {
@@ -819,7 +959,7 @@
     }
     /* When settings view is open, hide prompt area and show only settings */
     body.settings-open > .label-row,
-    body.settings-open > textarea,
+    body.settings-open > .prompt-wrapper,
     body.settings-open > .btn-row,
     body.settings-open > #job-list,
     body.settings-open > #progress-container,
@@ -844,6 +984,32 @@
       padding: 12px 14px;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+    }
+    .audit-header-left {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+    }
+    .btn-back-audit {
+      flex: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: transparent;
+      border: none;
+      color: var(--primary);
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 1px 4px 1px 2px;
+      font-size: 10px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .btn-back-audit:hover {
+      background: var(--border);
+      color: var(--primary);
+      text-decoration: underline;
     }
     .audit-title {
       font-weight: 700;
@@ -872,6 +1038,113 @@
     .btn-close-audit:hover {
       background: var(--border);
       color: var(--text);
+    }
+
+    /* ── Audit list view ──────────────────────────────── */
+    .audit-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+    .audit-list-entry {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+    .audit-list-entry:hover {
+      background: rgba(255,255,255,0.04);
+    }
+    .audit-list-entry:last-child {
+      border-bottom: none;
+    }
+    .audit-list-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .audit-list-name {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .audit-list-meta {
+      font-size: 9px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .audit-list-count {
+      flex: none;
+      min-width: 22px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 9px;
+      font-size: 9px;
+      font-weight: 700;
+      background: var(--primary);
+      color: #fff;
+    }
+    .audit-list-delete {
+      flex: none;
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 0;
+      opacity: 0;
+      transition: opacity 0.12s, background 0.12s;
+    }
+    .audit-list-entry:hover .audit-list-delete {
+      opacity: 1;
+    }
+    .audit-list-delete:hover {
+      background: rgba(255,80,80,0.15);
+      color: var(--error);
+    }
+    .audit-list-empty {
+      text-align: center;
+      padding: 24px 14px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+    .audit-list-action {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .btn-analyze-all {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 6px;
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s;
+    }
+    .btn-analyze-all:hover {
+      background: var(--accent-hover);
     }
 
     /* ── Export dropdown ───────────────────────────────── */
@@ -1018,6 +1291,11 @@
     .audit-finding:hover {
       background: rgba(255,255,255,0.04);
     }
+    .audit-finding.selected {
+      background: rgba(56,152,255,0.12);
+      border-left: 3px solid var(--primary);
+      padding-left: 33px;
+    }
     .audit-finding-header {
       display: flex;
       align-items: center;
@@ -1052,8 +1330,202 @@
       content: "\1F4A1 ";
     }
     /* ── Fix buttons ─────────────────────────────────────── */
-    .btn-fix {
+    /* ── Contrast swatches ───────────────────────────────── */
+    .contrast-swatches {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+    .contrast-pair {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+    .contrast-swatch {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,0.15);
       flex-shrink: 0;
+      vertical-align: middle;
+    }
+    .contrast-arrow {
+      font-size: 10px;
+      color: var(--text-muted);
+      margin: 0 2px;
+    }
+    .contrast-ratio-badge {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: 2px;
+    }
+    .contrast-ratio-badge.fail { background: rgba(231,76,60,0.18); color: #e74c3c; }
+    .contrast-ratio-badge.pass { background: rgba(46,204,113,0.18); color: #2ecc71; }
+    .contrast-fix-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .contrast-fix-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      color: var(--text-muted);
+    }
+    .contrast-fix-option.recommended {
+      color: var(--success);
+      font-weight: 600;
+    }
+    .contrast-token-name {
+      font-size: 8px;
+      color: var(--primary);
+      opacity: 0.8;
+    }
+    .btn-fix-contrast {
+      flex: none;
+      padding: 2px 6px;
+      font-size: 8px;
+      font-weight: 700;
+      border-radius: 3px;
+      border: 1px solid var(--primary);
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s;
+    }
+    .btn-fix-contrast:hover {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-fix-contrast.recommended {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-fix-contrast:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .btn-fix-contrast.fixed {
+      background: var(--success) !important;
+      border-color: var(--success) !important;
+      color: #fff !important;
+    }
+    /* ── Dismiss & Refresh buttons ────────────────────────── */
+    .btn-dismiss-finding {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 18px;
+      text-align: center;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: background 0.12s, color 0.12s;
+    }
+    .btn-dismiss-finding:hover {
+      background: rgba(231,76,60,0.15);
+      color: #e74c3c;
+      border-color: rgba(231,76,60,0.3);
+    }
+    .btn-prompt-fix {
+      flex: none;
+      padding: 2px 6px;
+      font-size: 8px;
+      font-weight: 600;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s, color 0.12s;
+      line-height: 1.4;
+    }
+    .btn-prompt-fix:hover {
+      background: rgba(155,89,182,0.15);
+      color: #9b59b6;
+      border-color: rgba(155,89,182,0.3);
+    }
+    .prompt-fix-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 4px;
+      padding: 4px 0;
+    }
+    .prompt-fix-input {
+      flex: 1;
+      min-width: 0;
+      padding: 4px 6px;
+      font-size: 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      outline: none;
+    }
+    .prompt-fix-input:focus {
+      border-color: var(--primary);
+    }
+    .prompt-fix-send {
+      flex: none;
+      padding: 4px 8px;
+      font-size: 9px;
+      font-weight: 700;
+      border-radius: 4px;
+      border: none;
+      background: var(--primary);
+      color: #fff;
+      cursor: pointer;
+    }
+    .prompt-fix-send:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .btn-refresh-audit {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      font-size: 9px;
+      font-weight: 700;
+      border-radius: 4px;
+      border: 1px solid var(--primary);
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.12s;
+    }
+    .btn-refresh-audit:hover {
+      background: var(--primary);
+      color: #fff;
+    }
+    .btn-refresh-audit:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .audit-finding.dismissed {
+      opacity: 0.35;
+      text-decoration: line-through;
+    }
+    .btn-fix {
+      flex: none;
       padding: 3px 8px;
       font-size: 9px;
       font-weight: 700;
@@ -1136,11 +1608,6 @@
       color: var(--danger);
       border-color: var(--danger);
       background: rgba(214, 48, 49, 0.1);
-    }
-    .audit-navigate {
-      flex-shrink: 0;
-      color: var(--text-muted);
-      margin-top: 2px;
     }
     /* ── Audit Progress Bar ──────────────────────────────── */
     .audit-progress {
@@ -1892,10 +2359,18 @@
         </div>
       </div>
     </div>
-    <textarea
-      id="intent"
-      placeholder="e.g. Add a login screen, make the header larger, change background to blue…"
-    ></textarea>
+    <div class="prompt-wrapper" id="prompt-wrapper">
+      <textarea
+        id="intent"
+        placeholder="e.g. Add a login screen, make the header larger, change background to blue…"
+      ></textarea>
+      <button class="btn-attach" id="btn-attach" title="Attach file">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><line x1="8" y1="3" x2="8" y2="13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="3" y1="8" x2="13" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
+      <div class="ref-thumb-container" id="ref-thumb-container">
+      </div>
+    </div>
+    <input type="file" id="ref-image-input" style="display:none" multiple />
 
   <div class="btn-row">
     <button id="btn-apply" class="btn-primary" disabled>Apply</button>
@@ -1974,11 +2449,21 @@
   <!-- Accessibility audit results panel -->
   <div id="audit-panel" class="audit-panel" style="display:none;">
     <div class="audit-header">
-      <span class="audit-title">Accessibility Audit</span>
+      <div class="audit-header-left">
+        <button id="btn-back-audit-list" class="btn-back-audit" title="Back to audit list" style="display:none;">
+          <svg width="8" height="8" viewBox="0 0 16 16" fill="none"><path d="M10 2L4 8l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back to List
+        </button>
+        <span class="audit-title">Accessibility Audit</span>
+      </div>
       <div class="audit-header-actions">
         <!-- Shown only during progress -->
         <button id="btn-cancel-a11y-audit" class="btn-cancel-audit" title="Cancel audit">Cancel</button>
         <!-- Shown only after results -->
+        <button id="btn-refresh-audit" class="btn-refresh-audit" title="Re-analyze selected frame(s)" style="display:none;">
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M14 8a6 6 0 11-1.5-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 2v4h-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Refresh
+        </button>
         <button id="btn-fix-all" class="btn-fix-all" title="Auto-fix all deterministic issues" style="display:none;">
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none"><path d="M2 9l4 4 8-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Fix All
@@ -2004,6 +2489,7 @@
         </button>
       </div>
     </div>
+    <div id="audit-list" class="audit-list" style="display:none;"></div>
     <div id="audit-progress" class="audit-progress hidden">
       <div class="audit-progress-segments">
         <div class="audit-progress-seg" data-audit-step="scanning">
@@ -2136,6 +2622,7 @@
     const BANNER_H_KEY = 30;  // Key-warning banner height
     const BANNER_GAP = 12;    // body flex gap between items
     const JOB_CARD_H = 46;    // approximate height of one job card + gap
+    const REF_THUMB_H = 38;   // reference image thumbnail row height + margin
     const MAX_PLUGIN_H = 600;
     var _userWidth = MIN_W;
     var _userHeight = BARE_MIN_H;
@@ -2154,6 +2641,11 @@
         h += BANNER_H_KEY + BANNER_GAP;
       }
       h += (_dsExpandedExtra || 0);
+      // Reference image thumbnail row
+      var refThumbEl = document.getElementById('ref-thumb-container');
+      if (refThumbEl && refThumbEl.classList.contains('visible')) {
+        h += REF_THUMB_H;
+      }
       var jobCount = document.getElementById('job-list').children.length;
       if (jobCount > 0) h += jobCount * JOB_CARD_H;
       // Account for wrapped status bar text
@@ -2165,6 +2657,29 @@
         }
       }
       return Math.min(h, MAX_PLUGIN_H);
+    }
+
+    /** Compute ideal height for audit list view by measuring the DOM */
+    var AUDIT_MIN_LIST_H = 280; // enough for header + action bar + ~3 entries
+    var AUDIT_MAX_LIST_H = 420; // cap before scrolling kicks in
+
+    function computeAuditListHeight() {
+      // Measure the actual audit panel content height
+      var headerEl = document.querySelector('.audit-header');
+      var listEl = auditList;
+      var headerH = headerEl ? headerEl.offsetHeight : 46;
+      var listH = listEl ? listEl.scrollHeight : 0;
+      var total = headerH + listH;
+      return Math.max(AUDIT_MIN_LIST_H, Math.min(total, AUDIT_MAX_LIST_H));
+    }
+
+    function resizeForAuditList() {
+      var target = computeAuditListHeight();
+      var w = _userWidth || MIN_W;
+      if (_hasManualResize && _userHeight > target) {
+        target = _userHeight;
+      }
+      parent.postMessage({ pluginMessage: { type: 'resize', width: w, height: Math.round(target) } }, '*');
     }
 
     /** Resize plugin to current auto-fit height (for job count changes) */
@@ -2240,6 +2755,10 @@
     // ── DOM References ────────────────────────────────────────────
     const intentEl = document.getElementById("intent");
     if (intentEl) requestAnimationFrame(() => intentEl.focus());
+    const promptWrapper = document.getElementById("prompt-wrapper");
+    const btnAttach = document.getElementById("btn-attach");
+    const refImageInput = document.getElementById("ref-image-input");
+    const refThumbContainer = document.getElementById("ref-thumb-container");
     const btnApply = document.getElementById("btn-apply");
     const btnCancel = document.getElementById("btn-cancel");
     const statusBar = document.getElementById("status-bar");
@@ -2281,6 +2800,19 @@
     const menuPageHistory = document.getElementById("menu-page-history");
     const historyListEl = document.getElementById("history-list");
     const auditPanel = document.getElementById("audit-panel");
+    const auditList = document.getElementById("audit-list");
+    auditList.addEventListener("mouseenter", function() {
+      if (_preHoverSelectionIds === null) {
+        _preHoverSelectionIds = _currentSelectionIds.slice();
+      }
+    });
+    auditList.addEventListener("mouseleave", function() {
+      if (_preHoverSelectionIds !== null) {
+        postToPlugin({ type: "select-a11y-nodes", nodeIds: _preHoverSelectionIds });
+        _preHoverSelectionIds = null;
+      }
+    });
+    const btnBackAuditList = document.getElementById("btn-back-audit-list");
     const auditSummary = document.getElementById("audit-summary");
     const auditFindings = document.getElementById("audit-findings");
     const btnCloseAudit = document.getElementById("btn-close-audit");
@@ -2295,6 +2827,7 @@
     const btnExportState = document.getElementById("btn-export-state");
     const exportMenuState = document.getElementById("export-menu-state");
     const btnFixAll = document.getElementById("btn-fix-all");
+    const btnRefreshAudit = document.getElementById("btn-refresh-audit");
     const btnCancelA11yAudit = document.getElementById("btn-cancel-a11y-audit");
     const btnCancelStateAudit = document.getElementById("btn-cancel-state-audit");
     const layoutAuditPanel = document.getElementById("layout-audit-panel");
@@ -2372,21 +2905,66 @@
       dsDetails.innerHTML = html;
     }
 
-    // Cached audit results for export
-    var _lastA11yFindings = null;
+    // ── Multi-audit cache store ────────────────────────────
+    // Key = sorted rootNodeIds.join(",")  →  { rootNodeIds, rootNodeNames, findings, dismissed, timestamp }
+    var _auditStore = {};
+    var _activeAuditKey = null;
+    var _a11yListVisible = false;
+    var _currentSelectionIds = [];
+    var _currentSelectionNames = [];
+    var _preHoverSelectionIds = null;
+
+    /** Helper: get findings array for the active audit (or null) */
+    function _activeFindings() {
+      var entry = _activeAuditKey && _auditStore[_activeAuditKey];
+      return entry ? entry.findings : null;
+    }
+    /** Helper: get dismissed keys object for the active audit (or {}) */
+    function _activeDismissed() {
+      var entry = _activeAuditKey && _auditStore[_activeAuditKey];
+      return entry ? entry.dismissed : {};
+    }
+
     var _lastStateItems = null;
 
-    // ── Audit panel mode helpers (progress vs results) ──────────
+    // ── Audit panel mode helpers (progress vs results vs list) ─
     function showA11yProgressMode() {
+      _a11yListVisible = false;
       btnCancelA11yAudit.style.display = "inline-flex";
       btnFixAll.style.display = "none";
       btnExportA11y.style.display = "none";
       btnCloseAudit.style.display = "none";
+      btnRefreshAudit.style.display = "none";
+      btnBackAuditList.style.display = "none";
+      auditList.style.display = "none";
+      auditSummary.style.display = "";
+      auditFindings.style.display = "";
     }
     function showA11yResultsMode() {
+      _a11yListVisible = false;
       btnCancelA11yAudit.style.display = "none";
       btnCloseAudit.style.display = "inline-flex";
+      btnRefreshAudit.style.display = "inline-flex";
+      btnBackAuditList.style.display = Object.keys(_auditStore).length > 0 ? "inline-flex" : "none";
+      auditList.style.display = "none";
+      auditSummary.style.display = "";
+      auditFindings.style.display = "";
       // Fix All and Export are conditionally shown by the results handler
+    }
+    function showA11yListMode() {
+      _a11yListVisible = true;
+      btnCancelA11yAudit.style.display = "none";
+      btnFixAll.style.display = "none";
+      btnExportA11y.style.display = "none";
+      btnCloseAudit.style.display = "inline-flex";
+      btnRefreshAudit.style.display = "none";
+      btnBackAuditList.style.display = "none";
+      auditList.style.display = "";
+      auditSummary.style.display = "none";
+      auditFindings.style.display = "none";
+      auditProgressEl.classList.add("hidden");
+      renderAuditList();
+      resizeForAuditList();
     }
     function showStateProgressMode() {
       btnCancelStateAudit.style.display = "inline-flex";
@@ -2435,6 +3013,125 @@
     let _providerKeys = { anthropic: "", openai: "", gemini: "" };
     // Generation mode: "standard" | "multi-step" | "html"
     let _generateMode = "standard";
+
+    // ── File attachment state ────────────────────────────────────
+    // Each attachment: { id, type: "image"|"file", data, fileName }
+    let _attachments = [];
+    let _attachIdCounter = 0;
+    const MAX_IMAGE_BYTES = 20 * 1024 * 1024; // 20 MB for images (LLM APIs handle their own limits)
+
+    function renderAttachmentChips() {
+      refThumbContainer.innerHTML = "";
+      for (const att of _attachments) {
+        const chip = document.createElement("div");
+        chip.className = "attachment-chip";
+        chip.dataset.attId = att.id;
+        if (att.type === "image") {
+          const img = document.createElement("img");
+          img.src = "data:image/png;base64," + att.data;
+          img.alt = att.fileName;
+          chip.appendChild(img);
+        }
+        const label = document.createElement("span");
+        label.className = "attachment-chip-label";
+        label.textContent = att.type === "image" ? (att.fileName || "Image") : ("\uD83D\uDCC4 " + (att.fileName || "File"));
+        chip.appendChild(label);
+        const btn = document.createElement("button");
+        btn.className = "btn-remove-chip";
+        btn.title = "Remove";
+        btn.textContent = "\u2715";
+        btn.addEventListener("click", () => removeAttachment(att.id));
+        chip.appendChild(btn);
+        refThumbContainer.appendChild(chip);
+      }
+      if (_attachments.length > 0) {
+        refThumbContainer.classList.add("visible");
+      } else {
+        refThumbContainer.classList.remove("visible");
+      }
+      requestPluginResize();
+    }
+    function addAttachment(type, data, fileName) {
+      _attachments.push({ id: ++_attachIdCounter, type, data, fileName });
+      renderAttachmentChips();
+    }
+    function removeAttachment(id) {
+      _attachments = _attachments.filter(a => a.id !== id);
+      renderAttachmentChips();
+      if (_attachments.length === 0) autoFitHeight();
+    }
+    function clearAllAttachments() {
+      _attachments = [];
+      refThumbContainer.innerHTML = "";
+      refThumbContainer.classList.remove("visible");
+      autoFitHeight();
+    }
+    function handleFile(file) {
+      if (!file) return;
+      const isImage = file.type.match(/^image\/(png|jpeg|webp|gif|svg\+xml)$/);
+      if (isImage) {
+        if (file.size > MAX_IMAGE_BYTES) {
+          setStatus("Image too large (max 20 MB).", "error");
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          const dataUrl = reader.result;
+          const base64 = dataUrl.split(",")[1];
+          if (base64) addAttachment("image", base64, file.name);
+        };
+        reader.onerror = () => setStatus("Failed to read image file.", "error");
+        reader.readAsDataURL(file);
+      } else {
+        // Non-image file: read as text (no size limit)
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = reader.result;
+          addAttachment("file", text, file.name);
+        };
+        reader.onerror = () => setStatus("Failed to read file.", "error");
+        reader.readAsText(file);
+      }
+    }
+
+    // Attach button → open file picker
+    btnAttach.addEventListener("click", () => refImageInput.click());
+    refImageInput.addEventListener("change", (e) => {
+      const files = e.target.files;
+      for (let i = 0; i < files.length; i++) handleFile(files[i]);
+      refImageInput.value = ""; // reset so re-selecting the same file triggers change
+    });
+    // Remove attachment — handled per-chip in renderAttachmentChips
+
+    // Drag-and-drop on prompt wrapper
+    promptWrapper.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      promptWrapper.classList.add("drag-over");
+    });
+    promptWrapper.addEventListener("dragleave", (e) => {
+      if (!promptWrapper.contains(e.relatedTarget)) {
+        promptWrapper.classList.remove("drag-over");
+      }
+    });
+    promptWrapper.addEventListener("drop", (e) => {
+      e.preventDefault();
+      promptWrapper.classList.remove("drag-over");
+      const files = e.dataTransfer.files;
+      for (let i = 0; i < files.length; i++) handleFile(files[i]);
+    });
+
+    // Paste image from clipboard
+    intentEl.addEventListener("paste", (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.match(/^image\//)) {
+          e.preventDefault();
+          handleFile(items[i].getAsFile());
+          return;
+        }
+      }
+    });
 
     // ── API Key state ────────────────────────────────────────────
     let _apiKey = "";
@@ -2844,14 +3541,18 @@
 
     // ── Prompt History Logic ──────────────────────────────────────
     var MAX_HISTORY = 30;
-    var _promptHistory = []; // array of strings, newest first
+    var _promptHistory = []; // array of {prompt, nodeIds, nodeNames}, newest first
 
-    function addToHistory(prompt) {
+    function addToHistory(prompt, nodeIds, nodeNames) {
       if (!prompt) return;
-      // Remove duplicate if exists
-      _promptHistory = _promptHistory.filter(function(p) { return p !== prompt; });
+      var entry = { prompt: prompt, nodeIds: nodeIds || [], nodeNames: nodeNames || [] };
+      // Remove duplicate by prompt text
+      _promptHistory = _promptHistory.filter(function(p) {
+        var txt = typeof p === "string" ? p : p.prompt;
+        return txt !== prompt;
+      });
       // Add to front
-      _promptHistory.unshift(prompt);
+      _promptHistory.unshift(entry);
       // Trim
       if (_promptHistory.length > MAX_HISTORY) _promptHistory.length = MAX_HISTORY;
       // Persist
@@ -2868,10 +3569,38 @@
         return;
       }
       for (var i = 0; i < _promptHistory.length; i++) {
-        (function(prompt) {
-          var btn = document.createElement("button");
+        (function(entry) {
+          var prompt = typeof entry === "string" ? entry : entry.prompt;
+          var nodeIds = typeof entry === "string" ? [] : (entry.nodeIds || []);
+          var nodeNames = typeof entry === "string" ? [] : (entry.nodeNames || []);
+          var targetLabel = nodeNames.length === 1 ? nodeNames[0] : (nodeNames.length > 1 ? nodeNames.length + " layers" : "");
+
+          var btn = document.createElement("div");
           btn.className = "history-item";
-          btn.textContent = prompt;
+
+          var promptEl = document.createElement("div");
+          promptEl.className = "history-item-prompt";
+          promptEl.textContent = prompt;
+          btn.appendChild(promptEl);
+
+          if (targetLabel) {
+            var targetRow = document.createElement("div");
+            targetRow.className = "history-item-target";
+            var arrow = document.createElement("span");
+            arrow.textContent = "\u279C ";
+            targetRow.appendChild(arrow);
+            var link = document.createElement("span");
+            link.className = "history-item-target-link";
+            link.textContent = targetLabel;
+            link.title = "Select \u201c" + targetLabel + "\u201d";
+            link.addEventListener("click", function(e) {
+              e.stopPropagation();
+              postToPlugin({ type: "select-a11y-nodes", nodeIds: nodeIds });
+            });
+            targetRow.appendChild(link);
+            btn.appendChild(targetRow);
+          }
+
           btn.title = prompt;
           btn.addEventListener("click", function(e) {
             e.stopPropagation();
@@ -3095,19 +3824,17 @@
     menuAuditA11y.addEventListener("click", () => {
       menuDropdown.classList.remove("show");
       menuToggle.classList.remove("open");
-      auditPanel.style.display = "flex";
-      auditSummary.textContent = "";
-      auditFindings.innerHTML = "";
-      showA11yProgressMode();
-      startAuditProgress("all"); // scope will be corrected by plugin response
-      setStatus("Running accessibility audit…");
-      postToPlugin({ type: "audit-a11y" });
+      // Ask the plugin what’s currently selected — the response handler will route
+      postToPlugin({ type: "get-a11y-selection" });
     });
 
     // ── Menu: Clear Accessibility Warnings ──────────────────────
     menuClearA11y.addEventListener("click", () => {
       closeMenu();
       auditPanel.style.display = "none";
+      _auditStore = {};
+      _activeAuditKey = null;
+      persistAuditStore();
       setStatus("Accessibility warnings cleared.", "success");
     });
 
@@ -3526,12 +4253,29 @@
       auditPanel.style.display = "none";
     });
 
+    // ── Audit panel: Back to list ─────────────────────────────
+    btnBackAuditList.addEventListener("click", () => {
+      _activeAuditKey = null;
+      showA11yListMode();
+    });
+
+    // ── Audit panel: Refresh (re-run analysis) ──────────────────
+    btnRefreshAudit.addEventListener("click", () => {
+      auditSummary.textContent = "";
+      auditFindings.innerHTML = "";
+      showA11yProgressMode();
+      startAuditProgress("all");
+      setStatus("Re-running accessibility audit…");
+      postToPlugin({ type: "audit-a11y" });
+    });
+
     // ── Audit panel: Fix All auto-fixable ───────────────────────
     btnFixAll.addEventListener("click", () => {
-      if (!_lastA11yFindings || _lastA11yFindings.length === 0) return;
+      var findings = _activeFindings();
+      if (!findings || findings.length === 0) return;
       btnFixAll.disabled = true;
       btnFixAll.textContent = "Fixing…";
-      postToPlugin({ type: "fix-all-auto", findings: _lastA11yFindings });
+      postToPlugin({ type: "fix-all-auto", findings: findings });
     });
 
     // ── Audit panel: Cancel (during progress) ───────────────────
@@ -3853,6 +4597,210 @@
       "low-opacity":  "Low opacity element"
     };
 
+    /** Build a dismiss key for a finding */
+    function a11yDismissKey(f) {
+      return f.nodeId + "||" + f.checkType;
+    }
+
+    /** Dismiss a single finding */
+    function dismissA11yFinding(f) {
+      var dismissed = _activeDismissed();
+      dismissed[a11yDismissKey(f)] = true;
+      persistAuditStore();
+
+      // Remove the specific finding element from the DOM without re-rendering
+      var key = a11yDismissKey(f);
+      var findingEl = auditFindings.querySelector('.audit-finding[data-node-id="' + f.nodeId + '"][data-check-type="' + f.checkType + '"]');
+      if (findingEl) {
+        var groupItems = findingEl.parentElement; // .audit-group-items
+        findingEl.remove();
+        // Update the group count badge
+        if (groupItems) {
+          var groupEl = groupItems.parentElement; // .audit-group
+          if (groupEl) {
+            var countBadge = groupEl.querySelector('.audit-group-count');
+            var remainingItems = groupItems.querySelectorAll('.audit-finding').length;
+            if (remainingItems === 0) {
+              groupEl.remove();
+            } else if (countBadge) {
+              countBadge.textContent = remainingItems;
+            }
+          }
+        }
+      }
+
+      // Update summary and Fix All count
+      var af = _activeFindings();
+      var ad = _activeDismissed();
+      var visibleCount = af ? af.filter(function(ff) {
+        return !ad[a11yDismissKey(ff)];
+      }).length : 0;
+      var totalCount = af ? af.length : 0;
+      var dismissedCount = totalCount - visibleCount;
+      var dismissedNote = dismissedCount > 0 ? ' (' + dismissedCount + ' dismissed)' : '';
+      if (visibleCount === 0) {
+        auditSummary.textContent = totalCount + ' issue(s) dismissed. No active issues.';
+      } else {
+        auditSummary.textContent = visibleCount + ' issue' + (visibleCount === 1 ? '' : 's') + ' found' + dismissedNote;
+      }
+      updateFixAllCount();
+    }
+
+    /** Persist the entire audit store to the backend */
+    function persistAuditStore() {
+      postToPlugin({ type: "save-a11y-store", store: _auditStore });
+    }
+
+    /** Build an audit store key from an array of root node IDs */
+    function auditStoreKey(rootNodeIds) {
+      return (rootNodeIds || []).slice().sort().join(",");
+    }
+
+    /** Format a relative timestamp (e.g. "2m ago", "1h ago") */
+    function relativeTime(ts) {
+      var diff = Date.now() - ts;
+      if (diff < 60000) return "just now";
+      if (diff < 3600000) return Math.floor(diff / 60000) + "m ago";
+      if (diff < 86400000) return Math.floor(diff / 3600000) + "h ago";
+      return Math.floor(diff / 86400000) + "d ago";
+    }
+
+    /** Render the audit list view (all cached audits) */
+    function renderAuditList() {
+      auditList.innerHTML = "";
+      var keys = Object.keys(_auditStore);
+      if (keys.length === 0) {
+        auditList.innerHTML = '<div class="audit-list-empty">No saved audits. Select a frame and run an accessibility audit.</div>';
+        return;
+      }
+      // Action bar: Analyze selection or Analyze All
+      var actionBar = document.createElement("div");
+      actionBar.className = "audit-list-action";
+      if (_currentSelectionIds.length > 0) {
+        var selName = _currentSelectionNames.length === 1 ? _currentSelectionNames[0] : _currentSelectionNames.length + " layers";
+        var selKey = auditStoreKey(_currentSelectionIds);
+        var cached = selKey && _auditStore[selKey];
+        var selBtn = document.createElement("button");
+        selBtn.className = "btn-analyze-all";
+        if (cached) {
+          selBtn.textContent = 'View \u201c' + selName + '\u201d Audit';
+          selBtn.addEventListener("click", function() {
+            _activeAuditKey = selKey;
+            showA11yResultsMode();
+            renderAuditFindings(_auditStore[selKey].findings);
+            btnExportA11y.style.display = _auditStore[selKey].findings.length > 0 ? "flex" : "none";
+          });
+          actionBar.appendChild(selBtn);
+        } else {
+          selBtn.textContent = 'Audit \u201c' + selName + '\u201d';
+          selBtn.addEventListener("click", function() {
+            auditSummary.textContent = "";
+            auditFindings.innerHTML = "";
+            showA11yProgressMode();
+            startAuditProgress("all");
+            setStatus("Running accessibility audit\u2026");
+            postToPlugin({ type: "audit-a11y" });
+          });
+          actionBar.appendChild(selBtn);
+          // Also show Analyze Current Page alongside
+          var analyzeBtn = document.createElement("button");
+          analyzeBtn.className = "btn-analyze-all";
+          analyzeBtn.textContent = 'Analyze Current Page';
+          analyzeBtn.addEventListener("click", function() {
+            auditSummary.textContent = "";
+            auditFindings.innerHTML = "";
+            showA11yProgressMode();
+            startAuditProgress("all");
+            setStatus("Running accessibility audit\u2026");
+            postToPlugin({ type: "audit-a11y" });
+          });
+          actionBar.appendChild(analyzeBtn);
+        }
+      } else {
+        var analyzeBtn = document.createElement("button");
+        analyzeBtn.className = "btn-analyze-all";
+        analyzeBtn.textContent = 'Analyze Current Page';
+        analyzeBtn.addEventListener("click", function() {
+          auditSummary.textContent = "";
+          auditFindings.innerHTML = "";
+          showA11yProgressMode();
+          startAuditProgress("all");
+          setStatus("Running accessibility audit\u2026");
+          postToPlugin({ type: "audit-a11y" });
+        });
+        actionBar.appendChild(analyzeBtn);
+      }
+      actionBar.addEventListener("mouseenter", function() {
+        if (_preHoverSelectionIds !== null) {
+          postToPlugin({ type: "select-a11y-nodes", nodeIds: _preHoverSelectionIds });
+        }
+      });
+      auditList.appendChild(actionBar);
+      // Sort by timestamp descending (newest first)
+      keys.sort(function(a, b) { return (_auditStore[b].timestamp || 0) - (_auditStore[a].timestamp || 0); });
+      keys.forEach(function(key) {
+        var entry = _auditStore[key];
+        var name = (entry.rootNodeNames || []).join(", ") || "Unknown";
+        var count = (entry.findings || []).length;
+        var dismissed = entry.dismissed ? Object.keys(entry.dismissed).length : 0;
+        var active = count - dismissed;
+
+        var row = document.createElement("div");
+        row.className = "audit-list-entry";
+
+        var info = document.createElement("div");
+        info.className = "audit-list-info";
+        var nameEl = document.createElement("div");
+        nameEl.className = "audit-list-name";
+        nameEl.textContent = name;
+        var meta = document.createElement("div");
+        meta.className = "audit-list-meta";
+        meta.textContent = active + " issue" + (active === 1 ? "" : "s") + (dismissed > 0 ? " (" + dismissed + " dismissed)" : "") + " · " + relativeTime(entry.timestamp);
+        info.appendChild(nameEl);
+        info.appendChild(meta);
+
+        var badge = document.createElement("span");
+        badge.className = "audit-list-count";
+        badge.textContent = active;
+        if (active === 0) {
+          badge.style.background = "var(--success)";
+        }
+
+        var delBtn = document.createElement("button");
+        delBtn.className = "audit-list-delete";
+        delBtn.title = "Delete this audit";
+        delBtn.innerHTML = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+        delBtn.addEventListener("click", function(e) {
+          e.stopPropagation();
+          delete _auditStore[key];
+          if (_activeAuditKey === key) {
+            _activeAuditKey = null;
+          }
+          persistAuditStore();
+          renderAuditList();
+          // If store is now empty, hide the panel
+          if (Object.keys(_auditStore).length === 0) {
+            auditPanel.style.display = "none";
+          }
+        });
+
+        row.appendChild(info);
+        row.appendChild(badge);
+        row.appendChild(delBtn);
+        row.addEventListener("mouseenter", function() {
+          postToPlugin({ type: "select-a11y-nodes", nodeIds: entry.rootNodeIds || [] });
+        });
+        row.addEventListener("click", function() {
+          _activeAuditKey = key;
+          postToPlugin({ type: "select-a11y-nodes", nodeIds: entry.rootNodeIds || [] });
+          showA11yResultsMode();
+          renderAuditFindings(entry.findings);
+          btnExportA11y.style.display = entry.findings.length > 0 ? "flex" : "none";
+        });
+        auditList.appendChild(row);
+      });
+    }
+
     /** Render audit findings grouped by check type */
     function renderAuditFindings(findings) {
       auditFindings.innerHTML = "";
@@ -3863,12 +4811,34 @@
         return;
       }
 
-      // Count auto-fixable issues
-      var autoCount = findings.filter(function(f) { return f.fixType === "auto"; }).length;
-      var llmCount = findings.filter(function(f) { return f.fixType === "llm"; }).length;
+      // Filter out dismissed findings
+      var dismissed = _activeDismissed();
+      var visibleFindings = findings.filter(function(f) {
+        return !dismissed[a11yDismissKey(f)];
+      });
+
+      if (visibleFindings.length === 0) {
+        auditSummary.textContent = findings.length + " issue(s) dismissed. No active issues.";
+        btnFixAll.style.display = "none";
+        return;
+      }
+
+      // Count auto-fixable issues (from visible only)
+      var autoCount = visibleFindings.filter(function(f) { return f.fixType === "auto"; }).length;
+      var llmCount = visibleFindings.filter(function(f) { return f.fixType === "llm"; }).length;
       var fixableCount = autoCount + llmCount;
 
-      auditSummary.textContent = findings.length + " issue" + (findings.length === 1 ? "" : "s") + " found";
+      // Contrast summary
+      var contrastFindings = visibleFindings.filter(function(f) { return f.checkType === "contrast"; });
+      var totalContrastPairs = contrastFindings.length;
+      var dismissedCount = findings.length - visibleFindings.length;
+      var dismissedNote = dismissedCount > 0 ? " (" + dismissedCount + " dismissed)" : "";
+      // Count pass vs fail from details if available
+      if (totalContrastPairs > 0) {
+        auditSummary.textContent = visibleFindings.length + " issue" + (visibleFindings.length === 1 ? "" : "s") + " found (" + totalContrastPairs + " contrast)" + dismissedNote;
+      } else {
+        auditSummary.textContent = visibleFindings.length + " issue" + (visibleFindings.length === 1 ? "" : "s") + " found" + dismissedNote;
+      }
 
       // Show/hide Fix All button
       if (autoCount > 0) {
@@ -3880,10 +4850,10 @@
         btnFixAll.style.display = "none";
       }
 
-      // Group findings by checkType
+      // Group visible findings by checkType
       var groups = {};
       var groupOrder = [];
-      findings.forEach(function(f) {
+      visibleFindings.forEach(function(f) {
         if (!groups[f.checkType]) {
           groups[f.checkType] = [];
           groupOrder.push(f.checkType);
@@ -3920,14 +4890,19 @@
           el.className = "audit-finding";
           el.setAttribute("data-node-id", f.nodeId);
           el.setAttribute("data-check-type", f.checkType);
+          el.addEventListener("click", function(e) {
+            // Don't select when clicking buttons or inputs
+            if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'INPUT')) return;
+            var prev = auditFindings.querySelector('.audit-finding.selected');
+            if (prev) prev.classList.remove('selected');
+            el.classList.add('selected');
+            postToPlugin({ type: "select-node", nodeId: f.nodeId });
+          });
 
           // Header row: node name + fix button + chevron
           var headerRow = document.createElement("div");
           headerRow.className = "audit-finding-header";
           headerRow.style.cursor = "pointer";
-          headerRow.addEventListener("click", function() {
-            postToPlugin({ type: "select-node", nodeId: f.nodeId });
-          });
 
           var nameEl = document.createElement("div");
           nameEl.className = "audit-node-name";
@@ -3936,20 +4911,57 @@
 
           // Fix button (only for auto and llm)
           if (f.fixType === "auto" || f.fixType === "llm") {
-            var fixBtn = document.createElement("button");
-            fixBtn.className = "btn-fix";
-            fixBtn.setAttribute("data-fix-type", f.fixType);
-            fixBtn.setAttribute("data-node-id", f.nodeId);
-            fixBtn.setAttribute("data-check-type", f.checkType);
-            fixBtn.textContent = f.fixType === "auto" ? "Fix" : "AI Fix";
-            fixBtn.title = f.fixType === "auto" ? "Apply deterministic fix" : "Use AI to suggest and apply a fix";
-            fixBtn.addEventListener("click", function(e) {
-              e.stopPropagation();
-              fixBtn.disabled = true;
-              fixBtn.textContent = "Fixing…";
-              postToPlugin({ type: "fix-finding", finding: f });
-            });
-            headerRow.appendChild(fixBtn);
+            // For contrast findings with dual suggestions, show split buttons
+            if (f.checkType === "contrast" && f.details && (f.details.suggestedFg || f.details.suggestedBg)) {
+              var fixFgBtn = document.createElement("button");
+              fixFgBtn.className = "btn-fix-contrast" + (f.details.recommendedFix !== "bg" ? " recommended" : "");
+              fixFgBtn.textContent = "Fix Text";
+              fixFgBtn.title = "Adjust text color" + (f.details.suggestedFgToken ? " → " + f.details.suggestedFgToken.name : "");
+              fixFgBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                fixFgBtn.disabled = true;
+                fixFgBtn.textContent = "Fixing…";
+                var findingCopy = JSON.parse(JSON.stringify(f));
+                findingCopy.details.fixTarget = "fg";
+                postToPlugin({ type: "fix-finding", finding: findingCopy });
+              });
+              headerRow.appendChild(fixFgBtn);
+
+              // Only offer Fix BG when the bg adjustment is moderate (not a dramatic redesign)
+              var bgDelta = f.details.suggestedBg ? (f.details.suggestedBg.delta || 1) : 1;
+              var fgDelta = f.details.suggestedFg ? (f.details.suggestedFg.delta || 1) : 1;
+              var bgIsReasonable = f.details.recommendedFix === "bg" || bgDelta < 0.35 || bgDelta <= fgDelta * 1.5;
+              if (f.details.suggestedBg && bgIsReasonable) {
+                var fixBgBtn = document.createElement("button");
+                fixBgBtn.className = "btn-fix-contrast" + (f.details.recommendedFix === "bg" ? " recommended" : "");
+                fixBgBtn.textContent = "Fix BG";
+                fixBgBtn.title = "Adjust background color" + (f.details.suggestedBgToken ? " → " + f.details.suggestedBgToken.name : "");
+                fixBgBtn.addEventListener("click", function(e) {
+                  e.stopPropagation();
+                  fixBgBtn.disabled = true;
+                  fixBgBtn.textContent = "Fixing…";
+                  var findingCopy = JSON.parse(JSON.stringify(f));
+                  findingCopy.details.fixTarget = "bg";
+                  postToPlugin({ type: "fix-finding", finding: findingCopy });
+                });
+                headerRow.appendChild(fixBgBtn);
+              }
+            } else {
+              var fixBtn = document.createElement("button");
+              fixBtn.className = "btn-fix";
+              fixBtn.setAttribute("data-fix-type", f.fixType);
+              fixBtn.setAttribute("data-node-id", f.nodeId);
+              fixBtn.setAttribute("data-check-type", f.checkType);
+              fixBtn.textContent = f.fixType === "auto" ? "Fix" : "AI Fix";
+              fixBtn.title = f.fixType === "auto" ? "Apply deterministic fix" : "Use AI to suggest and apply a fix";
+              fixBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                fixBtn.disabled = true;
+                fixBtn.textContent = "Fixing…";
+                postToPlugin({ type: "fix-finding", finding: f });
+              });
+              headerRow.appendChild(fixBtn);
+            }
           } else if (f.fixType === "manual") {
             var manualTag = document.createElement("span");
             manualTag.style.cssText = "flex-shrink:0;font-size:9px;color:var(--text-muted);padding:3px 6px;";
@@ -3958,15 +4970,60 @@
             headerRow.appendChild(manualTag);
           }
 
-          // Navigate chevron
-          var navSvg = document.createElement("span");
-          navSvg.innerHTML = '<svg class="audit-navigate" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-          navSvg.style.cursor = "pointer";
-          navSvg.addEventListener("click", function(e) {
+          // Prompt Fix button (between fix and dismiss)
+          var promptFixBtn = document.createElement("button");
+          promptFixBtn.className = "btn-prompt-fix";
+          promptFixBtn.textContent = "Prompt";
+          promptFixBtn.title = "Fix with a custom instruction";
+          promptFixBtn.addEventListener("click", function(e) {
             e.stopPropagation();
-            postToPlugin({ type: "select-node", nodeId: f.nodeId });
+            // Toggle prompt input row
+            var existing = el.querySelector('.prompt-fix-row');
+            if (existing) {
+              existing.remove();
+              return;
+            }
+            var row = document.createElement('div');
+            row.className = 'prompt-fix-row';
+            var inp = document.createElement('input');
+            inp.className = 'prompt-fix-input';
+            inp.type = 'text';
+            inp.placeholder = 'e.g. "Use token primary-500" or "Make it darker"';
+            var sendBtn = document.createElement('button');
+            sendBtn.className = 'prompt-fix-send';
+            sendBtn.textContent = 'Fix';
+            function doSend() {
+              var prompt = inp.value.trim();
+              if (!prompt) return;
+              sendBtn.disabled = true;
+              sendBtn.textContent = 'Fixing…';
+              inp.disabled = true;
+              var findingCopy = JSON.parse(JSON.stringify(f));
+              findingCopy.userPrompt = prompt;
+              postToPlugin({ type: "fix-finding", finding: findingCopy });
+            }
+            sendBtn.addEventListener('click', function(e2) { e2.stopPropagation(); doSend(); });
+            inp.addEventListener('keydown', function(e2) { if (e2.key === 'Enter') { e2.stopPropagation(); doSend(); } });
+            inp.addEventListener('click', function(e2) { e2.stopPropagation(); });
+            row.addEventListener('click', function(e2) { e2.stopPropagation(); });
+            row.appendChild(inp);
+            row.appendChild(sendBtn);
+            // Insert after header row
+            el.insertBefore(row, headerRow.nextSibling);
+            inp.focus();
           });
-          headerRow.appendChild(navSvg);
+          headerRow.appendChild(promptFixBtn);
+
+          // Dismiss button (X)
+          var dismissBtn = document.createElement("button");
+          dismissBtn.className = "btn-dismiss-finding";
+          dismissBtn.textContent = "×";
+          dismissBtn.title = "Dismiss this finding";
+          dismissBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            dismissA11yFinding(f);
+          });
+          headerRow.appendChild(dismissBtn);
 
           el.appendChild(headerRow);
 
@@ -3974,8 +5031,59 @@
           var bodyEl = document.createElement("div");
           bodyEl.className = "audit-finding-body";
           bodyEl.style.cursor = "pointer";
+
+          // For contrast findings, show color swatches
+          var swatchHtml = "";
+          if (f.checkType === "contrast" && f.details) {
+            var d = f.details;
+            var fgHex = d.fgHex || "#???";
+            var bgHex = d.bgHex || "#???";
+            var ratio = d.ratio ? d.ratio.toFixed(1) : "?";
+            var threshold = d.threshold || 4.5;
+            var passFail = d.ratio >= threshold ? "pass" : "fail";
+
+            swatchHtml += '<div class="contrast-swatches">';
+            swatchHtml += '<div class="contrast-pair">';
+            swatchHtml += '<span class="contrast-swatch" style="background:' + escapeHtml(fgHex) + '"></span>';
+            swatchHtml += '<span>' + escapeHtml(fgHex) + '</span>';
+            swatchHtml += '<span class="contrast-arrow">on</span>';
+            swatchHtml += '<span class="contrast-swatch" style="background:' + escapeHtml(bgHex) + '"></span>';
+            swatchHtml += '<span>' + escapeHtml(bgHex) + '</span>';
+            swatchHtml += '<span class="contrast-ratio-badge ' + passFail + '">' + ratio + ':1</span>';
+            swatchHtml += '</div>';
+            swatchHtml += '</div>';
+
+            // Show suggested replacements
+            if (d.suggestedFg || d.suggestedBg) {
+              swatchHtml += '<div class="contrast-fix-row">';
+              if (d.suggestedFg) {
+                var sfHex = d.suggestedFg.hex || "#???";
+                var sfToken = d.suggestedFgToken ? d.suggestedFgToken.name : "";
+                var sfClass = d.recommendedFix !== "bg" ? " recommended" : "";
+                swatchHtml += '<div class="contrast-fix-option' + sfClass + '">';
+                swatchHtml += '<span class="contrast-swatch" style="background:' + escapeHtml(sfHex) + '"></span>';
+                swatchHtml += '<span>' + escapeHtml(sfHex) + '</span>';
+                if (sfToken) swatchHtml += ' <span class="contrast-token-name">' + escapeHtml(sfToken) + '</span>';
+                swatchHtml += '</div>';
+              }
+              if (d.suggestedBg) {
+                var sbHex = d.suggestedBg.hex || "#???";
+                var sbToken = d.suggestedBgToken ? d.suggestedBgToken.name : "";
+                var sbClass = d.recommendedFix === "bg" ? " recommended" : "";
+                swatchHtml += '<div class="contrast-fix-option' + sbClass + '">';
+                swatchHtml += '<span class="contrast-arrow">/</span>';
+                swatchHtml += '<span class="contrast-swatch" style="background:' + escapeHtml(sbHex) + '"></span>';
+                swatchHtml += '<span>' + escapeHtml(sbHex) + '</span>';
+                if (sbToken) swatchHtml += ' <span class="contrast-token-name">' + escapeHtml(sbToken) + '</span>';
+                swatchHtml += '</div>';
+              }
+              swatchHtml += '</div>';
+            }
+          }
+
           bodyEl.innerHTML =
             '<div class="audit-message">' + escapeHtml(f.message) + '</div>' +
+            swatchHtml +
             (f.suggestion ? '<div class="audit-suggestion">' + escapeHtml(f.suggestion) + '</div>' : '');
           bodyEl.addEventListener("click", function() {
             postToPlugin({ type: "select-node", nodeId: f.nodeId });
@@ -3992,8 +5100,12 @@
 
     /** Update the Fix All button count after individual fixes */
     function updateFixAllCount() {
-      if (!_lastA11yFindings) return;
-      var remaining = _lastA11yFindings.filter(function(f) { return f.fixType === "auto"; }).length;
+      var findings = _activeFindings();
+      if (!findings) return;
+      var dismissed = _activeDismissed();
+      var remaining = findings.filter(function(f) {
+        return f.fixType === "auto" && !dismissed[a11yDismissKey(f)];
+      }).length;
       if (remaining > 0) {
         btnFixAll.style.display = "flex";
         btnFixAll.disabled = false;
@@ -4162,11 +5274,13 @@
 
     document.getElementById("export-a11y-md").addEventListener("click", function() {
       closeAllExportMenus();
-      if (_lastA11yFindings) downloadMarkdown(exportA11yAsMarkdown(_lastA11yFindings), "accessibility-audit.md");
+      var af = _activeFindings();
+      if (af) downloadMarkdown(exportA11yAsMarkdown(af), "accessibility-audit.md");
     });
     document.getElementById("export-a11y-json").addEventListener("click", function() {
       closeAllExportMenus();
-      if (_lastA11yFindings) downloadJson(exportA11yAsJson(_lastA11yFindings), "accessibility-audit.json");
+      var af = _activeFindings();
+      if (af) downloadJson(exportA11yAsJson(af), "accessibility-audit.json");
     });
     document.getElementById("export-state-md").addEventListener("click", function() {
       closeAllExportMenus();
@@ -4545,8 +5659,19 @@
         if (_dsExpandedExtra) { _dsExpandedExtra = 0; }
         dsBanner.style.display = "none";
       }
-      addToHistory(intent);
-      postToPlugin({ type: "run", intent, generateMode: _generateMode });
+      addToHistory(intent, _currentSelectionIds, _currentSelectionNames);
+      let finalIntent = intent;
+      // Append all text-file attachments to the prompt
+      const textAtts = _attachments.filter(a => a.type === "file");
+      for (const att of textAtts) {
+        finalIntent += "\n\n--- Attached file: " + (att.fileName || "file") + " ---\n" + att.data + "\n--- End of attached file ---";
+      }
+      const runMsg = { type: "run", intent: finalIntent, generateMode: _generateMode };
+      // Use the first image attachment as the reference image
+      const imgAtt = _attachments.find(a => a.type === "image");
+      if (imgAtt) runMsg.referenceImageBase64 = imgAtt.data;
+      postToPlugin(runMsg);
+      clearAllAttachments();
     });
 
     btnCancel.addEventListener("click", () => {
@@ -4643,14 +5768,71 @@
           }
           break;
         }
+        case "a11y-selection-info": {
+          var selIds = msg.rootNodeIds || [];
+          var hasSelection = selIds.length > 0;
+          auditPanel.style.display = "flex";
+
+          if (hasSelection) {
+            var selKey = auditStoreKey(selIds);
+            if (selKey && _auditStore[selKey]) {
+              // Selection matches a cached audit — show it directly
+              _activeAuditKey = selKey;
+              showA11yResultsMode();
+              renderAuditFindings(_auditStore[selKey].findings);
+              btnExportA11y.style.display = _auditStore[selKey].findings.length > 0 ? "flex" : "none";
+            } else {
+              // Selection has not been audited yet — run fresh
+              auditSummary.textContent = "";
+              auditFindings.innerHTML = "";
+              showA11yProgressMode();
+              startAuditProgress("all");
+              setStatus("Running accessibility audit\u2026");
+              postToPlugin({ type: "audit-a11y" });
+            }
+          } else {
+            // Nothing selected
+            var storeKeys = Object.keys(_auditStore);
+            if (storeKeys.length > 0) {
+              showA11yListMode();
+            } else {
+              // No cached audits and nothing selected — audit entire page
+              auditSummary.textContent = "";
+              auditFindings.innerHTML = "";
+              showA11yProgressMode();
+              startAuditProgress("all");
+              setStatus("Running accessibility audit\u2026");
+              postToPlugin({ type: "audit-a11y" });
+            }
+          }
+          break;
+        }
         case "audit-results": {
           advanceAuditPhase("done");
+          var findings = msg.findings || [];
+          var rootIds = msg.rootNodeIds || [];
+          var rootNames = msg.rootNodeNames || [];
+          var key = auditStoreKey(rootIds);
+
+          // Upsert into audit store
+          if (key) {
+            var existingDismissed = (_auditStore[key] && _auditStore[key].dismissed) || {};
+            _auditStore[key] = {
+              rootNodeIds: rootIds,
+              rootNodeNames: rootNames,
+              findings: findings,
+              dismissed: existingDismissed,
+              timestamp: Date.now()
+            };
+            _activeAuditKey = key;
+            persistAuditStore();
+          }
+
           showA11yResultsMode();
           auditPanel.style.display = "flex";
-          _lastA11yFindings = msg.findings || [];
-          btnExportA11y.style.display = _lastA11yFindings.length > 0 ? "flex" : "none";
-          renderAuditFindings(msg.findings);
-          var issueCount = (msg.findings || []).length;
+          btnExportA11y.style.display = findings.length > 0 ? "flex" : "none";
+          renderAuditFindings(findings);
+          var issueCount = findings.length;
           setStatus("Audit complete: " + issueCount + " issue" + (issueCount === 1 ? "" : "s") + " found", issueCount > 0 ? "warning" : "success");
           break;
         }
@@ -4669,25 +5851,78 @@
           break;
         }
 
+        // ── Restore persisted audit store ─────────────────
+        case "restore-a11y-store": {
+          if (msg.store && typeof msg.store === "object") {
+            _auditStore = msg.store;
+          }
+          break;
+        }
+
         // ── Fix Result (single finding) ──────────────────────
         case "fix-result": {
           var fixBtn = auditFindings.querySelector('.btn-fix[data-node-id="' + msg.nodeId + '"][data-check-type="' + msg.checkType + '"]');
+          // Also try contrast fix buttons for the finding's node
+          var contrastBtns = [];
+          if (!fixBtn) {
+            var findingEl = auditFindings.querySelector('.audit-finding[data-node-id="' + msg.nodeId + '"][data-check-type="' + msg.checkType + '"]');
+            if (findingEl) {
+              contrastBtns = findingEl.querySelectorAll('.btn-fix-contrast');
+            }
+          }
           if (fixBtn) {
             fixBtn.disabled = true;
             if (msg.success) {
               fixBtn.className = "btn-fix fixed";
               fixBtn.textContent = "Fixed";
-              // Remove the finding from cached results
-              if (_lastA11yFindings) {
-                _lastA11yFindings = _lastA11yFindings.filter(function(f) {
+              // Remove prompt row and prompt button
+              var findingEl = fixBtn.closest('.audit-finding');
+              if (findingEl) {
+                var pr = findingEl.querySelector('.prompt-fix-row');
+                if (pr) pr.remove();
+                var pb = findingEl.querySelector('.btn-prompt-fix');
+                if (pb) pb.remove();
+              }
+              if (_activeAuditKey && _auditStore[_activeAuditKey]) {
+                _auditStore[_activeAuditKey].findings = _auditStore[_activeAuditKey].findings.filter(function(f) {
                   return !(f.nodeId === msg.nodeId && f.checkType === msg.checkType);
                 });
+                persistAuditStore();
               }
               setStatus(msg.message, "success");
             } else {
               fixBtn.className = "btn-fix failed";
               fixBtn.textContent = "Failed";
               fixBtn.title = msg.message;
+              setStatus("Fix failed: " + msg.message, "error");
+            }
+          } else if (contrastBtns.length > 0) {
+            contrastBtns.forEach(function(b) {
+              b.disabled = true;
+              if (msg.success) {
+                b.className = "btn-fix-contrast fixed";
+                b.textContent = "Fixed";
+              } else {
+                b.textContent = "Failed";
+              }
+            });
+            if (msg.success) {
+              // Remove prompt row and prompt button
+              var findingEl2 = auditFindings.querySelector('.audit-finding[data-node-id="' + msg.nodeId + '"][data-check-type="' + msg.checkType + '"]');
+              if (findingEl2) {
+                var pr2 = findingEl2.querySelector('.prompt-fix-row');
+                if (pr2) pr2.remove();
+                var pb2 = findingEl2.querySelector('.btn-prompt-fix');
+                if (pb2) pb2.remove();
+              }
+            }
+            if (msg.success && _activeAuditKey && _auditStore[_activeAuditKey]) {
+              _auditStore[_activeAuditKey].findings = _auditStore[_activeAuditKey].findings.filter(function(f) {
+                return !(f.nodeId === msg.nodeId && f.checkType === msg.checkType);
+              });
+              persistAuditStore();
+              setStatus(msg.message, "success");
+            } else if (!msg.success) {
               setStatus("Fix failed: " + msg.message, "error");
             }
           }
@@ -4709,8 +5944,8 @@
                 btn.textContent = "Fixed";
                 successes++;
                 // Remove from cached findings
-                if (_lastA11yFindings) {
-                  _lastA11yFindings = _lastA11yFindings.filter(function(f) {
+                if (_activeAuditKey && _auditStore[_activeAuditKey]) {
+                  _auditStore[_activeAuditKey].findings = _auditStore[_activeAuditKey].findings.filter(function(f) {
                     return !(f.nodeId === r.nodeId && f.checkType === r.checkType);
                   });
                 }
@@ -4725,6 +5960,8 @@
           btnFixAll.textContent = successes + " of " + results.length + " fixed";
           setStatus("Fixed " + successes + " of " + results.length + " issue(s).", successes === results.length ? "success" : "warning");
           updateFixAllCount();
+          // Persist updated findings
+          persistAuditStore();
           break;
         }
 
@@ -4850,7 +6087,21 @@
           break;
         }
         case "job-progress": {
+          // Scale generate estimate temporarily when multiple variants are being styled
+          if (msg.phase === "generate" && msg.variantCount && msg.variantCount > 1) {
+            // Use a temporary scaled estimate for this run only. The moving average
+            // in updateJobPhase will capture the actual timing for future runs.
+            var baseEst = phaseEstimates["generate"] || 90000;
+            phaseEstimates["generate"] = baseEst * msg.variantCount;
+            // Store original so we can restore after this run
+            phaseEstimates["_generateBase"] = baseEst;
+          }
           updateJobPhase(msg.jobId, msg.phase);
+          // Restore base estimate when moving past generate phase
+          if (msg.phase !== "generate" && phaseEstimates["_generateBase"]) {
+            phaseEstimates["generate"] = phaseEstimates["_generateBase"];
+            delete phaseEstimates["_generateBase"];
+          }
           break;
         }
         case "job-complete": {
@@ -4951,6 +6202,16 @@
         case "selection-change": {
           setSelectionStatus(msg.label);
           updateButtonLabel(msg.label !== "Nothing selected — will generate new frame");
+          if (_preHoverSelectionIds !== null) {
+            // Hover preview is active — don't update stored selection or re-render action bar
+            break;
+          }
+          _currentSelectionIds = msg.rootNodeIds || [];
+          _currentSelectionNames = msg.rootNodeNames || [];
+          if (_a11yListVisible) {
+            renderAuditList();
+            resizeForAuditList();
+          }
           break;
         }
         case "load-timings": {
@@ -5007,7 +6268,11 @@
         }
         case "load-prompt-history": {
           if (Array.isArray(msg.history)) {
-            _promptHistory = msg.history;
+            // Backward compat: convert old string entries to objects
+            _promptHistory = msg.history.map(function(entry) {
+              if (typeof entry === "string") return { prompt: entry, nodeIds: [], nodeNames: [] };
+              return entry;
+            });
           }
           break;
         }

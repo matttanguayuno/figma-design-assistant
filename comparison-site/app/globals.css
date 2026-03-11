@@ -1,1 +1,43 @@
 @import "tailwindcss";
+
+:root {
+  /* Uno Brand Colors */
+  --uno-blue: #6489FF;
+  --uno-violet: #8C00B8;
+  --uno-green: #8AE9A3;
+  --uno-rose: #E15A7B;
+  --uno-cyan: #C8E5E1;
+  --uno-amber: #F59E0B;
+
+  /* Dark Theme Palette */
+  --bg: #0a0a0f;
+  --surface: #16161d;
+  --surface-2: #1e1e26;
+  --surface-3: #26262f;
+  --border: #2d2d38;
+  --border-bright: #3d3d4a;
+  --text: #e8e8f0;
+  --text-muted: #9ca3af;
+  --text-dim: #6b7280;
+
+  /* Status chip colors */
+  --status-yes-bg: rgba(103, 229, 173, 0.12);
+  --status-yes-border: rgba(103, 229, 173, 0.35);
+  --status-warning-bg: rgba(245, 158, 11, 0.12);
+  --status-warning-border: rgba(245, 158, 11, 0.35);
+  --status-no-bg: rgba(248, 89, 119, 0.12);
+  --status-no-border: rgba(248, 89, 119, 0.35);
+
+  /* Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+}
+
+/* Hide Next.js dev tools floating button */
+[data-nextjs-dev-tools-button] {
+  display: none !important;
+}
+nextjs-portal {
+  display: none !important;
+}

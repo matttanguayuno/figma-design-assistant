@@ -23,6 +23,7 @@ import {
   FullDesignSystemComponent,
   FullDesignSystemVariable,
   FullDesignSystemTypography,
+  FullDesignSystemLayout,
   DSSummary,
   DSSummaryColorToken,
 } from "./types";
@@ -1458,29 +1459,130 @@ async function embedImagesInSnapshot(snap: NodeSnapshot, node: SceneNode): Promi
 
 // ── 1a-bis. Accessibility Audit ─────────────────────────────────────
 
-/** Extract the first solid fill colour from a node as {r,g,b} in 0-1 range */
-function extractFillColor(node: SceneNode): { r: number; g: number; b: number } | null {
+/** Extract the first solid fill colour from a node as {r,g,b,a} in 0-1 range.
+ *  'a' accounts for the paint's own opacity (but NOT node-level opacity). */
+function extractFillColor(node: SceneNode): { r: number; g: number; b: number; a: number } | null {
   if (!("fills" in node)) return null;
   const fills = (node as any).fills;
   if (!Array.isArray(fills)) return null;
   for (const f of fills) {
     if (f.type === "SOLID" && f.visible !== false) {
-      return { r: f.color.r, g: f.color.g, b: f.color.b };
+      const a = typeof f.opacity === "number" ? f.opacity : 1;
+      return { r: f.color.r, g: f.color.g, b: f.color.b, a };
     }
   }
   return null;
 }
 
-/** Walk up to find the nearest ancestor background colour */
-function resolveBackgroundColor(node: SceneNode): { r: number; g: number; b: number } {
+/** Alpha-composite a foreground colour (with alpha) over an opaque background.
+ *  Returns the effective opaque {r,g,b} after blending. */
+function alphaComposite(
+  fg: { r: number; g: number; b: number },
+  alpha: number,
+  bg: { r: number; g: number; b: number }
+): { r: number; g: number; b: number } {
+  const a = Math.max(0, Math.min(1, alpha));
+  return {
+    r: fg.r * a + bg.r * (1 - a),
+    g: fg.g * a + bg.g * (1 - a),
+    b: fg.b * a + bg.b * (1 - a),
+  };
+}
+
+/** Check if a node is inside a dark-mode variant/component by examining ancestor names */
+function isInsideDarkVariant(node: SceneNode): boolean {
   let current: BaseNode | null = node.parent;
   while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
-    const col = extractFillColor(current as SceneNode);
-    if (col) return col;
+    const name = (current as any).name as string | undefined;
+    if (name) {
+      // Check variant property patterns: "Mode=Dark", "Theme=Dark", "Style=Dark", "Color=Dark", etc.
+      if (/\b(mode|theme|style|color|appearance|scheme)\s*=\s*dark\b/i.test(name)) return true;
+      // Check simple name patterns: "Dark", "dark-mode", "Dark Mode", "DarkVariant"
+      if (/\bdark\b/i.test(name) && (current as any).type === "COMPONENT") return true;
+    }
+    // Also check variant properties directly on COMPONENT nodes
+    if ((current as any).type === "COMPONENT" && "variantProperties" in (current as any)) {
+      try {
+        const props = (current as any).variantProperties;
+        if (props) {
+          for (const key of Object.keys(props)) {
+            if (/\b(mode|theme|style|appearance|scheme)\b/i.test(key) && /dark/i.test(props[key])) return true;
+          }
+        }
+      } catch (_) {}
+    }
     current = current.parent;
   }
-  // Default: white
-  return { r: 1, g: 1, b: 1 };
+  return false;
+}
+
+/** Walk up to find the nearest ancestor background colour,
+ *  also checking sibling layers that visually sit behind the node. */
+function resolveBackgroundColor(node: SceneNode): { r: number; g: number; b: number; inferred?: boolean } {
+  // Collect background layers bottom-up; composite semi-transparent ones
+  let result: { r: number; g: number; b: number; inferred?: boolean } | null = null;
+  let target: SceneNode = node;
+  let current: BaseNode | null = node.parent;
+
+  while (current && current.type !== "PAGE" && current.type !== "DOCUMENT") {
+    // First check sibling layers behind target in z-order (lower index = behind)
+    if ("children" in current) {
+      const siblings = (current as FrameNode).children;
+      const targetIdx = siblings.indexOf(target as any);
+      for (let i = targetIdx - 1; i >= 0; i--) {
+        const sib = siblings[i];
+        if (!("visible" in sib) || sib.visible === false) continue;
+        if (nodesOverlap(target, sib)) {
+          const col = extractFillColor(sib);
+          if (col) {
+            const nodeOp = "opacity" in sib ? (sib as SceneNode).opacity : 1;
+            const effectiveAlpha = col.a * (typeof nodeOp === "number" ? nodeOp : 1);
+            if (effectiveAlpha >= 0.999) return { r: col.r, g: col.g, b: col.b };
+            if (!result) {
+              // Need something behind this to composite onto; keep walking
+            } else {
+              result = alphaComposite(col, effectiveAlpha, result);
+              if (effectiveAlpha >= 0.999) return result;
+            }
+          }
+        }
+      }
+    }
+    // Then check the parent's own fill
+    const col = extractFillColor(current as SceneNode);
+    if (col) {
+      const nodeOp = "opacity" in current ? (current as SceneNode).opacity : 1;
+      const effectiveAlpha = col.a * (typeof nodeOp === "number" ? nodeOp : 1);
+      if (!result) {
+        if (effectiveAlpha >= 0.999) return { r: col.r, g: col.g, b: col.b };
+        // Semi-transparent fill with nothing resolved yet — treat as layer over white fallback
+        result = alphaComposite(col, effectiveAlpha, { r: 1, g: 1, b: 1 });
+      } else {
+        result = alphaComposite(col, effectiveAlpha, result);
+      }
+      if (effectiveAlpha >= 0.999) return result;
+    }
+    target = current as SceneNode;
+    current = current.parent;
+  }
+  if (result) return result;
+  // Default: white (inferred — no explicit fill found in any ancestor)
+  return { r: 1, g: 1, b: 1, inferred: true };
+}
+
+/** Check whether two nodes' absolute bounding boxes overlap */
+function nodesOverlap(a: SceneNode, b: SceneNode): boolean {
+  try {
+    const aBox = a.absoluteBoundingBox;
+    const bBox = b.absoluteBoundingBox;
+    if (!aBox || !bBox) return true; // If bounds unknown, assume overlap
+    return !(aBox.x + aBox.width <= bBox.x ||
+             bBox.x + bBox.width <= aBox.x ||
+             aBox.y + aBox.height <= bBox.y ||
+             bBox.y + bBox.height <= aBox.y);
+  } catch (_) {
+    return true; // On error, assume overlap to be safe
+  }
 }
 
 /** Compute WCAG luminance from 0-1 RGB (audit-local helper) */
@@ -1550,42 +1652,248 @@ function isTouchTargetAutoLayout(node: SceneNode): boolean {
   return false;
 }
 
-/** Compute a WCAG-compliant text colour by mixing fg toward black/white */
+/** Convert RGB (0-1) to HSL (h: 0-360, s: 0-1, l: 0-1) */
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return { h: h * 360, s, l };
+}
+
+/** Convert HSL to RGB (0-1) */
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  h = ((h % 360) + 360) % 360;
+  if (s === 0) return { r: l, g: l, b: l };
+  const hue2rgb = (p: number, q: number, t: number) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return {
+    r: hue2rgb(p, q, h / 360 + 1/3),
+    g: hue2rgb(p, q, h / 360),
+    b: hue2rgb(p, q, h / 360 - 1/3),
+  };
+}
+
+/** Euclidean distance between two RGB colours (0-1 range) */
+function colorDistance(a: { r: number; g: number; b: number }, b: { r: number; g: number; b: number }): number {
+  return Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+}
+
+/** Convert 0-1 RGB to hex string */
+function rgbToHexStr(c: { r: number; g: number; b: number }): string {
+  return "#" + [c.r, c.g, c.b].map(v => Math.round(v * 255).toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Compute a WCAG-compliant colour by adjusting lightness in HSL space.
+ * Preserves hue and saturation as much as possible.
+ * Returns the new colour and the perceptual delta from the original.
+ */
 function computeCompliantColor(
   fg: { r: number; g: number; b: number },
   bg: { r: number; g: number; b: number },
   targetRatio: number
-): { r: number; g: number; b: number } {
+): { r: number; g: number; b: number; delta: number } {
   const bgLum = auditLuminance(bg.r, bg.g, bg.b);
-  // Decide direction: darken toward black or lighten toward white
-  const blackLum = auditLuminance(0, 0, 0);
-  const whiteLum = auditLuminance(1, 1, 1);
-  const blackRatio = auditContrastRatio(bgLum, blackLum);
-  const whiteRatio = auditContrastRatio(bgLum, whiteLum);
-  const target = blackRatio >= whiteRatio ? { r: 0, g: 0, b: 0 } : { r: 1, g: 1, b: 1 };
+  const hsl = rgbToHsl(fg.r, fg.g, fg.b);
 
-  // Binary search for minimal mix factor that meets target ratio
-  let lo = 0, hi = 1;
-  for (let i = 0; i < 24; i++) {
-    const mid = (lo + hi) / 2;
-    const mixed = {
-      r: fg.r * (1 - mid) + target.r * mid,
-      g: fg.g * (1 - mid) + target.g * mid,
-      b: fg.b * (1 - mid) + target.b * mid,
+  // Decide direction: should we darken or lighten the foreground?
+  const darkCandidate = hslToRgb(hsl.h, hsl.s, 0);
+  const lightCandidate = hslToRgb(hsl.h, hsl.s, 1);
+  const darkRatio = auditContrastRatio(bgLum, auditLuminance(darkCandidate.r, darkCandidate.g, darkCandidate.b));
+  const lightRatio = auditContrastRatio(bgLum, auditLuminance(lightCandidate.r, lightCandidate.g, lightCandidate.b));
+
+  // Try the direction that gives more contrast headroom first
+  const directions: ("darken" | "lighten")[] = darkRatio >= lightRatio ? ["darken", "lighten"] : ["lighten", "darken"];
+  let bestResult: { r: number; g: number; b: number } | null = null;
+
+  for (const dir of directions) {
+    let lo: number, hi: number;
+    if (dir === "darken") { lo = 0; hi = hsl.l; }
+    else { lo = hsl.l; hi = 1; }
+
+    // Check if this direction can even reach the target ratio
+    const extremeRgb = hslToRgb(hsl.h, hsl.s, dir === "darken" ? 0 : 1);
+    const extremeRatio = auditContrastRatio(bgLum, auditLuminance(extremeRgb.r, extremeRgb.g, extremeRgb.b));
+    if (extremeRatio < targetRatio) continue; // Can't reach target in this direction
+
+    // Binary search lightness for minimal shift that meets target ratio
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      const candidate = hslToRgb(hsl.h, hsl.s, mid);
+      const ratio = auditContrastRatio(bgLum, auditLuminance(candidate.r, candidate.g, candidate.b));
+      if (dir === "darken") {
+        if (ratio >= targetRatio) lo = mid; else hi = mid;
+      } else {
+        if (ratio >= targetRatio) hi = mid; else lo = mid;
+      }
+    }
+    const finalL = dir === "darken" ? lo : hi;
+    bestResult = hslToRgb(hsl.h, hsl.s, finalL);
+    break; // Use the first direction that works
+  }
+
+  // Fallback: desaturate toward black/white if pure lightness adjustment failed
+  if (!bestResult) {
+    const target = darkRatio >= lightRatio ? { r: 0, g: 0, b: 0 } : { r: 1, g: 1, b: 1 };
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      const mixed = {
+        r: fg.r * (1 - mid) + target.r * mid,
+        g: fg.g * (1 - mid) + target.g * mid,
+        b: fg.b * (1 - mid) + target.b * mid,
+      };
+      const ratio = auditContrastRatio(bgLum, auditLuminance(mixed.r, mixed.g, mixed.b));
+      if (ratio >= targetRatio) hi = mid; else lo = mid;
+    }
+    bestResult = {
+      r: fg.r * (1 - hi) + target.r * hi,
+      g: fg.g * (1 - hi) + target.g * hi,
+      b: fg.b * (1 - hi) + target.b * hi,
     };
-    const mixedLum = auditLuminance(mixed.r, mixed.g, mixed.b);
-    const ratio = auditContrastRatio(bgLum, mixedLum);
+  }
+
+  return { ...bestResult, delta: colorDistance(fg, bestResult) };
+}
+
+// ── Design System Token Cache for Contrast Fixes ────────────────────
+
+type DesignColorToken = {
+  name: string;
+  hex: string;
+  rgb: { r: number; g: number; b: number };
+  source: "paintStyle" | "variable";
+  id: string; // paint style ID or variable ID
+};
+
+let _designColorTokenCache: { tokens: DesignColorToken[]; ts: number } | null = null;
+const COLOR_TOKEN_CACHE_TTL = 60_000;
+
+/** Discover all colour tokens available in the file (paint styles + bound variables on page). */
+async function discoverDesignColorTokens(): Promise<DesignColorToken[]> {
+  if (_designColorTokenCache && (Date.now() - _designColorTokenCache.ts) < COLOR_TOKEN_CACHE_TTL) {
+    return _designColorTokenCache.tokens;
+  }
+
+  const tokens: DesignColorToken[] = [];
+  const seenIds = new Set<string>();
+
+  // 1. Local paint styles
+  for (const ps of figma.getLocalPaintStyles()) {
+    try {
+      const paints = ps.paints;
+      if (!Array.isArray(paints)) continue;
+      const solid = paints.find((p: Paint) => p.type === "SOLID" && p.visible !== false) as SolidPaint | undefined;
+      if (solid) {
+        const rgb = { r: solid.color.r, g: solid.color.g, b: solid.color.b };
+        tokens.push({ name: ps.name, hex: rgbToHexStr(rgb), rgb, source: "paintStyle", id: ps.id });
+        seenIds.add(ps.id);
+      }
+    } catch (_) {}
+  }
+
+  // 2. Scan page descendants for bound colour variables (discovers library imports)
+  try {
+    const queue: SceneNode[] = [];
+    for (const child of figma.currentPage.children) {
+      if (child.type === "FRAME" || child.type === "COMPONENT_SET" || child.type === "COMPONENT" || child.type === "INSTANCE" || child.type === "SECTION") {
+        queue.push(child);
+      }
+    }
+    let scanned = 0;
+    const MAX_SCAN = 500; // Limit deep scan for performance
+    while (queue.length > 0 && scanned < MAX_SCAN) {
+      const node = queue.shift()!;
+      scanned++;
+      if ("fills" in node) {
+        const fills = (node as any).fills;
+        if (Array.isArray(fills)) {
+          for (const fill of fills) {
+            const bv = fill.boundVariables?.color;
+            if (bv?.id && !seenIds.has(bv.id)) {
+              try {
+                const v = await figma.variables.getVariableByIdAsync(bv.id);
+                if (v && v.resolvedType === "COLOR") {
+                  seenIds.add(bv.id);
+                  // Resolve the colour value from the variable
+                  const modeIds = Object.keys(v.valuesByMode);
+                  if (modeIds.length > 0) {
+                    const val = v.valuesByMode[modeIds[0]] as any;
+                    if (val && typeof val.r === "number") {
+                      const rgb = { r: val.r, g: val.g, b: val.b };
+                      tokens.push({ name: v.name, hex: rgbToHexStr(rgb), rgb, source: "variable", id: bv.id });
+                    }
+                  }
+                }
+              } catch (_) {}
+            }
+          }
+        }
+      }
+      if ("children" in node) {
+        for (const child of (node as any).children) queue.push(child);
+      }
+    }
+  } catch (_) {}
+
+  _designColorTokenCache = { tokens, ts: Date.now() };
+  console.log(`[a11y] Discovered ${tokens.length} design colour tokens (${tokens.filter(t => t.source === "paintStyle").length} styles, ${tokens.filter(t => t.source === "variable").length} variables)`);
+  return tokens;
+}
+
+/**
+ * Find the best design system token that meets contrast requirements
+ * and is visually closest to the original or computed replacement colour.
+ */
+async function findCompliantDesignToken(
+  bg: { r: number; g: number; b: number },
+  original: { r: number; g: number; b: number },
+  targetRatio: number,
+  themeHint?: string
+): Promise<DesignColorToken | null> {
+  const tokens = await discoverDesignColorTokens();
+  const bgLum = auditLuminance(bg.r, bg.g, bg.b);
+
+  let bestToken: DesignColorToken | null = null;
+  let bestDist = Infinity;
+
+  for (const token of tokens) {
+    // If we have a theme hint (e.g. "Light" or "Dark"), filter to matching tokens
+    if (themeHint) {
+      const nameLower = token.name.toLowerCase();
+      const hintLower = themeHint.toLowerCase();
+      // Skip tokens from the wrong theme
+      if ((nameLower.startsWith("light/") && hintLower === "dark") ||
+          (nameLower.startsWith("dark/") && hintLower === "light")) {
+        continue;
+      }
+    }
+
+    const tokenLum = auditLuminance(token.rgb.r, token.rgb.g, token.rgb.b);
+    const ratio = auditContrastRatio(bgLum, tokenLum);
     if (ratio >= targetRatio) {
-      hi = mid;
-    } else {
-      lo = mid;
+      const dist = colorDistance(original, token.rgb);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestToken = token;
+      }
     }
   }
-  return {
-    r: fg.r * (1 - hi) + target.r * hi,
-    g: fg.g * (1 - hi) + target.g * hi,
-    b: fg.b * (1 - hi) + target.b * hi,
-  };
+
+  return bestToken;
 }
 
 /** Load all fonts used by a text node (handles mixed-font text). */
@@ -1601,12 +1909,16 @@ async function loadAllFontsForTextNode(textNode: TextNode): Promise<void> {
         const key = (f as FontName).family + "::" + (f as FontName).style;
         if (!loaded.has(key)) {
           loaded.add(key);
-          await figma.loadFontAsync(f as FontName);
+          await figma.loadFontAsync(f as FontName).catch(() => {
+            console.warn(`[loadFont] Could not load font "${(f as FontName).family} ${(f as FontName).style}" — continuing anyway`);
+          });
         }
       }
     }
   } else {
-    await figma.loadFontAsync(fontName as FontName);
+    await figma.loadFontAsync(fontName as FontName).catch(() => {
+      console.warn(`[loadFont] Could not load font "${(fontName as FontName).family} ${(fontName as FontName).style}" — continuing anyway`);
+    });
   }
 }
 
@@ -1681,11 +1993,89 @@ async function applyAutoFix(finding: AuditFinding): Promise<string> {
       const textNode = node as TextNode;
       const d = finding.details;
       if (!d || !d.fgColor || !d.bgColor) throw new Error("Missing colour data for auto-fix.");
-      await loadAllFontsForTextNode(textNode);
-      const compliant = computeCompliantColor(d.fgColor, d.bgColor, d.threshold);
-      const newFills = [{ type: "SOLID" as const, color: { r: compliant.r, g: compliant.g, b: compliant.b } }];
-      textNode.fills = newFills;
-      const hex = "#" + [compliant.r, compliant.g, compliant.b].map(c => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+
+      // Determine fix target: use the recommended fix direction or supplied fixTarget override
+      const fixTarget: string = d.fixTarget || d.recommendedFix || "fg";
+
+      // Only load fonts when modifying the text node itself (fg fix)
+      if (fixTarget !== "bg") {
+        await loadAllFontsForTextNode(textNode);
+      }
+
+      if (fixTarget === "bg") {
+        // Adjust the background — find nearest ancestor with a solid fill
+        let bgNode: BaseNode | null = textNode.parent;
+        while (bgNode && bgNode.type !== "PAGE" && bgNode.type !== "DOCUMENT") {
+          if ("fills" in bgNode) {
+            const fills = (bgNode as any).fills;
+            if (Array.isArray(fills) && fills.some((f: any) => f.type === "SOLID" && f.visible !== false)) break;
+          }
+          bgNode = bgNode.parent;
+        }
+        if (!bgNode || !("fills" in bgNode)) throw new Error("No background node found to adjust.");
+        const suggested = d.suggestedBg || computeCompliantColor(d.bgColor, d.fgColor, d.threshold);
+        const newColor = { r: suggested.r, g: suggested.g, b: suggested.b };
+
+        // If a design token was found, try to bind it
+        if (d.suggestedBgToken?.source === "variable" && d.suggestedBgToken.id) {
+          try {
+            const v = await figma.variables.getVariableByIdAsync(d.suggestedBgToken.id);
+            if (v) {
+              const fills = (bgNode as any).fills;
+              const solidIdx = fills.findIndex((f: Paint) => f.type === "SOLID" && (f as any).visible !== false);
+              if (solidIdx >= 0) {
+                const boundPaint = figma.variables.setBoundVariableForPaint(fills[solidIdx], "color", v);
+                const newFills = [...fills]; newFills[solidIdx] = boundPaint;
+                (bgNode as any).fills = newFills;
+                return `Background bound to design token "${d.suggestedBgToken.name}" (${d.suggestedBgToken.hex}).`;
+              }
+            }
+          } catch (_) {}
+        }
+        if (d.suggestedBgToken?.source === "paintStyle" && d.suggestedBgToken.id) {
+          try { (bgNode as any).fillStyleId = d.suggestedBgToken.id; return `Background set to style "${d.suggestedBgToken.name}".`; } catch (_) {}
+        }
+        const fills = (bgNode as any).fills;
+        const solidIdx = fills.findIndex((f: Paint) => f.type === "SOLID" && (f as any).visible !== false);
+        if (solidIdx >= 0) {
+          const newFills = [...fills]; newFills[solidIdx] = { type: "SOLID" as const, color: newColor };
+          (bgNode as any).fills = newFills;
+        }
+        return `Background changed to ${rgbToHexStr(newColor)} for ${d.threshold}:1 contrast.`;
+      }
+
+      // Default: adjust foreground text colour
+      const suggested = d.suggestedFg || computeCompliantColor(d.fgColor, d.bgColor, d.threshold);
+      const compliant = { r: suggested.r, g: suggested.g, b: suggested.b };
+
+      // If a design token was found, try to bind it
+      if (d.suggestedFgToken?.source === "variable" && d.suggestedFgToken.id) {
+        try {
+          const v = await figma.variables.getVariableByIdAsync(d.suggestedFgToken.id);
+          if (v) {
+            const fills = (textNode as any).fills;
+            if (Array.isArray(fills) && fills.length > 0) {
+              const solidIdx = fills.findIndex((f: Paint) => f.type === "SOLID");
+              if (solidIdx >= 0) {
+                const boundPaint = figma.variables.setBoundVariableForPaint(fills[solidIdx], "color", v);
+                const newFills = [...fills]; newFills[solidIdx] = boundPaint;
+                textNode.fills = newFills;
+                return `Text bound to design token "${d.suggestedFgToken.name}" (${d.suggestedFgToken.hex}).`;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      if (d.suggestedFgToken?.source === "paintStyle" && d.suggestedFgToken.id) {
+        try {
+          (textNode as any).fillStyleId = d.suggestedFgToken.id;
+          return `Text set to style "${d.suggestedFgToken.name}" (${d.suggestedFgToken.hex}).`;
+        } catch (_) {}
+      }
+
+      // Fallback: set raw colour
+      textNode.fills = [{ type: "SOLID" as const, color: compliant }];
+      const hex = rgbToHexStr(compliant);
       return `Text colour changed to ${hex} for ${d.threshold}:1 contrast.`;
     }
 
@@ -1780,8 +2170,8 @@ async function applyLLMFix(finding: AuditFinding): Promise<string> {
   }
 }
 
-/** Run deterministic WCAG checks on nodes, return de-duplicated findings */
-function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
+/** Run deterministic WCAG checks on nodes, return de-duplicated findings with contrast suggestions */
+async function runAccessibilityAudit(nodes: SceneNode[]): Promise<AuditFinding[]> {
   const findings: AuditFinding[] = [];
 
   /**
@@ -1801,19 +2191,43 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
     // ── 1. Contrast check (text nodes) ──────────────────────
     if (node.type === "TEXT" && !insideInstance) {
       const textNode = node as TextNode;
-      const fg = extractFillColor(textNode);
-      if (fg) {
+      const fgRaw = extractFillColor(textNode);
+      if (fgRaw) {
         const bg = resolveBackgroundColor(textNode);
+        // Composite text fill: account for paint opacity AND node opacity
+        const nodeOp = typeof textNode.opacity === "number" ? textNode.opacity : 1;
+        const effectiveAlpha = fgRaw.a * nodeOp;
+        const fg = effectiveAlpha < 0.999
+          ? alphaComposite(fgRaw, effectiveAlpha, bg)
+          : { r: fgRaw.r, g: fgRaw.g, b: fgRaw.b };
         const fgLum = auditLuminance(fg.r, fg.g, fg.b);
         const bgLum = auditLuminance(bg.r, bg.g, bg.b);
+
+        // Skip false positives: light/white text with no explicit background
+        // — these are dark-mode variants designed for dark surfaces
+        if (bg.inferred && fgLum > 0.35) {
+          // Light text on inferred white bg → almost certainly a dark variant; skip
+        } else if (fgLum > 0.35 && bgLum > 0.35 && isInsideDarkVariant(textNode)) {
+          // Light text on a light resolved bg, but inside a dark-mode variant
+          // → the component is designed for dark surfaces; skip
+        } else {
+
         const ratio = auditContrastRatio(fgLum, bgLum);
         const fontSize = typeof textNode.fontSize === "number" ? textNode.fontSize : 16;
         const isLargeText = fontSize >= 18 || (fontSize >= 14 && (textNode.fontWeight as any) >= 700);
         const threshold = isLargeText ? 3.0 : 4.5;
         if (ratio < threshold) {
-          const fgHex = "#" + [fg.r, fg.g, fg.b].map(c => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
-          const bgHex = "#" + [bg.r, bg.g, bg.b].map(c => Math.round(c * 255).toString(16).padStart(2, "0")).join("");
+          const fgHex = rgbToHexStr(fg);
+          const bgHex = rgbToHexStr(bg);
           const bgSimple = isBackgroundSimple(textNode);
+
+          // Compute suggested foreground adjustment (hue-preserving)
+          const suggestedFg = computeCompliantColor(fg, bg, threshold);
+          // Compute suggested background adjustment (hold fg constant, adjust bg)
+          const suggestedBg = computeCompliantColor(bg, fg, threshold);
+
+          const recommendedFix = suggestedFg.delta <= suggestedBg.delta ? "fg" : "bg";
+
           findings.push({
             nodeId: node.id,
             nodeName: node.name,
@@ -1821,9 +2235,15 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
             checkType: "contrast",
             message: `Low contrast ratio ${ratio.toFixed(2)}:1 (needs ${threshold}:1). Text "${(textNode.characters || "").slice(0, 30)}" (${fgHex}) on background (${bgHex}).`,
             fixType: bgSimple ? "auto" : "llm",
-            details: { fgColor: fg, bgColor: bg, ratio, threshold, fgHex, bgHex, bgSimple },
+            details: {
+              fgColor: fg, bgColor: bg, ratio, threshold, fgHex, bgHex, bgSimple,
+              suggestedFg: { r: suggestedFg.r, g: suggestedFg.g, b: suggestedFg.b, hex: rgbToHexStr(suggestedFg), delta: suggestedFg.delta },
+              suggestedBg: { r: suggestedBg.r, g: suggestedBg.g, b: suggestedBg.b, hex: rgbToHexStr(suggestedBg), delta: suggestedBg.delta },
+              recommendedFix,
+            },
           });
         }
+        } // end: else (not a dark-variant false positive)
       }
 
       // ── 2. Small font size ────────────────────────────────
@@ -1911,6 +2331,35 @@ function runAccessibilityAudit(nodes: SceneNode[]): AuditFinding[] {
     if (!seen.has(key)) {
       seen.add(key);
       deduped.push(f);
+    }
+  }
+
+  // ── Enrich contrast findings with design system token suggestions ──
+  const contrastFindings = deduped.filter(f => f.checkType === "contrast" && f.details);
+  if (contrastFindings.length > 0) {
+    try {
+      for (const f of contrastFindings) {
+        const d = f.details;
+        // Try to find a design token for the foreground fix
+        const fgToken = await findCompliantDesignToken(d.bgColor, d.fgColor, d.threshold);
+        if (fgToken) {
+          d.suggestedFgToken = { name: fgToken.name, hex: fgToken.hex, source: fgToken.source, id: fgToken.id };
+          // Recalculate suggested fg to use the token color
+          d.suggestedFg = { ...fgToken.rgb, hex: fgToken.hex, delta: colorDistance(d.fgColor, fgToken.rgb) };
+        }
+        // Try to find a design token for the background fix
+        const bgToken = await findCompliantDesignToken(d.fgColor, d.bgColor, d.threshold);
+        if (bgToken) {
+          d.suggestedBgToken = { name: bgToken.name, hex: bgToken.hex, source: bgToken.source, id: bgToken.id };
+          d.suggestedBg = { ...bgToken.rgb, hex: bgToken.hex, delta: colorDistance(d.bgColor, bgToken.rgb) };
+        }
+        // Update recommendation: prefer the option with a token match, or smallest delta
+        if (d.suggestedFgToken && !d.suggestedBgToken) d.recommendedFix = "fg";
+        else if (d.suggestedBgToken && !d.suggestedFgToken) d.recommendedFix = "bg";
+        else d.recommendedFix = d.suggestedFg.delta <= d.suggestedBg.delta ? "fg" : "bg";
+      }
+    } catch (tokenErr: any) {
+      console.warn("[a11y] Design token enrichment failed:", tokenErr.message);
     }
   }
 
@@ -2050,6 +2499,256 @@ function detectThemeMode(text: string): "light" | "dark" | "auto" {
   return "auto";
 }
 
+// ── Deterministic Theme Style Swapping ──────────────────────────────
+// For Light↔Dark variant generation: swap paint styles by name prefix
+// instead of relying on LLM color guessing.
+
+/**
+ * Recursively walk a node tree and swap all paint styles from one theme
+ * prefix to another (e.g. "Light/" → "Dark/"). For each node with a
+ * fillStyleId whose name starts with sourcePrefix, find the style with
+ * the same suffix under targetPrefix and apply it. Same for strokeStyleId.
+ * Returns count of styles swapped.
+ */
+function swapThemePaintStyles(
+  root: SceneNode,
+  sourcePrefix: string,
+  targetPrefix: string
+): number {
+  // Build a name→style lookup from all local paint styles
+  const nameToStyle = new Map<string, PaintStyle>();
+  for (const s of figma.getLocalPaintStyles()) {
+    nameToStyle.set(s.name.toLowerCase(), s);
+  }
+
+  let swapped = 0;
+  const sourcePrefixLower = sourcePrefix.toLowerCase();
+  const targetPrefixLower = targetPrefix.toLowerCase();
+
+  function swapNode(node: SceneNode): void {
+    // Swap fill style
+    if ("fillStyleId" in node) {
+      const fid = (node as any).fillStyleId;
+      if (typeof fid === "string" && fid) {
+        try {
+          const style = figma.getStyleById(fid);
+          if (style && style.name.toLowerCase().startsWith(sourcePrefixLower)) {
+            // Compute target style name: swap Light/ → Dark/ (or vice versa)
+            const suffix = style.name.substring(sourcePrefix.length);
+            const targetName = targetPrefix + suffix;
+            const targetStyle = nameToStyle.get(targetName.toLowerCase());
+            if (targetStyle) {
+              (node as any).fillStyleId = targetStyle.id;
+              swapped++;
+            }
+          }
+        } catch (_) { /* style may not exist */ }
+      }
+    }
+
+    // Swap stroke style
+    if ("strokeStyleId" in node) {
+      const sid = (node as any).strokeStyleId;
+      if (typeof sid === "string" && sid) {
+        try {
+          const style = figma.getStyleById(sid);
+          if (style && style.name.toLowerCase().startsWith(sourcePrefixLower)) {
+            const suffix = style.name.substring(sourcePrefix.length);
+            const targetName = targetPrefix + suffix;
+            const targetStyle = nameToStyle.get(targetName.toLowerCase());
+            if (targetStyle) {
+              (node as any).strokeStyleId = targetStyle.id;
+              swapped++;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    // Recurse into children
+    if ("children" in node) {
+      for (const child of (node as FrameNode).children) {
+        swapNode(child as SceneNode);
+      }
+    }
+  }
+
+  swapNode(root);
+  return swapped;
+}
+
+/**
+ * Swap Figma color-variable bindings from one theme prefix to another.
+ * For example, swap all "Light/Fill Color/..." variables to "Dark/Fill Color/..."
+ * by finding the corresponding variable in the SAME collection as the source.
+ * Works for both local variables and library variables.
+ */
+async function swapThemeVariables(
+  root: SceneNode,
+  sourcePrefix: string,
+  targetPrefix: string
+): Promise<number> {
+  // ── Phase 1: Collect all source variable bindings from the tree ──
+  // Gather (node, field, paintIndex, sourceVariable) tuples so we can batch-resolve targets.
+  interface BindingInfo {
+    node: SceneNode;
+    field: "fills" | "strokes";
+    paintIndex: number;
+    srcVar: Variable;
+    targetName: string; // lowercase target variable name
+  }
+  const bindings: BindingInfo[] = [];
+  const sourcePrefixLower = sourcePrefix.toLowerCase();
+  let nodeCount = 0;
+
+  async function collectBindings(node: SceneNode): Promise<void> {
+    for (const field of ["fills", "strokes"] as const) {
+      if (!(field in node)) continue;
+      try {
+        const paints = (node as any)[field];
+        if (!Array.isArray(paints)) continue;
+        for (let i = 0; i < paints.length; i++) {
+          const bv = paints[i].boundVariables?.color;
+          if (!bv || !bv.id) continue;
+          try {
+            const srcVar = await figma.variables.getVariableByIdAsync(bv.id);
+            if (!srcVar) continue;
+            if (!srcVar.name.toLowerCase().startsWith(sourcePrefixLower)) continue;
+            const suffix = srcVar.name.substring(sourcePrefix.length);
+            const targetName = (targetPrefix + suffix).toLowerCase();
+            bindings.push({ node, field, paintIndex: i, srcVar, targetName });
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    nodeCount++;
+    if (nodeCount % 15 === 0) await yieldToUI();
+    if ("children" in node) {
+      for (const child of (node as FrameNode).children) {
+        await collectBindings(child as SceneNode);
+      }
+    }
+  }
+  await collectBindings(root);
+
+  if (bindings.length === 0) {
+    console.log(`[swapThemeVars] No ${sourcePrefix}* bindings found — nothing to swap`);
+    return 0;
+  }
+  console.log(`[swapThemeVars] Found ${bindings.length} ${sourcePrefix}* binding(s) to swap`);
+
+  // ── Phase 2: Build target variable map from library ──
+  // Group bindings by collectionId, then resolve targets.
+  // Strategy: try teamLibrary API first (gives ALL library vars), fall back to variableIds.
+  const collectionMaps = new Map<string, Map<string, Variable>>();
+  const collectionIds = new Set(bindings.map(b => b.srcVar.variableCollectionId));
+
+  for (const collectionId of collectionIds) {
+    const map = new Map<string, Variable>();
+    try {
+      const col = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+      if (!col) { collectionMaps.set(collectionId, map); continue; }
+
+      // Step 1: Index whatever is available in variableIds (works for both local & remote)
+      for (const vid of col.variableIds) {
+        try {
+          const v = await figma.variables.getVariableByIdAsync(vid);
+          if (v && v.resolvedType === "COLOR") {
+            map.set(v.name.toLowerCase(), v);
+          }
+        } catch (_) {}
+      }
+      console.log(`[swapThemeVars] Collection "${col.name}" (${col.remote ? "remote" : "local"}, ${collectionId}): ${map.size} COLOR variables from variableIds`);
+
+      // Step 2: For remote collections with missing targets, try teamLibrary API
+      if (col.remote) {
+        const neededTargets = bindings
+          .filter(b => b.srcVar.variableCollectionId === collectionId)
+          .filter(b => !map.has(b.targetName));
+
+        if (neededTargets.length > 0) {
+          console.log(`[swapThemeVars] ${neededTargets.length} target(s) not in variableIds — trying teamLibrary API`);
+          let libVarsByName: Map<string, { key: string }> | null = null;
+
+          // Safely try teamLibrary — this API may not be initialized in all contexts
+          try {
+            if (figma.teamLibrary && typeof figma.teamLibrary.getVariablesInLibraryCollectionAsync === "function") {
+              const libVars = await figma.teamLibrary.getVariablesInLibraryCollectionAsync(col.key);
+              libVarsByName = new Map();
+              for (const lv of libVars) {
+                if (lv.resolvedType === "COLOR") {
+                  libVarsByName.set(lv.name.toLowerCase(), { key: lv.key });
+                }
+              }
+              console.log(`[swapThemeVars] Library API returned ${libVarsByName.size} COLOR variables for "${col.name}"`);
+            }
+          } catch (libErr: any) {
+            console.warn(`[swapThemeVars] teamLibrary API unavailable: ${libErr?.message}`);
+          }
+
+          // Import needed targets
+          for (const bt of neededTargets) {
+            if (map.has(bt.targetName)) continue; // already resolved
+            const libEntry = libVarsByName?.get(bt.targetName);
+            if (libEntry) {
+              try {
+                const imported = await figma.variables.importVariableByKeyAsync(libEntry.key);
+                if (imported) {
+                  map.set(bt.targetName, imported);
+                  console.log(`[swapThemeVars] Imported "${imported.name}" from library`);
+                }
+              } catch (importErr: any) {
+                console.warn(`[swapThemeVars] Import failed for "${bt.targetName}": ${importErr?.message}`);
+              }
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[swapThemeVars] Failed to load collection ${collectionId}: ${e?.message}`);
+    }
+    collectionMaps.set(collectionId, map);
+  }
+
+  // ── Phase 3: Apply swaps ──
+  // Group by (node, field) to batch paint array writes.
+  let swapped = 0;
+  let noTarget = 0;
+
+  const nodeFieldBindings = new Map<string, BindingInfo[]>();
+  for (const b of bindings) {
+    const key = `${b.node.id}|${b.field}`;
+    if (!nodeFieldBindings.has(key)) nodeFieldBindings.set(key, []);
+    nodeFieldBindings.get(key)!.push(b);
+  }
+
+  for (const [, group] of nodeFieldBindings) {
+    const { node, field } = group[0];
+    try {
+      const paints = (node as any)[field];
+      if (!Array.isArray(paints)) continue;
+      let newPaints: Paint[] | null = null;
+      for (const b of group) {
+        const colMap = collectionMaps.get(b.srcVar.variableCollectionId);
+        const targetVar = colMap?.get(b.targetName);
+        if (targetVar) {
+          if (!newPaints) newPaints = [...paints];
+          newPaints[b.paintIndex] = figma.variables.setBoundVariableForPaint(newPaints[b.paintIndex], "color", targetVar);
+          swapped++;
+          console.log(`[swapThemeVars] ✓ ${node.name}.${field}[${b.paintIndex}]: "${b.srcVar.name}" → "${targetVar.name}"`);
+        } else {
+          noTarget++;
+          console.warn(`[swapThemeVars] ✗ ${node.name}.${field}[${b.paintIndex}]: "${b.srcVar.name}" → target "${targetPrefix}${b.srcVar.name.substring(sourcePrefix.length)}" not found`);
+        }
+      }
+      if (newPaints) (node as any)[field] = newPaints;
+    } catch (_) {}
+  }
+
+  console.log(`[swapThemeVars] Done: ${swapped} swapped, ${bindings.length} bindings checked, ${noTarget} target-not-found`);
+  return swapped;
+}
+
 // ── Style-by-Name Maps ──────────────────────────────────────────────
 // Maps style names (case-insensitive) to style IDs for explicit name-based binding.
 let _paintStyleNameMap: Map<string, string> | null = null;
@@ -2146,7 +2845,8 @@ function clearStyleMaps(): void {
 
 async function createNodeFromSnapshot(
   snap: any,
-  parent: BaseNode & ChildrenMixin
+  parent: BaseNode & ChildrenMixin,
+  depth: number = 0
 ): Promise<SceneNode | null> {
   let node: SceneNode;
 
@@ -2440,8 +3140,9 @@ async function createNodeFromSnapshot(
     // Recursively create children
     if (snap.children && snap.children.length > 0) {
       for (const childSnap of snap.children) {
+        if (depth <= 1) await yieldToUI();
         try {
-          await createNodeFromSnapshot(childSnap, comp);
+          await createNodeFromSnapshot(childSnap, comp, depth + 1);
         } catch (childErr) {
           _importStats.failed++;
           _importStats.errors.push(`"${childSnap.name}": ${(childErr as Error).message}`);
@@ -2468,7 +3169,8 @@ async function createNodeFromSnapshot(
           } else if (!childSnap.name) {
             childSnap.name = `Property 1=Variant ${ci + 1}`;
           }
-          const childNode = await createNodeFromSnapshot(childSnap, parent);
+          await yieldToUI();
+          const childNode = await createNodeFromSnapshot(childSnap, parent, depth + 1);
           if (childNode && childNode.type === "COMPONENT") {
             components.push(childNode as ComponentNode);
             console.log(`[createNodeFromSnapshot] COMPONENT_SET child ${ci}: "${childNode.name}" (${childNode.width}x${childNode.height}, ${(childNode as any).children?.length || 0} inner children)`);
@@ -2638,8 +3340,9 @@ async function createNodeFromSnapshot(
     // Recursively create children
     if (snap.children && snap.children.length > 0) {
       for (const childSnap of snap.children) {
+        if (depth <= 1) await yieldToUI();
         try {
-          await createNodeFromSnapshot(childSnap, frame);
+          await createNodeFromSnapshot(childSnap, frame, depth + 1);
         } catch (childErr) {
           _importStats.failed++;
           _importStats.errors.push(`"${childSnap.name}": ${(childErr as Error).message}`);
@@ -2915,6 +3618,7 @@ async function extractFullDocumentDesignSystem(): Promise<FullDesignSystem> {
   const allVariables: FullDesignSystemVariable[] = [];
   const allButtonStyles: any[] = [];
   const allInputStyles: any[] = [];
+  const allRootFrameLayouts: FullDesignSystemLayout[] = [];
   const pageList: { name: string; id: string }[] = [];
   const seenColorHexes = new Set<string>(); // dedup raw hex colors across pages
 
@@ -3055,6 +3759,41 @@ async function extractFullDocumentDesignSystem(): Promise<FullDesignSystem> {
     // Scan components on this page
     let nodeCount = 0;
     const pageChildren = page.children;
+
+    // Extract root frame layouts (top-level auto-layout frames) — up to 5 per page
+    let layoutCount = 0;
+    for (const topNode of pageChildren) {
+      if (layoutCount >= 5) break;
+      if ("layoutMode" in topNode && topNode.type === "FRAME") {
+        const f = topNode as FrameNode;
+        if (f.name === CHANGE_LOG_FRAME_NAME) continue;
+        const layout: FullDesignSystemLayout = {
+          name: f.name,
+          page: page.name,
+          width: Math.round(f.width),
+          height: Math.round(f.height),
+        };
+        if (f.layoutMode && f.layoutMode !== "NONE") {
+          layout.layoutMode = f.layoutMode;
+          layout.paddingTop = f.paddingTop;
+          layout.paddingRight = f.paddingRight;
+          layout.paddingBottom = f.paddingBottom;
+          layout.paddingLeft = f.paddingLeft;
+          layout.itemSpacing = f.itemSpacing;
+          layout.primaryAxisAlignItems = f.primaryAxisAlignItems;
+          layout.counterAxisAlignItems = f.counterAxisAlignItems;
+        }
+        // Root frame fill
+        const fills = f.fills as Paint[];
+        const solidFill = Array.isArray(fills) ? fills.find(fl => fl.type === "SOLID" && fl.visible !== false) : undefined;
+        if (solidFill && solidFill.type === "SOLID") {
+          const c = solidFill.color;
+          layout.fillColor = "#" + [c.r, c.g, c.b].map(v => Math.round(v * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+        }
+        allRootFrameLayouts.push(layout);
+        layoutCount++;
+      }
+    }
 
     for (const topNode of pageChildren) {
       if (_extractDSCancelled) throw new Error("Extraction cancelled");
@@ -3262,6 +4001,7 @@ async function extractFullDocumentDesignSystem(): Promise<FullDesignSystem> {
     variables: allVariables,
     buttonStyles: dedupedButtons.slice(0, 20),
     inputStyles: dedupedInputs.slice(0, 20),
+    rootFrameLayouts: allRootFrameLayouts,
   };
 
   console.log(`[extractFullDS] Complete! ${colorPalette.length} colors, ${typographyScale.length} typography, ${allComponents.length} components, ${allVariables.length} variables`);
@@ -3445,21 +4185,27 @@ async function loadCachedFullDesignSystem(): Promise<void> {
 
 // ── Generate Design Docs (LLM-friendly markdown) ───────────────────
 
-async function generateDesignDocs(): Promise<{ markdown: string; filename: string }> {
-  // Extract tokens from actual visual usage (works on unstructured files)
-  const tokens = await extractStyleTokens();
-  // Extract named Figma styles/components/variables (may be empty on messy files)
-  const ds = await extractDesignSystemSnapshot();
-  const pageName = figma.currentPage.name;
+function formatDesignSystemAsMarkdown(ds: FullDesignSystem): { markdown: string; filename: string } {
+  const docName = figma.root.name || "Untitled";
   const now = new Date().toISOString().split("T")[0];
 
   // ── Helpers ──
   const STATE_KEYWORDS = /Hover|Focus|Press|Drag|Select|Disable|Medium\s*Brush|Low\s*Brush/i;
   const FIGMA_INTERNAL = /^Figma\s*\(/i;
-  const MAX_TOKEN_VALUE = 64; // cap spacing/padding outliers
+  const MAX_SPACING_VALUE = 64; // cap spacing outliers
 
-  // Deduplicate component specs by signature (fill + stroke + radius)
-  function dedupeComponents(items: any[]): any[] {
+  function stripGroupPrefix(name: string): string {
+    const slash = name.indexOf("/");
+    if (slash === -1) return name;
+    return name.substring(slash + 1);
+  }
+
+  function round(v: number, decimals: number): number {
+    const m = Math.pow(10, decimals);
+    return Math.round(v * m) / m;
+  }
+
+  function dedupeBySignature(items: any[]): any[] {
     const seen = new Set<string>();
     return items.filter(item => {
       const sig = [item.fillColor || "", item.strokeColor || "", item.cornerRadius || 0].join("|");
@@ -3469,29 +4215,6 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     });
   }
 
-  // Strip redundant group prefix from token name  (e.g. "Primary/PrimaryColor" → "PrimaryColor")
-  function stripGroupPrefix(name: string): string {
-    const slash = name.indexOf("/");
-    if (slash === -1) return name;
-    return name.substring(slash + 1);
-  }
-
-  // Round a number to n decimal places
-  function round(v: number, decimals: number): number {
-    const m = Math.pow(10, decimals);
-    return Math.round(v * m) / m;
-  }
-
-  // Collect design frame names for screen inventory
-  const validTopLevelTypes = new Set(["FRAME", "COMPONENT", "COMPONENT_SET", "SECTION"]);
-  const designFrames = figma.currentPage.children.filter(c => {
-    if (!validTopLevelTypes.has(c.type)) return false;
-    if (c.name === CHANGE_LOG_FRAME_NAME) return false;
-    if (c.name.startsWith("Generation ") || c.name.startsWith("Try the plugin")) return false;
-    if ("getPluginData" in c && (c as SceneNode).getPluginData("generated") === "true") return false;
-    return true;
-  });
-
   const lines: string[] = [];
 
   // ── Front matter (Copilot instructions) ──
@@ -3499,7 +4222,7 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   lines.push(`applyTo: "**"`);
   lines.push("---");
   lines.push("");
-  lines.push(`# Design System — ${pageName}`);
+  lines.push(`# Design System — ${docName}`);
   lines.push("");
   lines.push(`> Auto-extracted from Figma on ${now}. Use these tokens and component specs as the`);
   lines.push(`> single source of truth when generating UI code for this project.`);
@@ -3508,149 +4231,111 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
   // ── Color Palette ──
   lines.push("## Color Palette");
   lines.push("");
-  if (tokens.colors && tokens.colors.length > 0) {
-    lines.push("| Hex | Role |");
-    lines.push("|-----|------|");
-    // Build a set of known roles from named fill styles for smarter inference
-    const knownPrimary = new Set<string>();
-    const knownError = new Set<string>();
-    for (const s of (ds.fillStyles || []) as any[]) {
-      const lower = (s.name || "").toLowerCase();
-      if (s.hex) {
-        if (lower.includes("error") && !lower.includes("on error")) knownError.add(s.hex);
-        else if (lower.includes("primary") && !lower.includes("on primary")) knownPrimary.add(s.hex);
+  if (ds.colorPalette.length > 0) {
+    // Group by light/dark theme
+    const lightColors = ds.colorPalette.filter(c => c.mode === "light" || (c.source === "paintStyle" && /^Light\//i.test(c.name || "")));
+    const darkColors = ds.colorPalette.filter(c => c.mode === "dark" || (c.source === "paintStyle" && /^Dark\//i.test(c.name || "")));
+    const otherColors = ds.colorPalette.filter(c => !lightColors.includes(c) && !darkColors.includes(c));
+
+    const renderColorTable = (colors: FullDesignSystemColor[], heading?: string) => {
+      if (colors.length === 0) return;
+      if (heading) {
+        lines.push(`### ${heading}`);
+        lines.push("");
       }
-    }
-    for (const hex of tokens.colors) {
-      let role = "—";
-      if (knownPrimary.has(hex)) role = "Primary";
-      else if (knownError.has(hex)) role = "Error / Danger";
-      else if (hex === "#FFFFFF" || hex === "#FCFBFF") role = "Background / Surface";
-      else if (hex === "#000000" || hex === "#1C1B1F") role = "On Surface (text)";
-      lines.push(`| \`${hex}\` | ${role} |`);
-    }
-  } else {
-    lines.push("_No colors detected._");
-  }
-  lines.push("");
-
-  // ── Named Fill Styles (filtered, with hex values) ──
-  const filteredFillStyles = (ds.fillStyles || []).filter((s: any) =>
-    !STATE_KEYWORDS.test(s.name) && !FIGMA_INTERNAL.test(s.name)
-  );
-  if (filteredFillStyles.length > 0) {
-    // Group by Light/Dark prefix
-    const lightStyles = filteredFillStyles.filter((s: any) => s.name.startsWith("Light/"));
-    const darkStyles = filteredFillStyles.filter((s: any) => s.name.startsWith("Dark/"));
-    const otherStyles = filteredFillStyles.filter((s: any) => !s.name.startsWith("Light/") && !s.name.startsWith("Dark/"));
-
-    const renderStyleTable = (styles: any[], themePrefix: string) => {
-      lines.push("| Token | Hex |");
-      lines.push("|-------|-----|");
-      for (const s of styles) {
-        // Strip theme prefix ("Light/") then strip redundant group prefix ("Primary/PrimaryColor" → "PrimaryColor")
-        let name = themePrefix ? s.name.replace(new RegExp("^" + themePrefix + "/"), "") : s.name;
-        name = stripGroupPrefix(name);
-        const hex = s.hex ? `\`${s.hex}\`` : "—";
-        lines.push(`| ${name} | ${hex} |`);
+      lines.push("| Token | Hex | Role |");
+      lines.push("|-------|-----|------|");
+      for (const c of colors) {
+        const name = c.name ? stripGroupPrefix(c.name) : "—";
+        const role = c.role || "—";
+        lines.push(`| ${name} | \`${c.hex}\` | ${role} |`);
       }
       lines.push("");
     };
 
-    if (lightStyles.length > 0) {
-      lines.push("### Light Theme Tokens");
-      lines.push("");
-      renderStyleTable(lightStyles, "Light");
-    }
-    if (darkStyles.length > 0) {
-      lines.push("### Dark Theme Tokens");
-      lines.push("");
-      renderStyleTable(darkStyles, "Dark");
-    }
-    if (otherStyles.length > 0) {
-      lines.push("### Other Color Tokens");
-      lines.push("");
-      renderStyleTable(otherStyles, "");
-    }
+    if (lightColors.length > 0) renderColorTable(lightColors, "Light Theme");
+    if (darkColors.length > 0) renderColorTable(darkColors, "Dark Theme");
+    if (otherColors.length > 0) renderColorTable(otherColors, lightColors.length > 0 || darkColors.length > 0 ? "Other Colors" : undefined);
+  } else {
+    lines.push("_No colors detected._");
+    lines.push("");
   }
 
   // ── Typography ──
   lines.push("## Typography");
   lines.push("");
-  if (tokens.fontFamilies && tokens.fontFamilies.length > 0) {
-    lines.push("### Font Families");
-    lines.push("");
-    for (const ff of tokens.fontFamilies) {
-      lines.push(`- ${ff}`);
+  if (ds.typographyScale.length > 0) {
+    // Extract unique font families
+    const families = [...new Set(ds.typographyScale.map(t => t.fontFamily).filter(Boolean))];
+    if (families.length > 0) {
+      lines.push("### Font Families");
+      lines.push("");
+      for (const ff of families) lines.push(`- ${ff}`);
+      lines.push("");
     }
-    lines.push("");
-  }
-  if (tokens.fontSizes && tokens.fontSizes.length > 0) {
-    lines.push("### Type Scale (px)");
-    lines.push("");
-    lines.push(tokens.fontSizes.join(", "));
+
+    // Type scale (unique sizes sorted)
+    const sizes = [...new Set(ds.typographyScale.map(t => t.fontSize))].sort((a, b) => a - b);
+    if (sizes.length > 0) {
+      lines.push("### Type Scale (px)");
+      lines.push("");
+      lines.push(sizes.join(", "));
+      lines.push("");
+    }
+
+    // Named text styles table
+    const filteredStyles = ds.typographyScale.filter(s => !FIGMA_INTERNAL.test(s.name));
+    if (filteredStyles.length > 0) {
+      lines.push("### Named Text Styles");
+      lines.push("");
+      lines.push("| Name | Font | Size | Line Height | Letter Spacing | Role |");
+      lines.push("|------|------|------|-------------|----------------|------|");
+      for (const s of filteredStyles) {
+        const font = s.fontFamily ? `${s.fontFamily} ${s.fontStyle || ""}`.trim() : "—";
+        const size = `${s.fontSize}px`;
+        const lh = s.lineHeight !== undefined ? (s.lineHeight === "AUTO" ? "Auto" : `${s.lineHeight}`) : "—";
+        const ls = s.letterSpacing !== undefined ? `${round(s.letterSpacing, 2)}` : "—";
+        const role = s.role || "—";
+        lines.push(`| ${s.name} | ${font} | ${size} | ${lh} | ${ls} | ${role} |`);
+      }
+      lines.push("");
+    }
+  } else {
+    lines.push("_No typography detected._");
     lines.push("");
   }
 
-  // Named text styles (filtered, rounded)
-  const filteredTextStyles = (ds.textStyles || []).filter((s: any) =>
-    !FIGMA_INTERNAL.test(s.name)
-  );
-  if (filteredTextStyles.length > 0) {
-    lines.push("### Named Text Styles");
-    lines.push("");
-    lines.push("| Name | Font | Size | Line Height | Letter Spacing |");
-    lines.push("|------|------|------|-------------|----------------|");
-    for (const s of filteredTextStyles as any[]) {
-      const font = s.fontFamily ? `${s.fontFamily} ${s.fontStyle || ""}`.trim() : "—";
-      const size = s.fontSize ? `${s.fontSize}px` : "—";
-      const lh = s.lineHeight !== undefined ? (s.lineHeight === "AUTO" ? "Auto" : `${s.lineHeight}`) : "—";
-      const ls = s.letterSpacing !== undefined ? `${round(s.letterSpacing, 2)}` : "—";
-      lines.push(`| ${s.name} | ${font} | ${size} | ${lh} | ${ls} |`);
-    }
-    lines.push("");
-  }
-
-  // ── Spacing (capped) ──
+  // ── Spacing ──
   lines.push("## Spacing Scale (px)");
   lines.push("");
-  if (tokens.spacings && tokens.spacings.length > 0) {
-    const capped = tokens.spacings.filter((v: number) => v <= MAX_TOKEN_VALUE);
+  if (ds.spacingScale.length > 0) {
+    const capped = ds.spacingScale.filter(v => v <= MAX_SPACING_VALUE);
     lines.push(capped.length > 0 ? capped.join(", ") : "_No spacing values detected._");
   } else {
     lines.push("_No spacing values detected._");
   }
   lines.push("");
 
-  if (tokens.paddings && tokens.paddings.length > 0) {
-    const capped = tokens.paddings.filter((v: number) => v <= MAX_TOKEN_VALUE);
-    if (capped.length > 0) {
-      lines.push("### Padding Values (px)");
-      lines.push("");
-      lines.push(capped.join(", "));
-      lines.push("");
-    }
-  }
-
   // ── Corner Radii ──
   lines.push("## Corner Radii (px)");
   lines.push("");
-  if (tokens.cornerRadii && tokens.cornerRadii.length > 0) {
-    lines.push(tokens.cornerRadii.join(", "));
+  if (ds.cornerRadiusScale.length > 0) {
+    lines.push(ds.cornerRadiusScale.join(", "));
   } else {
     lines.push("_No corner radii detected._");
   }
   lines.push("");
 
-  // ── Component Specs: Buttons (deduplicated) ──
+  // ── Components ──
   lines.push("## Components");
   lines.push("");
-  if (tokens.buttonStyles && tokens.buttonStyles.length > 0) {
-    const buttons = dedupeComponents(tokens.buttonStyles);
+
+  // Buttons
+  if (ds.buttonStyles && ds.buttonStyles.length > 0) {
+    const buttons = dedupeBySignature(ds.buttonStyles);
     lines.push("### Buttons");
     lines.push("");
     for (const btn of buttons) {
-      // Use a descriptive label: "Primary Button", "Outline Button"
       let label = btn.name || "Button";
       if (btn.strokeColor && (!btn.fillColor || btn.fillColor === "#FFFFFF")) label = "Outline Button";
       else if (btn.fillColor && btn.fillColor !== "#FFFFFF") label = "Filled Button";
@@ -3661,23 +4346,19 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
       if (btn.strokeColor) props.push(`- Border: \`${btn.strokeColor}\` (${typeof btn.strokeWeight === "number" ? btn.strokeWeight : 1}px)`);
       if (btn.cornerRadius !== undefined) props.push(`- Corner radius: ${btn.cornerRadius}px`);
       if (btn.height) props.push(`- Height: ${btn.height}px`);
-      if (btn.textFontSize) props.push(`- Font size: ${btn.textFontSize}px`);
-      if (btn.textFontFamily) props.push(`- Font: ${btn.textFontFamily} ${btn.textFontStyle || ""}`.trim());
-      if (btn.textColor) props.push(`- Text color: \`${btn.textColor}\``);
       if (btn.layoutMode) {
         props.push(`- Layout: ${btn.layoutMode}`);
         const pad = [btn.paddingTop, btn.paddingRight, btn.paddingBottom, btn.paddingLeft].filter((v: number) => v !== undefined);
         if (pad.length > 0) props.push(`- Padding: ${pad.join(" / ")}px`);
       }
-      if (btn.layoutSizingHorizontal) props.push(`- Horizontal sizing: ${btn.layoutSizingHorizontal}`);
       lines.push(props.join("\n"));
       lines.push("");
     }
   }
 
-  // ── Component Specs: Inputs (deduplicated) ──
-  if (tokens.inputStyles && tokens.inputStyles.length > 0) {
-    const inputs = dedupeComponents(tokens.inputStyles);
+  // Inputs
+  if (ds.inputStyles && ds.inputStyles.length > 0) {
+    const inputs = dedupeBySignature(ds.inputStyles);
     lines.push("### Text Inputs");
     lines.push("");
     for (const inp of inputs) {
@@ -3685,53 +4366,83 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
       lines.push("");
       const props: string[] = [];
       if (inp.fillColor) props.push(`- Fill: \`${inp.fillColor}\``);
-      if (inp.strokeColor) props.push(`- Border: \`${inp.strokeColor}\` (${typeof inp.strokeWeight === "number" ? inp.strokeWeight : 1}px)`);
-      if (inp.bottomBorderOnly) props.push(`- Bottom border only: ${typeof inp.bottomBorderWeight === "number" ? inp.bottomBorderWeight : 1}px`);
+      if (inp.strokeColor) props.push(`- Border: \`${inp.strokeColor}\``);
       if (inp.cornerRadius !== undefined) props.push(`- Corner radius: ${inp.cornerRadius}px`);
       if (inp.height) props.push(`- Height: ${inp.height}px`);
-      if (inp.textFontSize) props.push(`- Font size: ${inp.textFontSize}px`);
-      if (inp.textFontFamily) props.push(`- Font: ${inp.textFontFamily} ${inp.textFontStyle || ""}`.trim());
-      if (inp.textColor) props.push(`- Text color: \`${inp.textColor}\``);
-      if (inp.layoutMode) {
-        props.push(`- Layout: ${inp.layoutMode}`);
-        const pad = [inp.paddingTop, inp.paddingRight, inp.paddingBottom, inp.paddingLeft].filter((v: number) => v !== undefined);
-        if (pad.length > 0) props.push(`- Padding: ${pad.join(" / ")}px`);
-      }
       lines.push(props.join("\n"));
       lines.push("");
     }
   }
 
-  // ── Named Components (Figma) ──
-  if (ds.components && ds.components.length > 0) {
+  // Named components
+  if (ds.components.length > 0) {
     lines.push("### Named Components");
     lines.push("");
-    lines.push("| Name | Key |");
-    lines.push("|------|-----|");
+    // Group by page
+    const byPage = new Map<string, typeof ds.components>();
     for (const c of ds.components) {
-      lines.push(`| ${c.name} | \`${c.key}\` |`);
+      const page = (c as any).page || "Unknown";
+      if (!byPage.has(page)) byPage.set(page, []);
+      byPage.get(page)!.push(c);
+    }
+    lines.push("| Name | Key | Page | Variants |");
+    lines.push("|------|-----|------|----------|");
+    for (const c of ds.components) {
+      const page = (c as any).page || "—";
+      const variants = c.variants
+        ? Object.entries(c.variants).map(([k, v]) => `${k}: ${v.join(", ")}`).join("; ")
+        : "—";
+      lines.push(`| ${c.name} | \`${c.key}\` | ${page} | ${variants} |`);
     }
     lines.push("");
   }
 
   // ── Variables ──
-  if (ds.variables && ds.variables.length > 0) {
+  if (ds.variables.length > 0) {
     lines.push("## Design Variables");
     lines.push("");
-    lines.push("| Name | ID |");
-    lines.push("|------|----|");
+    // Group by collection
+    const byCollection = new Map<string, typeof ds.variables>();
     for (const v of ds.variables) {
-      lines.push(`| ${v.name} | \`${v.id}\` |`);
+      if (!byCollection.has(v.collection)) byCollection.set(v.collection, []);
+      byCollection.get(v.collection)!.push(v);
     }
-    lines.push("");
+    for (const [collection, vars] of byCollection) {
+      lines.push(`### ${collection}`);
+      lines.push("");
+      // Determine mode names from first variable
+      const modeNames = vars.length > 0 ? Object.keys(vars[0].valuesByMode) : [];
+      if (modeNames.length > 1) {
+        lines.push(`| Name | Type | ${modeNames.join(" | ")} |`);
+        lines.push(`|------|------|${modeNames.map(() => "------").join("|")}|`);
+        for (const v of vars) {
+          const vals = modeNames.map(m => {
+            const val = v.valuesByMode[m];
+            return typeof val === "string" ? `\`${val}\`` : JSON.stringify(val);
+          });
+          lines.push(`| ${v.name} | ${v.type} | ${vals.join(" | ")} |`);
+        }
+      } else {
+        lines.push("| Name | Type | Value |");
+        lines.push("|------|------|-------|");
+        for (const v of vars) {
+          const val = modeNames.length > 0 ? v.valuesByMode[modeNames[0]] : "—";
+          const display = typeof val === "string" ? `\`${val}\`` : JSON.stringify(val);
+          lines.push(`| ${v.name} | ${v.type} | ${display} |`);
+        }
+      }
+      lines.push("");
+    }
   }
 
   // ── Layout Patterns ──
-  if (tokens.rootFrameLayouts && tokens.rootFrameLayouts.length > 0) {
+  const layouts = ds.rootFrameLayouts || [];
+  if (layouts.length > 0) {
     lines.push("## Layout Patterns");
     lines.push("");
-    for (const layout of tokens.rootFrameLayouts) {
-      lines.push(`**${layout.name}** — ${layout.width}×${layout.height}`);
+    for (const layout of layouts) {
+      const pageLabel = layout.page ? ` (${layout.page})` : "";
+      lines.push(`**${layout.name}**${pageLabel} — ${layout.width}×${layout.height}`);
       const props: string[] = [];
       if (layout.layoutMode) props.push(`Layout: ${layout.layoutMode}`);
       if (layout.fillColor) props.push(`Background: \`${layout.fillColor}\``);
@@ -3744,21 +4455,29 @@ async function generateDesignDocs(): Promise<{ markdown: string; filename: strin
     }
   }
 
-  // ── Screen Inventory (only frames NOT already listed in Layout Patterns) ──
-  const layoutNames = new Set((tokens.rootFrameLayouts || []).map((l: any) => l.name));
-  const unlisted = designFrames.filter(f => !layoutNames.has(f.name));
-  if (unlisted.length > 0) {
-    lines.push("## Additional Screens");
+  // ── Page Inventory ──
+  if (ds.pages.length > 1) {
+    lines.push("## Pages");
     lines.push("");
-    for (const f of unlisted) {
-      const w = Math.round(f.width);
-      const h = Math.round(f.height);
-      lines.push(`- **${f.name}** (${w}×${h})`);
+    for (const p of ds.pages) {
+      lines.push(`- ${p.name}`);
     }
     lines.push("");
   }
 
-  const safeName = pageName.replace(/[^a-zA-Z0-9_-]/g, "_");
+  // ── Theming Status ──
+  if (ds.themingStatus !== "none") {
+    lines.push("## Theming");
+    lines.push("");
+    if (ds.themingStatus === "complete") {
+      lines.push("This file uses **multi-mode variables** for theming (e.g. light/dark). Use variable tokens instead of hardcoded hex values.");
+    } else {
+      lines.push("This file has color variables but they are **single-mode only**. A full dark/light theme setup is not present.");
+    }
+    lines.push("");
+  }
+
+  const safeName = docName.replace(/[^a-zA-Z0-9_-]/g, "_");
   const filename = `design-system-${safeName}.md`;
   return { markdown: lines.join("\n"), filename };
 }
@@ -5038,6 +5757,10 @@ function applySetFillColor(op: Extract<Operation, { type: "SET_FILL_COLOR" }>) {
   };
 
   (node as GeometryMixin).fills = [fill];
+
+  // Bind to the matching paint style (respects _currentThemeMode)
+  tryBindFillStyle(node as SceneNode, `#${hex.toUpperCase()}`);
+
   console.log(`[setFillColor] Set "${(node as SceneNode).name}" fill to ${op.color}`);
 }
 
@@ -6907,6 +7630,31 @@ async function applyDuplicateFrame(op: Extract<Operation, { type: "DUPLICATE_FRA
         console.log(`[duplicateFrame] Pre-resized clone to ${targetWidth}px wide`);
       }
 
+      // ── Deterministic theme style swapping ──────────────────
+      // Before the LLM pass, programmatically swap Light/↔Dark/ paint styles
+      // by matching names. This is reliable and instant — no AI guessing.
+      const intentLower = op.variantIntent.toLowerCase();
+      const isDarkVariant = /\bdark\b/.test(intentLower);
+      const isLightVariant = /\blight\b/.test(intentLower);
+      let themeSwapCount = 0;
+      let varSwapCount = 0;
+
+      if (isDarkVariant) {
+        themeSwapCount = swapThemePaintStyles(clone, "Light/", "Dark/");
+        try { varSwapCount = await swapThemeVariables(clone, "Light/", "Dark/"); } catch (swapErr: any) {
+          console.warn(`[duplicateFrame] swapThemeVariables failed (non-fatal): ${swapErr?.message}`);
+        }
+        if (themeSwapCount > 0) console.log(`[duplicateFrame] Swapped ${themeSwapCount} Light/ → Dark/ paint styles`);
+        if (varSwapCount > 0) console.log(`[duplicateFrame] Swapped ${varSwapCount} Light/ → Dark/ variable bindings`);
+      } else if (isLightVariant) {
+        themeSwapCount = swapThemePaintStyles(clone, "Dark/", "Light/");
+        try { varSwapCount = await swapThemeVariables(clone, "Dark/", "Light/"); } catch (swapErr: any) {
+          console.warn(`[duplicateFrame] swapThemeVariables failed (non-fatal): ${swapErr?.message}`);
+        }
+        if (themeSwapCount > 0) console.log(`[duplicateFrame] Swapped ${themeSwapCount} Dark/ → Light/ paint styles`);
+        if (varSwapCount > 0) console.log(`[duplicateFrame] Swapped ${varSwapCount} Dark/ → Light/ variable bindings`);
+      }
+
       // Snapshot the clone (with its new IDs and post-resize dimensions)
       const cloneSnapshot = snapshotNode(clone, 0);
       const cloneSelection: SelectionSnapshot = { nodes: [cloneSnapshot] };
@@ -6920,7 +7668,7 @@ async function applyDuplicateFrame(op: Extract<Operation, { type: "DUPLICATE_FRA
         variantPrompt = buildResponsivePrompt(op.variantIntent, responsiveType, targetWidth, source.width);
       } else {
         // ── Non-layout variant prompt (dark mode, translation, etc.)
-        variantPrompt = buildColorVariantPrompt(op.variantIntent);
+        variantPrompt = buildColorVariantPrompt(op.variantIntent, themeSwapCount);
       }
 
       const payload = {
@@ -7026,9 +7774,93 @@ function buildResponsivePrompt(
   );
 }
 
-function buildColorVariantPrompt(variantIntent: string): string {
+function buildColorVariantPrompt(variantIntent: string, preSwappedCount: number = 0): string {
+  // Detect target theme from intent
+  const intentLower = variantIntent.toLowerCase();
+  const isDarkTarget = /\bdark\b/.test(intentLower);
+  const isLightTarget = /\blight\b/.test(intentLower);
+  const targetTheme = isDarkTarget ? "dark" : isLightTarget ? "light" : "";
+
+  // Set _currentThemeMode so subsequent SET_FILL_COLOR ops bind correctly
+  if (isDarkTarget) _currentThemeMode = "dark";
+  else if (isLightTarget) _currentThemeMode = "light";
+
+  // Build theme-aware fill style reference from the document's actual paint styles
+  let dsColorSection = "";
+  try {
+    const allPaintStyles = figma.getLocalPaintStyles();
+    const themed: Array<{ name: string; id: string; hex: string }> = [];
+    const unscoped: Array<{ name: string; id: string; hex: string }> = [];
+
+    for (const s of allPaintStyles) {
+      const paints = s.paints;
+      if (!Array.isArray(paints)) continue;
+      const solid = paints.find((p: Paint) => p.type === "SOLID" && p.visible !== false) as SolidPaint | undefined;
+      if (!solid) continue;
+      const hex = `#${[solid.color.r, solid.color.g, solid.color.b]
+        .map(v => Math.round(v * 255).toString(16).padStart(2, "0"))
+        .join("")}`.toUpperCase();
+      const nameLower = s.name.toLowerCase();
+
+      if (targetTheme && nameLower.startsWith(targetTheme + "/")) {
+        themed.push({ name: s.name, id: s.id, hex });
+      } else if (!nameLower.startsWith("light/") && !nameLower.startsWith("dark/")) {
+        unscoped.push({ name: s.name, id: s.id, hex });
+      }
+    }
+
+    if (themed.length > 0 || unscoped.length > 0) {
+      dsColorSection =
+        `\nDESIGN SYSTEM COLOR TOKENS (USE THESE — do NOT invent hex colors):\n` +
+        `IMPORTANT: Use APPLY_FILL_STYLE with the style ID for each color change instead of SET_FILL_COLOR with a raw hex.\n` +
+        `The plugin will automatically bind the correct design system token.\n\n`;
+
+      if (themed.length > 0) {
+        dsColorSection += `### ${targetTheme === "dark" ? "Dark" : "Light"} Mode Styles (PRIMARY — use these):\n`;
+        for (const s of themed.slice(0, 50)) {
+          dsColorSection += `  - id="${s.id}" "${s.name}" → ${s.hex}\n`;
+        }
+        dsColorSection += `\n`;
+      }
+      if (unscoped.length > 0) {
+        dsColorSection += `### Theme-Neutral Styles:\n`;
+        for (const s of unscoped.slice(0, 20)) {
+          dsColorSection += `  - id="${s.id}" "${s.name}" → ${s.hex}\n`;
+        }
+        dsColorSection += `\n`;
+      }
+    }
+  } catch (e) {
+    console.warn(`[buildColorVariantPrompt] Failed to extract paint styles:`, e);
+  }
+
+  // Fallback generic palette only when no DS tokens are available
+  const fallbackPalette = dsColorSection ? "" : (
+    `COLOR PALETTE GUIDANCE (fallback — no design system tokens found):\n` +
+    `• Dark mode backgrounds: #121212 (surface), #1E1E1E (card), #1A1A2E (hero), #2D2D3F (elevated), #0F0F1A (deepest).\n` +
+    `• Dark mode text: #FFFFFF (primary), #E0E0E0 (secondary), #B0B0B0 (tertiary/muted).\n` +
+    `• Light mode backgrounds: #FFFFFF (surface), #F5F5F5 (card), #FFF8F0 (warm hero), #F0F0F0 (elevated).\n` +
+    `• Light mode text: #000000 or #1A1A1A (primary), #333333 (secondary), #666666 (tertiary/muted).\n` +
+    `• Accent / brand colors (buttons, links, highlights) can usually stay the same across modes, ` +
+    `but verify their text labels still contrast.\n\n`
+  );
+
+  // Build the pre-swap notice for the LLM
+  const preSwapNotice = preSwappedCount > 0
+    ? `IMPORTANT: The plugin has ALREADY programmatically swapped ${preSwappedCount} paint style(s) from ` +
+      `${targetTheme === "dark" ? "Light/" : "Dark/"} to ${targetTheme === "dark" ? "Dark/" : "Light/"} prefix. ` +
+      `These nodes already have the correct themed colors applied. Do NOT re-apply styles to nodes that already have the correct theme prefix. ` +
+      `Focus ONLY on:\n` +
+      `  – Nodes that have raw hex fills (no paint style) and need a themed color.\n` +
+      `  – Text nodes that need color adjustments for contrast.\n` +
+      `  – Icons and decorative elements that may need visibility fixes.\n` +
+      `  – Any remaining nodes whose paint style could not be auto-swapped.\n\n`
+    : "";
+
   return (
     `Transform this frame to be a "${variantIntent}" variant.\n\n` +
+
+    preSwapNotice +
 
     `CRITICAL — CONTRAST & READABILITY RULES (apply to EVERY variant):\n` +
     `1. EVERY text node must have strong contrast against its immediate background.\n` +
@@ -7041,26 +7873,21 @@ function buildColorVariantPrompt(variantIntent: string): string {
     `6. Hero sections, banners, and promotional cards: if the background changes, ALL overlay text (title, subtitle, price, CTA) must be updated to contrast.\n` +
     `7. Icons and small UI elements (badges, "+" buttons, dots) should also be checked — ensure they remain visible.\n\n` +
 
-    `COLOR PALETTE GUIDANCE:\n` +
-    `• Dark mode backgrounds: #121212 (surface), #1E1E1E (card), #1A1A2E (hero), #2D2D3F (elevated), #0F0F1A (deepest).\n` +
-    `• Dark mode text: #FFFFFF (primary), #E0E0E0 (secondary), #B0B0B0 (tertiary/muted).\n` +
-    `• Light mode backgrounds: #FFFFFF (surface), #F5F5F5 (card), #FFF8F0 (warm hero), #F0F0F0 (elevated).\n` +
-    `• Light mode text: #000000 or #1A1A1A (primary), #333333 (secondary), #666666 (tertiary/muted).\n` +
-    `• Accent / brand colors (buttons, links, highlights) can usually stay the same across modes, ` +
-    `but verify their text labels still contrast.\n\n` +
+    dsColorSection +
+    fallbackPalette +
 
-    `TASK: Walk through EVERY node in the snapshot and emit SET_FILL_COLOR for:\n` +
-    `  – Every background frame/rectangle that needs to change.\n` +
-    `  – Every TEXT node whose color must flip to maintain contrast.\n` +
-    `  – Every icon or decorative element that would disappear against the new background.\n` +
+    `TASK: Walk through EVERY node in the snapshot and change colors for the ${variantIntent} variant:\n` +
+    `  – For EVERY background frame/rectangle, use APPLY_FILL_STYLE with the matching ${targetTheme ? (targetTheme === "dark" ? "Dark/" : "Light/") : ""}style ID from the list above.\n` +
+    `  – For EVERY TEXT node whose color must change, use APPLY_FILL_STYLE with the correct text color style.\n` +
+    `  – For icons and decorative elements, ensure they remain visible against the new background.\n` +
+    `  – If a needed color has no matching style, fall back to SET_FILL_COLOR with hex.\n` +
     `Do NOT skip nodes. Be thorough — it is better to emit too many color changes than to leave unreadable text.\n\n` +
 
-    `For translations: change all text content to the target language using SET_TEXT.\n` +
-    `Use SET_FILL_COLOR to change background colors and text colors.\n` +
-    `Use SET_TEXT to change text content.\n` +
-    `Use RESIZE_NODE to change sizes.\n` +
+    `PREFERRED: Use APPLY_FILL_STYLE with style IDs from the design system list above.\n` +
+    `FALLBACK: Use SET_FILL_COLOR only when no matching design system style exists.\n` +
+    `Use SET_TEXT to change text content (for translations).\n` +
     `IMPORTANT: Only reference node IDs from the snapshot provided.\n` +
-    `IMPORTANT: To change text color, use SET_FILL_COLOR on the TEXT node with the desired color.`
+    `IMPORTANT: To change text color, use APPLY_FILL_STYLE on the TEXT node with the correct text color style ID.`
   );
 }
 
@@ -7409,7 +8236,9 @@ async function applyBatch(
     SET_CORNER_RADIUS: "Set corner radius",
   };
 
-  for (const op of batch.operations) {
+  for (let i = 0; i < batch.operations.length; i++) {
+    if (i > 0 && i % 3 === 0) await yieldToUI();
+    const op = batch.operations[i];
     const label = friendlyName[op.type] || op.type;
     try {
       await applyOperation(op);
@@ -7568,12 +8397,14 @@ function describeSelection(): string {
 }
 
 figma.on("selectionchange", () => {
-  sendToUI({ type: "selection-change", label: describeSelection() } as any);
+  const sel = figma.currentPage.selection;
+  sendToUI({ type: "selection-change", label: describeSelection(), rootNodeIds: sel.map(n => n.id), rootNodeNames: sel.map(n => n.name) } as any);
 });
 
 // Send initial selection status on load
 setTimeout(() => {
-  sendToUI({ type: "selection-change", label: describeSelection() } as any);
+  const sel = figma.currentPage.selection;
+  sendToUI({ type: "selection-change", label: describeSelection(), rootNodeIds: sel.map(n => n.id), rootNodeNames: sel.map(n => n.name) } as any);
 }, 100);
 
 // ── Pre-cache: DISABLED ─────────────────────────────────────────────
@@ -7618,6 +8449,19 @@ setTimeout(async () => {
     }
   } catch (e) {
     console.warn("[startup] Failed to load state audit timings:", e);
+  }
+  // Load persisted multi-audit store
+  try {
+    const rawStore = await figma.clientStorage.getAsync("a11yAuditStore");
+    if (rawStore) {
+      const store = JSON.parse(rawStore);
+      if (store && Object.keys(store).length > 0) {
+        sendToUI({ type: "restore-a11y-store", store } as any);
+        console.log("[startup] Restored a11y audit store:", Object.keys(store).length, "entries");
+      }
+    }
+  } catch (e) {
+    console.warn("[startup] Failed to load a11y audit store:", e);
   }
 }, 150);
 
@@ -7950,7 +8794,7 @@ function transplantImages(snap: any, imageMap: Map<string, { imageData: string; 
   return count;
 }
 
-async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnapshot?: SelectionSnapshot, sourcePosition?: { x: number; y: number; width: number; height: number; name?: string }, sourceNodeIds?: string[]): Promise<void> {
+async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnapshot?: SelectionSnapshot, sourcePosition?: { x: number; y: number; width: number; height: number; name?: string }, sourceNodeIds?: string[], referenceImageBase64?: string): Promise<void> {
   try {
     sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
     // Yield so the UI can render the progress bar before heavy work begins
@@ -8011,10 +8855,12 @@ async function runGenerateJob(job: GenerateJobState, prompt: string, sourceSnaps
       provider: _selectedProvider,
       model: _selectedModel,
       ..._fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {},
+      ...(referenceImageBase64 ? { referenceImageBase64 } : {}),
     };
     const payloadJson = JSON.stringify(payloadToSend);
     console.log(`[job ${job.id}] PAYLOAD SIZE: ${payloadJson.length} chars (~${Math.round(payloadJson.length / 4)} tokens)`);
     console.log(`[job ${job.id}] selection: ${JSON.stringify(truncatedSelection).length} chars, styleTokens: ${JSON.stringify(styleTokens).length} chars, designSystem: ${JSON.stringify(trimmedDesignSystem).length} chars`);
+    if (referenceImageBase64) console.log(`[job ${job.id}] referenceImage: ${referenceImageBase64.length} chars`);
 
     // Call backend via UI iframe (parallel-safe)
     console.log(`[job ${job.id}] Calling backend /generate...`);
@@ -8291,7 +9137,8 @@ async function runGenerateJobMultiStep(
   prompt: string,
   sourceSnapshot?: SelectionSnapshot,
   sourcePosition?: { x: number; y: number; width: number; height: number; name?: string },
-  sourceNodeIds?: string[]
+  sourceNodeIds?: string[],
+  referenceImageBase64?: string
 ): Promise<void> {
   try {
     // ── Phase 1: Analyze ──
@@ -8324,6 +9171,7 @@ async function runGenerateJobMultiStep(
         apiKey: _userApiKey,
         provider: _selectedProvider,
         model: _selectedModel,
+        ...(referenceImageBase64 ? { referenceImageBase64 } : {}),
       }, job.id);
       layoutPlan = planResult.plan;
       console.log(`[job ${job.id}] [multi-step] Plan received:`, JSON.stringify(layoutPlan).slice(0, 500));
@@ -8366,6 +9214,7 @@ async function runGenerateJobMultiStep(
       model: _selectedModel,
       ..._fullDesignSystem ? { fullDesignSystem: _fullDesignSystem } : {},
       ...(layoutPlan ? { layoutPlan } : {}),
+      ...(referenceImageBase64 ? { referenceImageBase64 } : {}),
     };
 
     console.log(`[job ${job.id}] [multi-step] Phase 3: Calling /generate with plan...`);
@@ -8597,7 +9446,8 @@ async function runGenerateJobHTML(
   sourceSnapshot?: SelectionSnapshot,
   sourcePosition?: { x: number; y: number; width: number; height: number; name?: string },
   sourceNodeIds?: string[],
-  sourceHtml?: string
+  sourceHtml?: string,
+  referenceImageBase64?: string
 ): Promise<void> {
   try {
     // ── Phase 1: Analyze ──
@@ -8636,6 +9486,7 @@ async function runGenerateJobHTML(
       apiKey: _userApiKey,
       provider: _selectedProvider,
       model: _selectedModel,
+      ...(referenceImageBase64 ? { referenceImageBase64 } : {}),
     };
 
     // Include existing frame content if a frame is selected (edit mode)
@@ -9004,6 +9855,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Persist entire audit store from UI ────────────────
+      case "save-a11y-store" as any: {
+        try {
+          const store = (msg as any).store;
+          await figma.clientStorage.setAsync("a11yAuditStore", JSON.stringify(store));
+          console.log("[a11y] Saved audit store (", Object.keys(store || {}).length, "entries)");
+        } catch (e) {
+          console.warn("[a11y] Failed to save audit store:", e);
+        }
+        return;
+      }
+
       // ── Persist phase timings from UI ─────────────────────
       case "save-timings" as any: {
         try {
@@ -9077,6 +9940,36 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         return;
       }
 
+      // ── Select nodes by ID (for audit list clicks) ──────
+      case "select-a11y-nodes" as any: {
+        const ids: string[] = msg.nodeIds || [];
+        const nodes: SceneNode[] = [];
+        for (const id of ids) {
+          const n = figma.getNodeById(id);
+          if (n && n.type !== "DOCUMENT" && n.type !== "PAGE") {
+            nodes.push(n as SceneNode);
+          }
+        }
+        if (nodes.length > 0) {
+          figma.currentPage.selection = nodes;
+          figma.viewport.scrollAndZoomIntoView(nodes);
+        } else {
+          figma.currentPage.selection = [];
+        }
+        return;
+      }
+
+      // ── Get current selection info for audit routing ─────
+      case "get-a11y-selection" as any: {
+        const sel = figma.currentPage.selection;
+        if (sel.length > 0) {
+          sendToUI({ type: "a11y-selection-info", rootNodeIds: sel.map(n => n.id), rootNodeNames: sel.map(n => n.name) } as any);
+        } else {
+          sendToUI({ type: "a11y-selection-info", rootNodeIds: [], rootNodeNames: [] } as any);
+        }
+        return;
+      }
+
       // ── Accessibility Audit ───────────────────────────────
       case "audit-a11y" as any: {
         try {
@@ -9112,7 +10005,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           sendToUI({ type: "audit-phase", phase: "scanning", scope: auditScope } as any);
 
           console.log(`[a11y] Auditing ${nodesToAudit.length} node(s) [scope=${auditScope}]…`);
-          const findings = runAccessibilityAudit(nodesToAudit);
+          const findings = await runAccessibilityAudit(nodesToAudit);
           console.log(`[a11y] Found ${findings.length} issue(s).`);
 
           // Send to LLM for enrichment with suggestions
@@ -9143,8 +10036,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             }
           }
 
-          // Send results to UI
-          sendToUI({ type: "audit-results", findings } as any);
+          // Send results to UI (include root node metadata for multi-audit cache)
+          const rootNodeIds = nodesToAudit.map(n => n.id);
+          const rootNodeNames = nodesToAudit.map(n => n.name);
+          sendToUI({ type: "audit-results", findings, rootNodeIds, rootNodeNames } as any);
           figma.notify(`Accessibility audit: ${findings.length} issue(s) found.`, { timeout: 4000 });
         } catch (err: any) {
           console.error("[a11y] Audit error:", err);
@@ -9240,7 +10135,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         }
         try {
           let resultMsg: string;
-          if (finding.fixType === "auto") {
+          const userPrompt = (finding as any).userPrompt as string | undefined;
+          if (userPrompt) {
+            // Custom prompt fix — always use LLM with user instruction
+            sendToUI({ type: "status", message: `Applying prompt fix for "${finding.nodeName}"…` });
+            (finding as any).suggestion = userPrompt;
+            resultMsg = await applyLLMFix(finding);
+          } else if (finding.fixType === "auto") {
             resultMsg = await applyAutoFix(finding);
           } else if (finding.fixType === "llm") {
             sendToUI({ type: "status", message: `Getting AI fix for "${finding.nodeName}"…` });
@@ -9937,7 +10838,39 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
             async function applyVariantStyleViaLLM(comp: ComponentNode, variantValue: string, propNameForStyle: string, userHint?: string): Promise<void> {
               try {
-                // Snapshot the component so the LLM can see its structure
+                // Detect if this variant is for dark or light mode based on the variant value
+                const variantModeLower = variantValue.toLowerCase();
+                const isDarkVariant = /\bdark\b/.test(variantModeLower);
+                const isLightVariant = /\blight\b/.test(variantModeLower);
+                const themePrefix = isDarkVariant ? "dark" : isLightVariant ? "light" : "";
+
+                // Set _currentThemeMode so SET_FILL_COLOR operations bind to correct paint styles
+                if (isDarkVariant) _currentThemeMode = "dark";
+                else if (isLightVariant) _currentThemeMode = "light";
+
+                // ── Deterministic theme style swapping ──────────────────
+                // Before the LLM pass, programmatically swap Light/↔Dark/ paint styles
+                // and variable bindings by matching names. This is reliable and instant.
+                let themeSwapCount = 0;
+                let varSwapCount = 0;
+                if (isDarkVariant) {
+                  themeSwapCount = swapThemePaintStyles(comp, "Light/", "Dark/");
+                  try { varSwapCount = await swapThemeVariables(comp, "Light/", "Dark/"); } catch (swapErr: any) {
+                    console.warn(`[Variants] swapThemeVariables failed (non-fatal): ${swapErr?.message}`);
+                  }
+                  if (themeSwapCount > 0) console.log(`[Variants] Swapped ${themeSwapCount} Light/ → Dark/ paint styles for "${variantValue}"`);
+                  if (varSwapCount > 0) console.log(`[Variants] Swapped ${varSwapCount} Light/ → Dark/ variable bindings for "${variantValue}"`);
+                } else if (isLightVariant) {
+                  themeSwapCount = swapThemePaintStyles(comp, "Dark/", "Light/");
+                  try { varSwapCount = await swapThemeVariables(comp, "Dark/", "Light/"); } catch (swapErr: any) {
+                    console.warn(`[Variants] swapThemeVariables failed (non-fatal): ${swapErr?.message}`);
+                  }
+                  if (themeSwapCount > 0) console.log(`[Variants] Swapped ${themeSwapCount} Dark/ → Light/ paint styles for "${variantValue}"`);
+                  if (varSwapCount > 0) console.log(`[Variants] Swapped ${varSwapCount} Dark/ → Light/ variable bindings for "${variantValue}"`);
+                }
+                const totalSwapCount = themeSwapCount + varSwapCount;
+
+                // Snapshot the component AFTER swap so the LLM sees correct theme styles
                 const compSnapshot = snapshotNode(comp, 0);
                 const compSelection: SelectionSnapshot = { nodes: [compSnapshot] };
                 const designSystem = await extractDesignSystemSnapshot();
@@ -9949,13 +10882,44 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 const fillNodeList = fillNodes.map(n => `  - id="${n.id}" name="${n.name}" currentFill=${n.fillColor}`).join("\n");
 
                 // Build DS token reference for the LLM
+
                 let dsTokenRef = "";
-                const fillStyles = designSystem.fillStyles || [];
+                const allFillStyles = designSystem.fillStyles || [];
                 const textStyles = designSystem.textStyles || [];
-                if (fillStyles.length > 0) {
-                  dsTokenRef += `\n\nAVAILABLE FILL STYLES (use fillStyleName when appropriate):\n`;
-                  for (const fs of fillStyles.slice(0, 30)) {
-                    dsTokenRef += `  - "${(fs as any).name}"${(fs as any).hex ? ` (${(fs as any).hex})` : ""}\n`;
+
+                // Prioritize theme-appropriate fill styles: show matching theme first, then unscoped
+                if (allFillStyles.length > 0) {
+                  let themedStyles: any[] = [];
+                  let unscopedStyles: any[] = [];
+                  let oppositeStyles: any[] = [];
+
+                  for (const fs of allFillStyles) {
+                    const nameLower = ((fs as any).name || "").toLowerCase();
+                    if (themePrefix && nameLower.startsWith(themePrefix + "/")) {
+                      themedStyles.push(fs);
+                    } else if (nameLower.startsWith("light/") || nameLower.startsWith("dark/")) {
+                      oppositeStyles.push(fs);
+                    } else {
+                      unscopedStyles.push(fs);
+                    }
+                  }
+
+                  // Show themed styles first (up to 40), then unscoped, then opposite as reference
+                  const prioritized = [
+                    ...themedStyles.slice(0, 40),
+                    ...unscopedStyles.slice(0, 15),
+                    ...oppositeStyles.slice(0, 10),
+                  ];
+
+                  if (themePrefix) {
+                    dsTokenRef += `\n\nAVAILABLE FILL STYLES (${themePrefix.toUpperCase()} MODE — use APPLY_FILL_STYLE with these style IDs):\n`;
+                    dsTokenRef += `IMPORTANT: For ${themePrefix} mode variants, ALWAYS prefer styles from the "${themePrefix === "dark" ? "Dark" : "Light"}/" folder. Use APPLY_FILL_STYLE with the style ID instead of SET_FILL_COLOR with a hex value.\n`;
+                  } else {
+                    dsTokenRef += `\n\nAVAILABLE FILL STYLES (use APPLY_FILL_STYLE with these style IDs when appropriate):\n`;
+                  }
+                  for (const fs of prioritized) {
+                    const prefix = themePrefix && (fs as any).name.toLowerCase().startsWith(themePrefix + "/") ? " ★" : "";
+                    dsTokenRef += `  - id="${(fs as any).id}" "${(fs as any).name}"${(fs as any).hex ? ` (${(fs as any).hex})` : ""}${prefix}\n`;
                   }
                 }
                 if (textStyles.length > 0) {
@@ -10002,10 +10966,16 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     `The user's explicit color/style request overrides default conventions.\n`;
                 }
 
+                // Add pre-swap notice if styles/variables were deterministically swapped
+                const preSwapNotice = totalSwapCount > 0
+                  ? `\nIMPORTANT: The plugin has ALREADY programmatically swapped ${totalSwapCount} paint style(s)/variable binding(s) from ${isDarkVariant ? "Light/" : "Dark/"} to ${isDarkVariant ? "Dark/" : "Light/"} prefixes. These swaps are correct and should NOT be reverted. Focus on any remaining visual adjustments needed (e.g. contrast fixes, shadow changes, icon adjustments) — do NOT change fills that already use the correct ${themePrefix} theme styles or variables.\n`
+                  : "";
+
                 // Build a generic, non-prescriptive prompt
                 const variantPrompt =
                   `This component variant has the property "${propNameForStyle}" set to "${variantValue}".\n` +
                   `Apply appropriate visual styling to make this variant look correct for "${propNameForStyle}=${variantValue}".\n` +
+                  `${preSwapNotice}` +
                   `${conventionHint}` +
                   `${userHintSection}\n` +
                   `COMPONENT STRUCTURE (current visual properties):\n${visualSummary}\n\n` +
@@ -10071,14 +11041,18 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               }
 
               // ── Post-LLM override: apply user-specified paint style or variable to all fill-bearing descendants ──
-              if (userHint) {
+              // Only run when the user hint looks like a specific style/variable reference
+              // (contains "/" or "#"), not for general instructions like "add dark mode variants".
+              const looksLikeStyleRef = userHint && (/[/#]/.test(userHint) || /\b[A-F0-9]{6}\b/i.test(userHint));
+              if (userHint && looksLikeStyleRef) {
                 try {
                   const hintLower = userHint.toLowerCase();
 
-                  // Walk all descendants of the component with fills (non-text)
-                  function collectFillDescendants(node: SceneNode): SceneNode[] {
+                  // Walk inner descendants of the component with fills,
+                  // skipping the component node itself so its frame fill is preserved.
+                  function collectFillDescendants(node: SceneNode, skipRoot: boolean): SceneNode[] {
                     const result: SceneNode[] = [];
-                    if ("fills" in node && node.type !== "TEXT") {
+                    if (!skipRoot && "fills" in node) {
                       const fills = (node as any).fills;
                       if (Array.isArray(fills) && fills.length > 0) {
                         result.push(node);
@@ -10086,12 +11060,12 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                     }
                     if ("children" in node) {
                       for (const child of (node as any).children) {
-                        result.push(...collectFillDescendants(child));
+                        result.push(...collectFillDescendants(child, false));
                       }
                     }
                     return result;
                   }
-                  const fillDescendants = collectFillDescendants(comp);
+                  const fillDescendants = collectFillDescendants(comp, true);
 
                   // 1. Try paint styles first
                   const allPaintStyles = figma.getLocalPaintStyles();
@@ -10117,93 +11091,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                       console.log(`[Variants] Overrode ${overrideCount} node fill(s) with paint style "${bestStyle.name}"`);
                     }
                   } else {
-                    // 2. Try Figma variables (local + library) by scanning existing siblings in the component set
-                    let bestVar: Variable | null = null;
-                    let bestVarLen = 0;
-
-                    // 2a. Scan existing sibling components for bound fill variables matching the hint
-                    try {
-                      const parent = comp.parent;
-                      if (parent && "children" in parent) {
-                        const siblings = (parent as any).children as SceneNode[];
-                        outerScan:
-                        for (const sibling of siblings) {
-                          if (sibling.id === comp.id) continue;
-                          // Walk descendant nodes of each sibling
-                          const queue: SceneNode[] = [sibling];
-                          while (queue.length > 0) {
-                            const node = queue.shift()!;
-                            if ("fills" in node) {
-                              const fills = (node as any).fills;
-                              if (Array.isArray(fills)) {
-                                for (const fill of fills) {
-                                  const bv = fill.boundVariables?.color;
-                                  if (bv && bv.id) {
-                                    try {
-                                      const v = await figma.variables.getVariableByIdAsync(bv.id);
-                                      if (v && v.resolvedType === "COLOR" && v.name.length > bestVarLen && hintLower.includes(v.name.toLowerCase())) {
-                                        bestVar = v;
-                                        bestVarLen = v.name.length;
-                                        break outerScan;
-                                      }
-                                    } catch (_) {}
-                                  }
-                                }
-                              }
-                            }
-                            if ("children" in node) {
-                              queue.push(...(node as any).children);
-                            }
-                          }
-                        }
-                      }
-                    } catch (_) {}
-
-                    // 2b. If not found in siblings, try local variable collections
-                    if (!bestVar) {
-                      try {
-                        const collections = await figma.variables.getLocalVariableCollectionsAsync();
-                        for (const col of collections) {
-                          for (const varId of col.variableIds) {
-                            const v = await figma.variables.getVariableByIdAsync(varId);
-                            if (v && v.resolvedType === "COLOR" && v.name.length > bestVarLen && hintLower.includes(v.name.toLowerCase())) {
-                              bestVar = v;
-                              bestVarLen = v.name.length;
-                            }
-                          }
-                        }
-                      } catch (_) {}
-                    }
-
-                    if (bestVar) {
-                      let overrideCount = 0;
-                      for (const n of fillDescendants) {
-                        try {
-                          if ("fills" in n) {
-                            const fills = (n as any).fills;
-                            if (Array.isArray(fills) && fills.length > 0) {
-                              const solidIdx = fills.findIndex((f: Paint) => f.type === "SOLID");
-                              if (solidIdx >= 0) {
-                                const boundPaint = figma.variables.setBoundVariableForPaint(fills[solidIdx], "color", bestVar);
-                                const newFills = [...fills];
-                                newFills[solidIdx] = boundPaint;
-                                (n as any).fills = newFills;
-                                overrideCount++;
-                              }
-                            }
-                          }
-                        } catch (_) {}
-                      }
-                      if (overrideCount > 0) {
-                        console.log(`[Variants] Overrode ${overrideCount} node fill(s) with color variable "${bestVar.name}"`);
-                      }
-                    } else {
-                      console.warn(`[Variants] No matching paint style or color variable found for user hint: "${userHint}"`);
-                    }
+                    console.log(`[Variants] No matching paint style found for user hint: "${userHint}"`);
                   }
                 } catch (styleErr: any) {
                   console.warn(`[Variants] User style override failed: ${styleErr.message}`);
                 }
+              } else if (userHint) {
+                console.log(`[Variants] Skipping post-LLM style override scan — user hint is a general instruction, not a specific style reference`);
               }
             }
 
@@ -10293,12 +11187,14 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 templateSource = sourceNode;
               }
 
-              sendToUI({ type: "status", message: `Creating variants for "${effectiveSource.name}"…` });
-              sendToUI({ type: "job-progress", jobId: nativeJobIdV, phase: "generate" } as any);
-
               // Build the full variant name for each new variant
               const components: ComponentNode[] = [];
               const targetPositions = new Map<ComponentNode, { x: number; y: number }>();
+              let variantStyledCount = 0;
+              const totalVariantsToStyle = variantValues.filter(v => !["default", "normal", "rest", "base"].includes(v.toLowerCase())).length;
+
+              sendToUI({ type: "status", message: `Creating variants for "${effectiveSource.name}"…` });
+              sendToUI({ type: "job-progress", jobId: nativeJobIdV, phase: "generate", variantCount: totalVariantsToStyle } as any);
 
               if (isAddingToExistingSet && existingSet) {
                 // ═══ MULTI-COMBO CLONING ═══
@@ -10416,6 +11312,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                       if (!isDefault) {
                         await applyVariantStyleViaLLM(comp, vValue, currentPropName, intentText);
+                        variantStyledCount++;
+                        sendToUI({ type: "status", message: `Styling variant ${variantStyledCount}/${totalVariantsToStyle}: "${vValue}"…` });
+                        await yieldToUI();
                       } else {
                         console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
                       }
@@ -10503,6 +11402,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
                       if (!isDefault) {
                         await applyVariantStyleViaLLM(comp, vValue, currentPropName, intentText);
+                        variantStyledCount++;
+                        sendToUI({ type: "status", message: `Styling variant ${variantStyledCount}/${totalVariantsToStyle}: "${vValue}"…` });
+                        await yieldToUI();
                       } else {
                         console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
                       }
@@ -10585,6 +11487,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                   const isDefault = ["default", "normal", "rest", "base"].includes(vValue.toLowerCase());
                   if (!isDefault) {
                     await applyVariantStyleViaLLM(comp, vValue, currentPropName, intentText);
+                    variantStyledCount++;
+                    sendToUI({ type: "status", message: `Styling variant ${variantStyledCount}/${totalVariantsToStyle}: "${vValue}"…` });
+                    await yieldToUI();
                   } else {
                     console.log(`[Variants] Skipping styling for "${vValue}" (default variant)`);
                   }
@@ -12868,7 +13773,86 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           break;
         }
 
+        // ── Accessibility / contrast intent (native — no LLM needed) ──
+        const isA11yCheckIntent =
+          /\b(identify|check|audit|find|scan|inspect)\b.+\b(non-accessible|inaccessible|contrast|wcag|a11y|accessibility)\b/i.test(intentText) ||
+          /\b(accessible|wcag|a11y|contrast)\b.+\bcolou?rs?\b/i.test(intentText);
+
+        const isA11yFixIntent =
+          /\b(make|fix|ensure|enforce|apply|update)\b.+\b(accessible|wcag|a11y|compliant|contrast)\b/i.test(intentText) ||
+          /\b(accessible|wcag|compliant)\b.+\bcolou?rs?\b.+\b(fix|make|apply|replace)\b/i.test(intentText) ||
+          /\bfix\s+all\s+(contrast|colou?r|a11y|accessibility)\b/i.test(intentText);
+
+        if (isA11yCheckIntent || isA11yFixIntent) {
+          const nativeJobIdA11y = ++_nextJobId;
+          sendToUI({ type: "job-started", jobId: nativeJobIdA11y, prompt: intentText } as any);
+
+          try {
+            sendToUI({ type: "status", message: "Running accessibility contrast check…" });
+
+            // Determine scope (same as audit-a11y handler)
+            let nodesToAudit: SceneNode[] = [];
+            if (figma.currentPage.selection.length > 0) {
+              nodesToAudit = [...figma.currentPage.selection];
+            } else {
+              nodesToAudit = figma.currentPage.children.filter(
+                (n) => n.type === "FRAME" && n.name !== CHANGE_LOG_FRAME_NAME
+              ) as SceneNode[];
+            }
+
+            if (nodesToAudit.length === 0) {
+              figma.notify("No frames found to check.", { timeout: 3000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdA11y, summary: "No frames found." } as any);
+              break;
+            }
+
+            const findings = await runAccessibilityAudit(nodesToAudit);
+            const contrastFindings = findings.filter((f: AuditFinding) => f.checkType === "contrast");
+
+            if (contrastFindings.length === 0) {
+              const summary = "All color pairs meet WCAG AA contrast requirements.";
+              figma.notify(summary, { timeout: 4000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdA11y, summary } as any);
+              break;
+            }
+
+            if (isA11yFixIntent) {
+              // Auto-apply fixes for all contrast findings
+              sendToUI({ type: "status", message: `Fixing ${contrastFindings.length} contrast issue(s)…` });
+              let fixed = 0;
+              let failed = 0;
+              for (const f of contrastFindings) {
+                try {
+                  await applyAutoFix(f);
+                  fixed++;
+                } catch (err: any) {
+                  console.warn(`[a11y-fix] Failed to fix ${f.nodeName}: ${err.message}`);
+                  failed++;
+                }
+              }
+              const summary = `Fixed ${fixed} contrast issue${fixed !== 1 ? "s" : ""}${failed > 0 ? `, ${failed} failed (need manual review)` : ""}.`;
+              figma.notify(summary, { timeout: 5000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdA11y, summary } as any);
+            } else {
+              // Check-only — send results to the audit panel
+              const rootNodeIdsP = nodesToAudit.map(n => n.id);
+              const rootNodeNamesP = nodesToAudit.map(n => n.name);
+              sendToUI({ type: "audit-results", findings, rootNodeIds: rootNodeIdsP, rootNodeNames: rootNodeNamesP } as any);
+              const summary = `Found ${contrastFindings.length} contrast issue${contrastFindings.length !== 1 ? "s" : ""} out of ${findings.length} total.`;
+              figma.notify(summary, { timeout: 4000 });
+              sendToUI({ type: "job-complete", jobId: nativeJobIdA11y, summary } as any);
+            }
+          } catch (err: any) {
+            console.error("[a11y] Contrast check error:", err);
+            figma.notify(`Contrast check failed: ${err.message}`, { timeout: 4000 });
+            sendToUI({ type: "job-error", jobId: nativeJobIdA11y, error: err.message || "Contrast check failed." } as any);
+          }
+          break;
+        }
+
         // ── AI-powered flows (generate or edit) ─────────────
+        const referenceImageBase64: string | undefined = (msg as any).referenceImageBase64 || undefined;
+        if (referenceImageBase64) console.log(`[run] Reference image attached (${referenceImageBase64.length} chars)`);
         const isGenerateIntent = figma.currentPage.selection.length === 0 ||
           /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) ||
           /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) ||
@@ -12910,7 +13894,14 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
 
               const runner = activeGenerateMode === "html" ? runGenerateJobHTML
                 : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
-              runner(mjob, prompt, singleSelection, frameData.position, [frameData.nodeId]).catch((err: any) => {
+              const mRunnerArgs: any[] = [mjob, prompt, singleSelection, frameData.position, [frameData.nodeId]];
+              if (activeGenerateMode === "html") {
+                mRunnerArgs.push(undefined); // sourceHtml
+                mRunnerArgs.push(referenceImageBase64);
+              } else {
+                mRunnerArgs.push(referenceImageBase64);
+              }
+              (runner as any)(...mRunnerArgs).catch((err: any) => {
                 console.error(`[run] Unhandled error in generate job ${mjobId}:`, err);
                 if (!mjob.cancelled) {
                   sendToUI({ type: "job-error", jobId: mjobId, error: `Generation failed: ${err.message}` } as any);
@@ -12952,8 +13943,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             const runner = activeGenerateMode === "html" ? runGenerateJobHTML
               : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
             const runnerArgs: any[] = [job, prompt, singleSnapshot, singlePosition, singleNodeIds.length > 0 ? singleNodeIds : undefined];
-            if (activeGenerateMode === "html" && singleSourceHtml) {
-              runnerArgs.push(singleSourceHtml);
+            if (activeGenerateMode === "html") {
+              runnerArgs.push(singleSourceHtml); // may be undefined
+              runnerArgs.push(referenceImageBase64);
+            } else {
+              runnerArgs.push(referenceImageBase64);
             }
             (runner as any)(...runnerArgs).catch((err: any) => {
               console.error(`[run] Unhandled error in generate job ${jobId}:`, err);
@@ -13028,8 +14022,13 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       // ── Generate Design Docs (markdown) ────────────────────────
       case "generate-docs": {
         try {
-          sendToUI({ type: "status", message: "Extracting design tokens…" });
-          const result = await generateDesignDocs();
+          // Ensure the full design system is available (extract if not cached)
+          if (!_fullDesignSystem) {
+            sendToUI({ type: "status", message: "Extracting design system…" });
+            _fullDesignSystem = await extractFullDocumentDesignSystem();
+          }
+          sendToUI({ type: "status", message: "Formatting documentation…" });
+          const result = formatDesignSystemAsMarkdown(_fullDesignSystem);
           sendToUI({ type: "docs-result", markdown: result.markdown, filename: result.filename });
         } catch (err: any) {
           sendToUI({ type: "docs-error", error: err.message || "Failed to generate docs." });
@@ -13190,6 +14189,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
       // ── Generate Frame (parallel job-based) ────────────────────
       case "generate": {
         const prompt = (msg as any).prompt || "";
+        const genRefImage: string | undefined = (msg as any).referenceImageBase64 || undefined;
         const currentSelection = figma.currentPage.selection;
 
         if (currentSelection.length > 1) {
@@ -13209,7 +14209,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             console.log(`[generate] Starting job ${jobId} for frame "${frameData.snapshot.name}" (${frameData.position.width}x${frameData.position.height})`);
             sendToUI({ type: "job-started", jobId, prompt: `${prompt} (${frameData.snapshot.name})` } as any);
 
-            runGenerateJob(job, prompt, singleSelection, frameData.position).catch((err: any) => {
+            runGenerateJob(job, prompt, singleSelection, frameData.position, undefined, genRefImage).catch((err: any) => {
               console.error(`[generate] Unhandled error in job ${jobId}:`, err);
               if (!job.cancelled) {
                 sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);
@@ -13226,7 +14226,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
           console.log(`[generate] Starting job ${jobId}: "${prompt.slice(0, 60)}"`);
           sendToUI({ type: "job-started", jobId, prompt } as any);
 
-          runGenerateJob(job, prompt).catch((err: any) => {
+          runGenerateJob(job, prompt, undefined, undefined, undefined, genRefImage).catch((err: any) => {
             console.error(`[generate] Unhandled error in job ${jobId}:`, err);
             if (!job.cancelled) {
               sendToUI({ type: "job-error", jobId, error: `Generation failed: ${err.message}` } as any);

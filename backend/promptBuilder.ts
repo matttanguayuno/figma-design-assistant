@@ -466,6 +466,15 @@ When creating or converting to desktop (1440px):
 ═══ REFERENCE SNAPSHOTS ═══
 When provided, reference snapshots are HIGHEST PRIORITY. Replicate their fillColor, strokeColor, cornerRadius, padding, spacing, fonts exactly.
 
+═══ REFERENCE IMAGE HANDLING ═══
+When a reference image is attached:
+- The reference image defines the TARGET layout structure. Analyze it carefully.
+- MATCH the section types, component arrangement, and visual hierarchy from the reference.
+- COUNT the elements: if the reference shows 4 stat cards, create 4. If it shows a sidebar, create a sidebar.
+- DO NOT fall back to generic templates (hero → features → CTA). Follow the reference's actual structure.
+- Use the design system colors/typography but match the color ROLES from the reference (e.g., dark sidebar → use your darkest surface color).
+- The reference image takes PRIORITY over the default "Design Recipe" blocks above.
+
 Generate the JSON now.`;
 
 

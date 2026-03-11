@@ -359,7 +359,7 @@ app.post("/plan", async (req: Request, res: Response) => {
 
 app.post("/generate", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, layoutPlan, isComponentGeneration } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, layoutPlan, isComponentGeneration, referenceImageBase64 } = req.body;
 
     // API key is required (per-user)
     if (!apiKey || typeof apiKey !== "string") {
@@ -449,7 +449,8 @@ app.post("/generate", async (req: Request, res: Response) => {
       safeFullDS,
       dsSummary,
       layoutPlan,
-      isComponentGeneration
+      isComponentGeneration,
+      referenceImageBase64
     );
 
     console.log(`[generate] LLM returned snapshot:`, JSON.stringify(snapshot).slice(0, 500));
@@ -626,7 +627,7 @@ app.post("/layout-audit", async (req: Request, res: Response) => {
 
 app.post("/generate-html", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, sourceHtml } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, sourceHtml, referenceImageBase64 } = req.body;
 
     if (!apiKey || typeof apiKey !== "string") {
       res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
@@ -696,7 +697,8 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       safeSelection,
       safeFullDS,
       dsSummary,
-      sourceHtml || undefined
+      sourceHtml || undefined,
+      referenceImageBase64
     );
     console.log(`[generate-html] Step 1 complete: ${rawHtml.length} chars`);
 
@@ -801,7 +803,7 @@ app.post("/generate-html", async (req: Request, res: Response) => {
 
 app.post("/generate-plan", async (req: Request, res: Response) => {
   try {
-    const { prompt, apiKey, provider, model, dsSummary } = req.body;
+    const { prompt, apiKey, provider, model, dsSummary, referenceImageBase64 } = req.body;
 
     if (!apiKey || typeof apiKey !== "string") {
       res.status(401).json({ error: "Missing API key." });
@@ -819,7 +821,7 @@ app.post("/generate-plan", async (req: Request, res: Response) => {
 
     console.log(`[generate-plan] provider=${resolvedProvider}, model=${model || "default"}, prompt="${prompt}"`);
 
-    const plan = await callLLMPlan(prompt, apiKey, resolvedProvider, model, dsSummary);
+    const plan = await callLLMPlan(prompt, apiKey, resolvedProvider, model, dsSummary, referenceImageBase64);
     console.log(`[generate-plan] LLM returned plan:`, JSON.stringify(plan).slice(0, 500));
 
     if (!plan || typeof plan !== "object") {
