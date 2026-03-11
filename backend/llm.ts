@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -547,17 +547,18 @@ export async function callLLMGenerate(
   const systemPrompt = referenceImageBase64
     ? GENERATE_WITH_REFERENCE_SYSTEM_PROMPT
     : (isComponentGeneration ? GENERATE_COMPONENT_SYSTEM_PROMPT : GENERATE_SYSTEM_PROMPT);
-  const userPrompt = isComponentGeneration
-    ? buildGenerateComponentPrompt(prompt, designSystem, fullDesignSystem, dsSummary)
-    : buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
 
-  // Append a short reminder in the user prompt when a reference image is present
-  let finalUserPrompt = userPrompt;
+  // When a reference image is attached, use a LIGHTWEIGHT user prompt that contains only
+  // the user request + DS colors/typography. This prevents the model from being overwhelmed
+  // by 200K+ chars of selected frame tree, reference snapshots, and full design system JSON
+  // which drown out the visual instruction to follow the reference image.
+  let finalUserPrompt: string;
   if (referenceImageBase64) {
-    finalUserPrompt += `\n\n## Reference Image Attached
-A reference image is attached. Follow the REFERENCE IMAGE ANALYSIS instructions in the system prompt.
-Remember: include "_referenceAnalysis" as the first field in your JSON output describing what you see in the reference image BEFORE generating nodes.
-The reference image defines the STRUCTURE, PROPORTIONS, DENSITY, and VIEWPORT. The user prompt above defines the CONTENT and BRANDING.`;
+    finalUserPrompt = buildReferenceImagePrompt(prompt, dsSummary, designSystem);
+  } else if (isComponentGeneration) {
+    finalUserPrompt = buildGenerateComponentPrompt(prompt, designSystem, fullDesignSystem, dsSummary);
+  } else {
+    finalUserPrompt = buildGeneratePrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, layoutPlan);
   }
 
   console.log(`[callLLMGenerate] isComponent=${!!isComponentGeneration}, System prompt: ${systemPrompt.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${systemPrompt.length + finalUserPrompt.length} chars (~${Math.round((systemPrompt.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
@@ -578,7 +579,7 @@ The reference image defines the STRUCTURE, PROPORTIONS, DENSITY, and VIEWPORT. T
   let raw: string;
   try {
     if (referenceImageBase64) {
-      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, 16384, apiKey, abort, true);
+      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, 32768, apiKey, abort, true);
     } else {
       raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
     }

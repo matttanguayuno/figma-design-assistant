@@ -752,6 +752,84 @@ export function buildGenerateComponentPrompt(
 }
 
 
+// ── Reference Image Generation User Prompt (lightweight) ────────────
+// When a reference image is attached, we send a MINIMAL user prompt:
+// just the user request + design system colors/typography.
+// We OMIT: selected frame tree, reference snapshots, full design system, raw style tokens.
+// This prevents the model from being overwhelmed with context and ignoring the image.
+
+export function buildReferenceImagePrompt(
+  prompt: string,
+  dsSummary?: any,
+  designSystem?: DesignSystemSnapshot
+): string {
+  const parts: string[] = [
+    "## User Request",
+    prompt,
+    "",
+    "## Reference Image Attached",
+    "A reference image is attached. Follow the REFERENCE IMAGE ANALYSIS instructions in the system prompt.",
+    "Include \"_referenceAnalysis\" as the FIRST field in your JSON output.",
+    "The reference image defines the STRUCTURE, PROPORTIONS, DENSITY, and VIEWPORT.",
+    "The user request above defines the CONTENT and BRANDING.",
+  ];
+
+  // Include DS summary for color/typography binding (compact)
+  if (dsSummary) {
+    parts.push("", "## Design System Colors & Typography (use these for style binding)");
+
+    if (dsSummary.surfaces?.length > 0) {
+      parts.push("### Surfaces");
+      for (const c of dsSummary.surfaces.slice(0, 8)) {
+        parts.push(`- ${c.name}: ${c.hex} (${c.role})`);
+      }
+    }
+    if (dsSummary.textColors?.length > 0) {
+      parts.push("### Text Colors");
+      for (const c of dsSummary.textColors.slice(0, 6)) {
+        parts.push(`- ${c.name}: ${c.hex} (${c.role})`);
+      }
+    }
+    if (dsSummary.brandColors?.length > 0) {
+      parts.push("### Brand / Accent");
+      for (const c of dsSummary.brandColors.slice(0, 6)) {
+        parts.push(`- ${c.name}: ${c.hex} (${c.role})`);
+      }
+    }
+    if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
+      parts.push("### Typography");
+      for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
+        const fontSize = dsSummary.typeRoleFontSizes?.[role];
+        parts.push(`- ${role}: textStyleName="${styleName}"${fontSize ? `, fontSize: ${fontSize}` : ""}`);
+      }
+    }
+    if (dsSummary.shadow) {
+      parts.push(`### Shadow: ${JSON.stringify(dsSummary.shadow)}`);
+    }
+  } else if (designSystem) {
+    // Fallback: minimal style names
+    if (designSystem.textStyles?.length > 0) {
+      parts.push("", "## Text Styles");
+      for (const s of designSystem.textStyles.slice(0, 8) as any[]) {
+        parts.push(`- ${s.name}${s.fontSize ? ` (${s.fontSize}px)` : ""}`);
+      }
+    }
+    if (designSystem.fillStyles?.length > 0) {
+      parts.push("", "## Fill Styles");
+      for (const s of designSystem.fillStyles.slice(0, 12) as any[]) {
+        parts.push(`- ${s.name}${s.hex ? `: ${s.hex}` : ""}`);
+      }
+    }
+  }
+
+  parts.push("", "Generate the complete NodeSnapshot JSON now.");
+
+  const fullPrompt = parts.join("\n");
+  console.log(`[buildReferenceImagePrompt] Total prompt size: ${fullPrompt.length} chars (~${Math.round(fullPrompt.length / 4)} tokens) — lightweight mode`);
+  return fullPrompt;
+}
+
+
 // ── Generation User Prompt ──────────────────────────────────────────
 
 export function buildGeneratePrompt(
