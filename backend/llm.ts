@@ -22,8 +22,9 @@ export const PROVIDER_MODELS: Record<Provider, ModelInfo[]> = {
     { id: "claude-haiku-4-20250414", label: "Claude Haiku 4" },
   ],
   openai: [
+    { id: "gpt-4.1", label: "GPT-4.1" },
+    { id: "gpt-4.1-mini", label: "GPT-4.1 Mini" },
     { id: "gpt-4o", label: "GPT-4o" },
-    { id: "gpt-4o-mini", label: "GPT-4o Mini" },
     { id: "o3-mini", label: "o3-mini" },
   ],
   gemini: [
@@ -39,15 +40,23 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   gemini: "Google Gemini",
 };
 
-// Max output tokens per provider (OpenAI caps at 16384)
-const PROVIDER_MAX_OUTPUT: Record<Provider, number> = {
-  anthropic: 32768,
-  openai: 16384,
-  gemini: 65536,
+// Max output tokens per model (used to cap max_tokens requests)
+const MODEL_MAX_OUTPUT: Record<string, number> = {
+  "gpt-4o": 16384,
+  "gpt-4o-mini": 16384,
+  "gpt-4.1": 32768,
+  "gpt-4.1-mini": 32768,
+  "gpt-4.1-nano": 32768,
+  "o3-mini": 65536,
 };
 
-function capMaxTokens(provider: Provider, requested: number): number {
-  return Math.min(requested, PROVIDER_MAX_OUTPUT[provider] || 16384);
+function capMaxTokens(provider: Provider, requested: number, model?: string): number {
+  if (model && MODEL_MAX_OUTPUT[model]) {
+    return Math.min(requested, MODEL_MAX_OUTPUT[model]);
+  }
+  // Conservative defaults per provider
+  const providerDefaults: Record<Provider, number> = { anthropic: 32768, openai: 16384, gemini: 65536 };
+  return Math.min(requested, providerDefaults[provider] || 16384);
 }
 
 // ── Client caches (keyed by "provider:apiKey") ──────────────────────
@@ -590,9 +599,9 @@ export async function callLLMGenerate(
   let raw: string;
   try {
     if (referenceImageBase64) {
-      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, capMaxTokens(provider, 32768), apiKey, abort, true);
+      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, capMaxTokens(provider, 32768, resolvedModel), apiKey, abort, true);
     } else {
-      raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, capMaxTokens(provider, 16384), apiKey, abort, true, 0.5);
+      raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, capMaxTokens(provider, 16384, resolvedModel), apiKey, abort, true, 0.5);
     }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
@@ -725,7 +734,7 @@ export async function callLLMGenerateHTML(
         GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT,
         generatePrompt,
         resolvedModel,
-        capMaxTokens(provider, 32768),
+        capMaxTokens(provider, 32768, resolvedModel),
         apiKey,
         abort1,
         false, // not JSON mode — we want HTML
