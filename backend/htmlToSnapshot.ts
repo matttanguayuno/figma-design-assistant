@@ -417,6 +417,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         fillStyleName: resolveColorToStyleName(textColor, hexToStyle),
         textStyleName: resolveTextStyleName(el),
         textAlignHorizontal: "CENTER",
+        layoutSizingHorizontal: "HUG",
         layoutSizingVertical: "HUG",
         childrenCount: 0,
       };
@@ -437,6 +438,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         paddingLeft: Math.round(parseFloat(style.paddingLeft)),
         fillColor: bgColor,
         fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
+        clipsContent: false,
         layoutSizingHorizontal: parentLayoutMode === "HORIZONTAL" ? "HUG" : "FILL",
         layoutSizingVertical: "HUG",
         childrenCount: 1,
@@ -499,6 +501,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         paddingLeft: Math.round(parseFloat(style.paddingLeft)),
         fillColor: bgColor,
         fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
+        clipsContent: false,
         layoutSizingHorizontal: parentLayoutMode === "HORIZONTAL" ? "HUG" : "FILL",
         layoutSizingVertical: "HUG",
         childrenCount: 1,
@@ -625,9 +628,11 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     const cr = parseFloat(style.borderRadius);
     if (cr > 0) node.cornerRadius = Math.round(cr);
 
-    // Clipping
+    // Clipping – explicitly set false so Figma doesn't default to true
     if (style.overflow === "hidden" || style.overflow === "clip") {
       node.clipsContent = true;
+    } else {
+      node.clipsContent = false;
     }
 
     // Border / stroke
