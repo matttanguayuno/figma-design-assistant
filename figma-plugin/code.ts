@@ -10349,8 +10349,14 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         const intentText = ((msg as any).intent || "");
         const intentLower = intentText.toLowerCase();
         // Determine generation mode from message or persisted setting
-        const activeGenerateMode: "standard" | "multi-step" | "html" =
+        let activeGenerateMode: "standard" | "multi-step" | "html" =
           (msg as any).generateMode || ((msg as any).multiStep ? "multi-step" : _generateMode);
+        // Auto-upgrade to HTML pipeline when a reference image is attached
+        // HTML pipeline produces far better layout fidelity (browser handles sizing)
+        if ((msg as any).referenceImageBase64 && activeGenerateMode !== "html") {
+          console.log(`[run] Reference image attached — auto-upgrading from "${activeGenerateMode}" to "html" pipeline for better fidelity`);
+          activeGenerateMode = "html";
+        }
         // isAuditFix already declared above
 
         // ── Native Actions (no LLM needed) ──────────────────
