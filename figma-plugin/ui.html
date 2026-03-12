@@ -3160,12 +3160,14 @@
       _apiKey = key || "";
       _providerKeys[_selectedProvider] = _apiKey;
       if (_apiKey) {
-        keyStatus.className = "key-status active";
-        keyStatusText.textContent = "API key configured";
+        keyStatus.className = "key-status connected";
+        keyStatusText.textContent = "\u2713 API key configured";
+        apiKeyInput.value = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022";
         btnApply.disabled = false;
       } else {
         keyStatus.className = "key-status missing";
         keyStatusText.textContent = "No API key configured";
+        apiKeyInput.value = "";
         btnApply.disabled = true;
       }
     }
@@ -3192,14 +3194,9 @@
       populateModelDropdown(provider);
       // Update key label and placeholder
       apiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider] || "API Key";
-      apiKeyInput.value = "";
       const savedKey = _providerKeys[provider] || "";
-      if (savedKey) {
-        apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider].slice(0, -1) + savedKey.slice(-4);
-      } else {
-        apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
-      }
-      // Update key status for this provider
+      apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
+      // Update key status for this provider (also sets input value)
       updateKeyStatus(savedKey);
     }
 
@@ -3757,8 +3754,15 @@
       autoFitHeight();
     });
 
+    // Clear masked dots when user focuses the input to type a new key
+    apiKeyInput.addEventListener("focus", () => {
+      if (apiKeyInput.value.replace(/\u2022/g, "") === "") {
+        apiKeyInput.value = "";
+      }
+    });
+
     btnSaveKey.addEventListener("click", async () => {
-      const key = apiKeyInput.value.trim();
+      const key = apiKeyInput.value.replace(/\u2022/g, "").trim();
       if (!key) {
         setStatus("Please enter an API key.", "error");
         return;
@@ -3782,8 +3786,6 @@
           // Key is valid — save it
           updateKeyStatus(key);
           postToPlugin({ type: "save-api-key", key: key, provider: _selectedProvider });
-          apiKeyInput.value = "";
-          apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[_selectedProvider].slice(0, -1) + key.slice(-4);
           setStatus(result.warning || "API key verified and saved.", result.warning ? "warning" : "success");
         } else {
           // Key is invalid
@@ -3795,8 +3797,6 @@
         // Network / backend unreachable — save anyway but warn
         updateKeyStatus(key);
         postToPlugin({ type: "save-api-key", key: key, provider: _selectedProvider });
-        apiKeyInput.value = "";
-        apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[_selectedProvider].slice(0, -1) + key.slice(-4);
         setStatus("Could not validate key (backend unreachable). Key saved.", "warning");
       } finally {
         btnSaveKey.disabled = false;
@@ -6274,13 +6274,8 @@
           }
           // Update key UI for current provider
           apiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider] || "API Key";
+          apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
           updateKeyStatus(key);
-          if (key) {
-            apiKeyInput.value = "";
-            apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider].slice(0, -1) + key.slice(-4);
-          } else {
-            apiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider] || "Enter API key\u2026";
-          }
           // Validate stored keys on startup
           validateStartupKeys();
           // Restore generation mode
