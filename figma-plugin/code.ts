@@ -9447,7 +9447,8 @@ async function runGenerateJobHTML(
   sourcePosition?: { x: number; y: number; width: number; height: number; name?: string },
   sourceNodeIds?: string[],
   sourceHtml?: string,
-  referenceImageBase64?: string
+  referenceImageBase64?: string,
+  directRender?: boolean
 ): Promise<void> {
   try {
     // ── Phase 1: Analyze ──
@@ -9501,7 +9502,12 @@ async function runGenerateJobHTML(
     // Include stored HTML from previous generation for surgical editing
     if (sourceHtml) {
       payloadToSend.sourceHtml = sourceHtml;
-      console.log(`[job ${job.id}] [html] Including sourceHtml (${sourceHtml.length} chars) for surgical edit`);
+      if (directRender) {
+        payloadToSend.directRender = true;
+        console.log(`[job ${job.id}] [html] Including sourceHtml (${sourceHtml.length} chars) for DIRECT RENDER (skip LLM)`);
+      } else {
+        console.log(`[job ${job.id}] [html] Including sourceHtml (${sourceHtml.length} chars) for surgical edit`);
+      }
     }
 
     console.log(`[job ${job.id}] [html] Phase 2-3: Calling /generate-html...`);
@@ -13854,7 +13860,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         const referenceImageBase64: string | undefined = (msg as any).referenceImageBase64 || undefined;
         if (referenceImageBase64) console.log(`[run] Reference image attached (${referenceImageBase64.length} chars)`);
         const attachedSourceHtml: string | undefined = (msg as any).sourceHtml || undefined;
-        if (attachedSourceHtml) console.log(`[run] HTML file attached (${attachedSourceHtml.length} chars)`);
+        const directRender: boolean = !!(msg as any).directRender;
+        if (attachedSourceHtml) console.log(`[run] HTML file attached (${attachedSourceHtml.length} chars, directRender=${directRender})`);
         const isGenerateIntent = figma.currentPage.selection.length === 0 ||
           /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) ||
           /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) ||
@@ -13900,6 +13907,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
               if (activeGenerateMode === "html") {
                 mRunnerArgs.push(attachedSourceHtml || undefined); // sourceHtml from attached file or undefined
                 mRunnerArgs.push(referenceImageBase64);
+                mRunnerArgs.push(directRender);
               } else {
                 mRunnerArgs.push(referenceImageBase64);
               }
@@ -13955,6 +13963,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             if (activeGenerateMode === "html") {
               runnerArgs.push(singleSourceHtml); // may be undefined
               runnerArgs.push(referenceImageBase64);
+              runnerArgs.push(directRender);
             } else {
               runnerArgs.push(referenceImageBase64);
             }

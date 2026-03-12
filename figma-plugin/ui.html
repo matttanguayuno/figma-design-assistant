@@ -5689,9 +5689,12 @@
       // Use the first image attachment as the reference image
       const imgAtt = _attachments.find(a => a.type === "image");
       if (imgAtt) runMsg.referenceImageBase64 = imgAtt.data;
-      // Use the first HTML attachment as sourceHtml
+      // Use the first HTML attachment as sourceHtml with directRender flag
       const htmlAtt = _attachments.find(a => a.type === "html");
-      if (htmlAtt) runMsg.sourceHtml = htmlAtt.data;
+      if (htmlAtt) {
+        runMsg.sourceHtml = htmlAtt.data;
+        runMsg.directRender = true;
+      }
       postToPlugin(runMsg);
       clearAllAttachments();
     });

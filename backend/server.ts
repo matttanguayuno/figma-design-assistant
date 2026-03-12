@@ -627,25 +627,34 @@ app.post("/layout-audit", async (req: Request, res: Response) => {
 
 app.post("/generate-html", async (req: Request, res: Response) => {
   try {
-    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, sourceHtml, referenceImageBase64 } = req.body;
+    const { prompt, styleTokens, designSystem, selection, fullDesignSystem, apiKey, provider, model, dsSummary, sourceHtml, referenceImageBase64, directRender } = req.body;
 
-    if (!apiKey || typeof apiKey !== "string") {
-      res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
-      return;
+    // Direct render mode skips LLM entirely — no API key or prompt required
+    const isDirectRender = !!(directRender && sourceHtml);
+
+    if (!isDirectRender) {
+      if (!apiKey || typeof apiKey !== "string") {
+        res.status(401).json({ error: "Missing API key. Please configure your API key in Settings." });
+        return;
+      }
+
+      if (!prompt || typeof prompt !== "string") {
+        res.status(400).json({ error: "Missing or invalid 'prompt'" });
+        return;
+      }
     }
 
     const resolvedProvider: Provider = provider || "anthropic";
-    if (!PROVIDER_MODELS[resolvedProvider]) {
+    if (!isDirectRender && !PROVIDER_MODELS[resolvedProvider]) {
       res.status(400).json({ error: `Unknown provider: ${provider}` });
       return;
     }
 
-    if (!prompt || typeof prompt !== "string") {
-      res.status(400).json({ error: "Missing or invalid 'prompt'" });
-      return;
+    if (isDirectRender) {
+      console.log(`[generate-html] DIRECT RENDER mode — skipping LLM, rendering attached HTML (${sourceHtml.length} chars)`);
+    } else {
+      console.log(`[generate-html] provider=${resolvedProvider}, model=${model || "default"}, prompt="${prompt}"`);
     }
-
-    console.log(`[generate-html] provider=${resolvedProvider}, model=${model || "default"}, prompt="${prompt}"`);
 
     // Hard-truncate inputs (same as /generate)
     let safeSelection = selection || null;
@@ -682,51 +691,66 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       }
     }
 
-    // ── Step 1: Creative HTML generation (no DS constraints) ──
-    console.log(`[generate-html] Step 1: Calling LLM for creative HTML generation...`);
-    if (sourceHtml) {
-      console.log(`[generate-html] sourceHtml provided (${sourceHtml.length} chars) — surgical edit mode`);
-    }
-    const rawHtml = await callLLMGenerateHTML(
-      prompt,
-      styleTokens || {},
-      safeDesignSystem,
-      apiKey,
-      resolvedProvider,
-      model,
-      safeSelection,
-      safeFullDS,
-      dsSummary,
-      sourceHtml || undefined,
-      referenceImageBase64
-    );
-    console.log(`[generate-html] Step 1 complete: ${rawHtml.length} chars`);
+    // ── Step 1: Get HTML content ──
+    let htmlContent: string;
 
-    // ── Step 2: Design system binding (if DS context available) ──
-    let htmlContent = rawHtml;
-    console.log(`[generate-html] Step 2: DS binding pass...`);
-    try {
-      htmlContent = await callLLMBindDS(
-        rawHtml,
+    if (directRender && sourceHtml) {
+      // Direct render mode: user attached an HTML file — skip LLM, use as-is
+      console.log(`[generate-html] DIRECT RENDER mode: using attached HTML (${sourceHtml.length} chars), skipping LLM`);
+      htmlContent = sourceHtml;
+    } else {
+      // Normal mode: generate HTML via LLM
+      console.log(`[generate-html] Step 1: Calling LLM for creative HTML generation...`);
+      if (sourceHtml) {
+        console.log(`[generate-html] sourceHtml provided (${sourceHtml.length} chars) — surgical edit mode`);
+      }
+      const rawHtml = await callLLMGenerateHTML(
+        prompt,
         styleTokens || {},
         safeDesignSystem,
         apiKey,
         resolvedProvider,
         model,
+        safeSelection,
         safeFullDS,
-        dsSummary
+        dsSummary,
+        sourceHtml || undefined,
+        referenceImageBase64
       );
-      console.log(`[generate-html] Step 2 complete: ${htmlContent.length} chars`);
-    } catch (bindErr: any) {
-      console.warn(`[generate-html] Step 2 (DS binding) failed, using raw HTML: ${bindErr.message}`);
+      console.log(`[generate-html] Step 1 complete: ${rawHtml.length} chars`);
+
+      // ── Step 2: Design system binding (if DS context available) ──
       htmlContent = rawHtml;
+      console.log(`[generate-html] Step 2: DS binding pass...`);
+      try {
+        htmlContent = await callLLMBindDS(
+          rawHtml,
+          styleTokens || {},
+          safeDesignSystem,
+          apiKey,
+          resolvedProvider,
+          model,
+          safeFullDS,
+          dsSummary
+        );
+        console.log(`[generate-html] Step 2 complete: ${htmlContent.length} chars`);
+      } catch (bindErr: any) {
+        console.warn(`[generate-html] Step 2 (DS binding) failed, using raw HTML: ${bindErr.message}`);
+        htmlContent = rawHtml;
+      }
     }
 
     // 3. Determine viewport size from prompt
-    const promptLower = prompt.toLowerCase();
-    const isDesktop = promptLower.includes("desktop") || promptLower.includes("wide") || promptLower.includes("1440");
-    const viewportWidth = isDesktop ? 1440 : 390;
-    const viewportHeight = isDesktop ? 900 : 844;
+    let viewportWidth = 1440;
+    let viewportHeight = 900;
+    if (!isDirectRender && prompt) {
+      const promptLower = prompt.toLowerCase();
+      const isMobile = promptLower.includes("mobile") || promptLower.includes("phone") || promptLower.includes("390");
+      if (isMobile) {
+        viewportWidth = 390;
+        viewportHeight = 844;
+      }
+    }
 
     // 3a. Fix data-image-prompt values stuck in CSS (LLM sometimes puts them as CSS properties instead of HTML attributes)
     htmlContent = fixCSSImagePrompts(htmlContent);
