@@ -1343,6 +1343,9 @@ DONUT CHART:
   Add a white circle in the center for the hole.
 
 ═══ PROGRESS BAR RENDERING ═══
+Each progress bar emits EXACTLY ONE label row containing BOTH the name AND the value, then the bar track.
+NEVER emit the label/name as a separate standalone element outside the progress row — that causes duplication.
+
 Progress nodes become:
   <div class="progress-row">
     <span class="progress-label">{label}</span>

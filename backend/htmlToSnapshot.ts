@@ -363,8 +363,6 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         textAlignHorizontal: textAlignToFigma(style.textAlign),
         layoutSizingHorizontal: (parentLayoutMode === "HORIZONTAL" || style.whiteSpace === "nowrap" || style.whiteSpace === "pre") ? "HUG" : "FILL",
         layoutSizingVertical: "HUG",
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
         childrenCount: 0,
       };
 
@@ -656,12 +654,9 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       node.layoutSizingVertical = "HUG";
     } else if (parentLayoutMode === "HORIZONTAL") {
       // This node is inside a horizontal parent (row)
-      // Primary axis (horizontal): FILL if flex-grow, else FIXED (keep computed width)
-      if (flexGrow > 0) {
-        node.layoutSizingHorizontal = "FILL";
-      } else {
-        node.layoutSizingHorizontal = "FIXED";
-      }
+      // Primary axis (horizontal): use computed width to preserve CSS proportions
+      // CSS flex-grow ratios (e.g. 5:3) would become equal FILL in Figma, so use FIXED
+      node.layoutSizingHorizontal = "FIXED";
       // Counter axis (vertical): FILL by default (CSS align-items: stretch)
       node.layoutSizingVertical = "FILL";
     } else {

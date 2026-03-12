@@ -3432,12 +3432,8 @@ async function createNodeFromSnapshot(
     } catch (_) { /* skip */ }
   }
 
-  // Resize text after appending (text auto-sizes, so set explicit dimensions)
-  if (snap.type === "TEXT" && snap.width && snap.height) {
-    try {
-      (node as TextNode).resize(snap.width, snap.height);
-    } catch (_) {}
-  }
+  // Text nodes use HUG sizing — do NOT force explicit dimensions
+  // (Chrome pixel widths differ from Figma text rendering, causing truncation)
 
   return node;
 }
