@@ -39,6 +39,17 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   gemini: "Google Gemini",
 };
 
+// Max output tokens per provider (OpenAI caps at 16384)
+const PROVIDER_MAX_OUTPUT: Record<Provider, number> = {
+  anthropic: 32768,
+  openai: 16384,
+  gemini: 65536,
+};
+
+function capMaxTokens(provider: Provider, requested: number): number {
+  return Math.min(requested, PROVIDER_MAX_OUTPUT[provider] || 16384);
+}
+
 // ── Client caches (keyed by "provider:apiKey") ──────────────────────
 
 const _anthropicCache = new Map<string, Anthropic>();
@@ -579,9 +590,9 @@ export async function callLLMGenerate(
   let raw: string;
   try {
     if (referenceImageBase64) {
-      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, 32768, apiKey, abort, true);
+      raw = await callProviderWithImage(provider, systemPrompt, safeUserPrompt, referenceImageBase64, resolvedModel, capMaxTokens(provider, 32768), apiKey, abort, true);
     } else {
-      raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, 16384, apiKey, abort, true, 0.5);
+      raw = await callProvider(provider, systemPrompt, safeUserPrompt, resolvedModel, capMaxTokens(provider, 16384), apiKey, abort, true, 0.5);
     }
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
@@ -714,7 +725,7 @@ export async function callLLMGenerateHTML(
         GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT,
         generatePrompt,
         resolvedModel,
-        32768,
+        capMaxTokens(provider, 32768),
         apiKey,
         abort1,
         false, // not JSON mode — we want HTML
