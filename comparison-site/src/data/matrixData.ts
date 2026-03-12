@@ -27,6 +27,8 @@ export interface Capability {
   testPrompt?: string;
   /** Screenshots grouped by tool */
   screenshots: ToolScreenshot[];
+  /** Mark this feature row as done/complete */
+  completed?: boolean;
 }
 
 export interface Tool {
@@ -114,6 +116,7 @@ export const CAPABILITIES: Capability[] = [
   {
     id: "text-to-ui",
     name: "Text-to-UI Generation",
+    completed: true,
     description:
       "Generate full UI frames from a natural-language text prompt.",
     testPrompt: "Design a mobile login screen for a fitness app called \"FitPulse\". Include a logo area, email and password fields, a \"Sign In\" button, a \"Forgot Password?\" link, and a \"Sign up\" option at the bottom.",

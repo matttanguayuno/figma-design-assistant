@@ -82,7 +82,7 @@
       border-style: dashed;
     }
     .prompt-wrapper.drag-over::after {
-      content: "Drop image here";
+      content: "Drop file here";
       position: absolute;
       inset: 0;
       display: flex;
@@ -3034,7 +3034,7 @@
         }
         const label = document.createElement("span");
         label.className = "attachment-chip-label";
-        label.textContent = att.type === "image" ? (att.fileName || "Image") : ("\uD83D\uDCC4 " + (att.fileName || "File"));
+        label.textContent = att.type === "image" ? (att.fileName || "Image") : att.type === "html" ? ("\uD83C\uDF10 " + (att.fileName || "HTML")) : ("\uD83D\uDCC4 " + (att.fileName || "File"));
         chip.appendChild(label);
         const btn = document.createElement("button");
         btn.className = "btn-remove-chip";
@@ -3069,6 +3069,7 @@
     function handleFile(file) {
       if (!file) return;
       const isImage = file.type.match(/^image\/(png|jpeg|webp|gif|svg\+xml)$/);
+      const isHtml = /\.(html?|htm)$/i.test(file.name);
       if (isImage) {
         if (file.size > MAX_IMAGE_BYTES) {
           setStatus("Image too large (max 20 MB).", "error");
@@ -3082,6 +3083,24 @@
         };
         reader.onerror = () => setStatus("Failed to read image file.", "error");
         reader.readAsDataURL(file);
+      } else if (isHtml) {
+        // HTML file: read as text, attach as "html" type, auto-switch to HTML mode
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = reader.result;
+          addAttachment("html", text, file.name);
+          // Auto-switch to HTML generation mode
+          if (_generateMode !== "html") {
+            _generateMode = "html";
+            generateModeSelect.value = "html";
+            genModeDesc.textContent = GEN_MODE_DESCRIPTIONS["html"] || "";
+            postToPlugin({ type: "save-generate-mode", mode: "html" });
+            updateProgressSegments();
+            setStatus("Switched to HTML-to-Figma mode (HTML file attached).", "ok");
+          }
+        };
+        reader.onerror = () => setStatus("Failed to read HTML file.", "error");
+        reader.readAsText(file);
       } else {
         // Non-image file: read as text (no size limit)
         const reader = new FileReader();
@@ -5670,6 +5689,9 @@
       // Use the first image attachment as the reference image
       const imgAtt = _attachments.find(a => a.type === "image");
       if (imgAtt) runMsg.referenceImageBase64 = imgAtt.data;
+      // Use the first HTML attachment as sourceHtml
+      const htmlAtt = _attachments.find(a => a.type === "html");
+      if (htmlAtt) runMsg.sourceHtml = htmlAtt.data;
       postToPlugin(runMsg);
       clearAllAttachments();
     });

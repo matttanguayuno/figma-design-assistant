@@ -13853,6 +13853,8 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         // ── AI-powered flows (generate or edit) ─────────────
         const referenceImageBase64: string | undefined = (msg as any).referenceImageBase64 || undefined;
         if (referenceImageBase64) console.log(`[run] Reference image attached (${referenceImageBase64.length} chars)`);
+        const attachedSourceHtml: string | undefined = (msg as any).sourceHtml || undefined;
+        if (attachedSourceHtml) console.log(`[run] HTML file attached (${attachedSourceHtml.length} chars)`);
         const isGenerateIntent = figma.currentPage.selection.length === 0 ||
           /\b(add|create|generate|make|build|design)\b.+\b(frames?|screens?|pages?|views?|layouts?|mobile|desktop|variants?)\b/i.test(intentText) ||
           /\b(new|mobile|desktop)\b.+\b(frames?|screens?|pages?|views?|layouts?)\b/i.test(intentText) ||
@@ -13896,7 +13898,7 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 : activeGenerateMode === "multi-step" ? runGenerateJobMultiStep : runGenerateJob;
               const mRunnerArgs: any[] = [mjob, prompt, singleSelection, frameData.position, [frameData.nodeId]];
               if (activeGenerateMode === "html") {
-                mRunnerArgs.push(undefined); // sourceHtml
+                mRunnerArgs.push(attachedSourceHtml || undefined); // sourceHtml from attached file or undefined
                 mRunnerArgs.push(referenceImageBase64);
               } else {
                 mRunnerArgs.push(referenceImageBase64);
@@ -13917,6 +13919,11 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
             let singleSnapshot: SelectionSnapshot | undefined;
             let singlePosition: { x: number; y: number; width: number; height: number; name?: string } | undefined;
             let singleSourceHtml: string | undefined;
+            // Use attached HTML file even when nothing is selected
+            if (attachedSourceHtml) {
+              singleSourceHtml = attachedSourceHtml;
+              console.log(`[run] Using attached HTML file (${attachedSourceHtml.length} chars) as sourceHtml (no selection)`);
+            }
             if (currentSelection.length === 1) {
               const selNode = currentSelection[0];
               singleSnapshot = { nodes: [snapshotNode(selNode, 0)] };
@@ -13927,8 +13934,10 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
                 height: Math.round(selNode.height),
                 name: selNode.name
               };
-              // Retrieve stored HTML for surgical editing
-              if ("getPluginData" in selNode) {
+              // Use attached HTML file if provided, otherwise retrieve stored HTML for surgical editing
+              if (attachedSourceHtml) {
+                singleSourceHtml = attachedSourceHtml;
+              } else if ("getPluginData" in selNode) {
                 const storedHtml = (selNode as SceneNode).getPluginData("sourceHtml");
                 if (storedHtml) {
                   singleSourceHtml = storedHtml;

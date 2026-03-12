@@ -194,7 +194,7 @@ export default function CapabilityMatrix() {
                         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.textDecorationColor = "var(--uno-violet)"; (e.currentTarget as HTMLElement).style.color = "var(--uno-violet)"; }}
                         onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.textDecorationColor = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--uno-blue)"; }}
                       >
-                        {cap.name}
+                        {cap.completed && <span className="text-green-400 mr-1">✓</span>}{cap.name}
                       </span>
                     </td>
                     {TOOLS.map((tool) =>
