@@ -349,9 +349,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       if (!text) return null;
 
       const fillColor = colorToHex(style.color);
+      const cn = typeof el.className === "string" ? el.className : (el.className?.baseVal || "");
       const node: any = {
         id: nodeId,
-        name: el.className ? (el as HTMLElement).className.split(/\s+/)[0] : tag.toLowerCase(),
+        name: cn ? cn.split(/\s+/)[0] : tag.toLowerCase(),
         type: "TEXT",
         characters: text,
         fontSize: Math.round(parseFloat(style.fontSize)),
@@ -419,9 +420,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         childrenCount: 0,
       };
 
+      const cnBtn = typeof el.className === "string" ? el.className : (el.className?.baseVal || "");
       const node: any = {
         id: nodeId,
-        name: el.className ? (el as HTMLElement).className.split(/\s+/)[0] : "button",
+        name: cnBtn ? cnBtn.split(/\s+/)[0] : "button",
         type: "FRAME",
         width: Math.round(rect.width),
         height: Math.max(44, Math.round(rect.height)),
@@ -480,9 +482,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         childrenCount: 0,
       };
 
+      const cnInp = typeof el.className === "string" ? el.className : (el.className?.baseVal || "");
       const node: any = {
         id: nodeId,
-        name: el.className ? (el as HTMLElement).className.split(/\s+/)[0] : "input",
+        name: cnInp ? cnInp.split(/\s+/)[0] : "input",
         type: "FRAME",
         width: Math.round(rect.width),
         height: Math.max(44, Math.round(rect.height)),
@@ -552,11 +555,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     }
 
     const bgColor = colorToHex(style.backgroundColor);
+    const cnFrame = typeof el.className === "string" ? el.className : (el.className?.baseVal || "");
     const node: any = {
       id: nodeId,
-      name: el.className
-        ? (el as HTMLElement).className.split(/\s+/)[0]
-        : (el.id || tag.toLowerCase()),
+      name: cnFrame ? cnFrame.split(/\s+/)[0] : (el.id || tag.toLowerCase()),
       type: "FRAME",
       width: Math.round(rect.width),
       height: Math.round(rect.height),
