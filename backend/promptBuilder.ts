@@ -460,17 +460,17 @@ Use an 8px base grid. Common values: 4, 8, 12, 16, 24, 32, 48.
 ═══ DESKTOP LAYOUT ═══
 When creating or converting to desktop (1440px):
 - LOGIN/AUTH pages: HORIZONTAL split with left brand panel (720px FIXED, accent bg) + right content panel (720px FIXED, form wrapper).
-- DASHBOARD/APP pages with sidebar navigation: HORIZONTAL root with narrow sidebar (200-250px FIXED, dark bg) + main content area (layoutSizingHorizontal:"FILL"). The sidebar should be ~14-17% of total width, NOT 50%.
+- DASHBOARD/APP pages with sidebar navigation: HORIZONTAL root with narrow sidebar (200-240px FIXED with layoutSizingHorizontal:"FIXED", dark bg) + main content area (layoutSizingHorizontal:"FILL"). The sidebar MUST be 200-240px, NEVER wider than 260px. NEVER use layoutSizingHorizontal:"FILL" on the sidebar.
 - Or centered single-column: counterAxisAlignItems:"CENTER", content wrapper 440-800px.
 - All inputs/buttons in wrapper: layoutSizingHorizontal:"FILL".
 
 ═══ VISUAL COMPONENT PATTERNS ═══
 When the reference image shows specific UI elements, represent them as follows:
-- STAT/METRIC CARDS: FRAME with white/surface fill, cornerRadius:12, padding:20-24, DROP_SHADOW. Children: icon placeholder (RECTANGLE 40x40 with colored fill + cornerRadius:8-20), label TEXT (12-14px caption), value TEXT (24-32px bold), change indicator FRAME (HORIZONTAL, green/red TEXT).
-- CHARTS/GRAPHS: FRAME with surface fill, cornerRadius:12, padding:20-24. Children: title TEXT, tab/filter row FRAME, chart area RECTANGLE (fill with very light color, height:200-300). Add axis labels as small TEXT nodes. You cannot draw actual chart lines, so represent the chart area as a colored RECTANGLE placeholder.
-- TRANSACTION/DATA LISTS: FRAME with surface fill, cornerRadius:12, padding:16-20. Each row is a HORIZONTAL FRAME with: icon RECTANGLE (36-40px, colored fill, cornerRadius:8-20), text column FRAME (VERTICAL: name TEXT bold + category TEXT caption), amount TEXT (right-aligned, colored green/red), date TEXT (caption).
+- STAT/METRIC CARDS: FRAME with white/surface fill, cornerRadius:12, padding:20-24, DROP_SHADOW, layoutSizingHorizontal:"FILL". Children: icon placeholder (RECTANGLE 40x40 with colored fill + cornerRadius:8-20), label TEXT (12-14px caption), value TEXT (24-32px bold, layoutSizingHorizontal:"FILL"), change indicator FRAME (HORIZONTAL, green/red TEXT). Parent row MUST be HORIZONTAL with each card using layoutSizingHorizontal:"FILL". Monetary values must NEVER wrap to multiple lines.
+- CHARTS/GRAPHS: FRAME with surface fill, cornerRadius:12, padding:20-24, layoutSizingHorizontal:"FILL". Children: title TEXT + tab FRAME row, chart area FRAME (VERTICAL, height:200-250, with horizontal grid line RECTANGLEs and a light colored RECTANGLE at bottom for data area), axis labels row, legend row.
+- TRANSACTION/DATA LISTS: FRAME with surface fill, cornerRadius:12, padding:16-20. Each row is a HORIZONTAL FRAME with: icon RECTANGLE (36-40px, colored fill, cornerRadius:8-20), text column FRAME (VERTICAL: name TEXT bold + category TEXT caption, layoutSizingHorizontal:"FILL"), amount TEXT (right-aligned, colored green/red), date TEXT (caption).
 - PROGRESS BARS: FRAME (HORIZONTAL, height:8-12, cornerRadius:4-6, light gray fill) containing a RECTANGLE child (percentage width FIXED, full height, colored fill, cornerRadius:4-6). Add label TEXT + value TEXT above/beside.
-- NAVIGATION SIDEBAR: FRAME (VERTICAL, FIXED width 200-250, dark fill, padding:24). Children: logo/brand TEXT, nav items as HORIZONTAL FRAMEs with icon RECTANGLE + label TEXT. Active item gets a subtle highlight fill.
+- NAVIGATION SIDEBAR: FRAME (VERTICAL, width:200-240 FIXED with layoutSizingHorizontal:"FIXED", dark fill, padding:24). Children: logo/brand TEXT, nav items as HORIZONTAL FRAMEs with icon RECTANGLE + label TEXT. Active item gets a subtle highlight fill. User profile with avatar 32-40px max.
 - BUTTONS: FRAME with padding, cornerRadius:8, colored fill. Primary buttons use brand/accent color, secondary use surface/outline.
 
 ═══ REFERENCE SNAPSHOTS ═══
@@ -524,23 +524,35 @@ Effects: [{"type":"DROP_SHADOW","radius":8,"spread":0,"offset":{"x":0,"y":2},"co
 ═══ VISUAL COMPONENT PATTERNS (USE THESE) ═══
 When the reference image shows specific UI elements, represent them using these patterns:
 
-STAT/METRIC CARDS:
-FRAME { fillColor:"#FFFFFF", cornerRadius:12, padding:20, effects:[DROP_SHADOW], layoutMode:"VERTICAL", itemSpacing:8, children: [
+STAT/METRIC CARDS (each card MUST use layoutSizingHorizontal:"FILL" so they share the row equally):
+FRAME { fillColor:"#FFFFFF", cornerRadius:12, padding:20, effects:[DROP_SHADOW], layoutMode:"VERTICAL", layoutSizingHorizontal:"FILL", itemSpacing:8, children: [
   RECTANGLE { name:"icon", width:40, height:40, fillColor:"#colored", cornerRadius:20 },
   TEXT { characters:"Label", fontSize:12 },
-  TEXT { characters:"$24,562", fontSize:28, fontStyle:"Bold" },
+  TEXT { characters:"$24,562", fontSize:28, fontStyle:"Bold", layoutSizingHorizontal:"FILL" },
   FRAME { layoutMode:"HORIZONTAL", itemSpacing:4, children: [
     TEXT { characters:"▲ 12.5%", fontSize:12, fillColor:"#22C55E" },
     TEXT { characters:"from last month", fontSize:12 }
   ]}
 ]}
+IMPORTANT: The parent row holding stat cards MUST be layoutMode:"HORIZONTAL" with each card at layoutSizingHorizontal:"FILL". Monetary values like "$24,562" must NEVER wrap to multiple lines.
 
-CHARTS/GRAPHS:
-FRAME { fillColor:"#FFFFFF", cornerRadius:12, padding:20, effects:[DROP_SHADOW], layoutMode:"VERTICAL", itemSpacing:16, children: [
-  FRAME { layoutMode:"HORIZONTAL", children: [title TEXT, toggle/tab FRAME] },
-  RECTANGLE { name:"chart-area", width:FILL, height:250, fillColor:"#F8F9FA", cornerRadius:8 },
-  FRAME { layoutMode:"HORIZONTAL", children: [axis labels as small TEXT nodes] },
-  FRAME { layoutMode:"HORIZONTAL", itemSpacing:16, children: [legend dot RECTANGLEs + label TEXTs] }
+CHARTS/GRAPHS (create visual chart representation, not just a blank rectangle):
+FRAME { fillColor:"#FFFFFF", cornerRadius:12, padding:20, effects:[DROP_SHADOW], layoutMode:"VERTICAL", layoutSizingHorizontal:"FILL", itemSpacing:16, children: [
+  FRAME { layoutMode:"HORIZONTAL", primaryAxisAlignItems:"SPACE_BETWEEN", layoutSizingHorizontal:"FILL", children: [title TEXT, toggle/tab FRAME] },
+  FRAME { name:"chart-area", layoutMode:"VERTICAL", layoutSizingHorizontal:"FILL", height:220, clipsContent:true, children: [
+    // Horizontal grid lines (4-5 thin rectangles spanning full width)
+    RECTANGLE { height:1, fillColor:"#F0F0F0", layoutSizingHorizontal:"FILL" },
+    FRAME { layoutSizingVertical:"FILL" },  // spacer
+    RECTANGLE { height:1, fillColor:"#F0F0F0", layoutSizingHorizontal:"FILL" },
+    FRAME { layoutSizingVertical:"FILL" },  // spacer
+    RECTANGLE { height:1, fillColor:"#F0F0F0", layoutSizingHorizontal:"FILL" },
+    FRAME { layoutSizingVertical:"FILL" },  // spacer
+    RECTANGLE { height:1, fillColor:"#F0F0F0", layoutSizingHorizontal:"FILL" },
+    // Colored area at the bottom to represent chart data area
+    RECTANGLE { height:80, fillColor:"#EBF5FB", layoutSizingHorizontal:"FILL", opacity:0.5 }
+  ]},
+  FRAME { layoutMode:"HORIZONTAL", primaryAxisAlignItems:"SPACE_BETWEEN", layoutSizingHorizontal:"FILL", children: [axis labels as small TEXT nodes (Jan, Feb, Mar, etc.)] },
+  FRAME { layoutMode:"HORIZONTAL", itemSpacing:16, children: [legend dot RECTANGLEs (small 8x8 circles) + label TEXTs] }
 ]}
 
 TRANSACTION/DATA ROWS:
@@ -567,26 +579,30 @@ FRAME { layoutMode:"VERTICAL", itemSpacing:8, children: [
   ]}
 ]}
 
-NAVIGATION SIDEBAR:
-FRAME { width:200, layoutMode:"VERTICAL", fillColor:"#1E1B4B", paddingTop:24, paddingBottom:24, paddingLeft:16, paddingRight:16, itemSpacing:4, children: [
+NAVIGATION SIDEBAR (width MUST be 200-240px FIXED — NEVER wider):
+FRAME { width:220, layoutMode:"VERTICAL", layoutSizingHorizontal:"FIXED", layoutSizingVertical:"FILL", fillColor:"#1E1B4B", paddingTop:24, paddingBottom:24, paddingLeft:16, paddingRight:16, itemSpacing:4, children: [
   TEXT { characters:"CashFlow", fontSize:20, fontStyle:"Bold", fillColor:"#FFFFFF" },
   ...nav items as HORIZONTAL FRAMEs { padding:12, cornerRadius:8, children: [
     RECTANGLE { width:20, height:20, fillColor:"#9CA3AF", cornerRadius:4 },
     TEXT { characters:"Dashboard", fontSize:14, fillColor:"#FFFFFF" }
   ]},
+  // spacer FRAME { layoutSizingVertical:"FILL" } to push user profile to bottom
   ...user profile at bottom
 ]}
+CRITICAL: The sidebar FRAME must have layoutSizingHorizontal:"FIXED" with width:200-240. The adjacent main content area FRAME must have layoutSizingHorizontal:"FILL" to take all remaining space.
 
 ═══ MATCHING THE REFERENCE — RULES ═══
 1. VIEWPORT: Use width:1440 for desktop references, width:390 for mobile. The reference image determines viewport, NOT the user's prompt keywords.
-2. PROPORTIONS: If the sidebar is ~12-15% of the width, use 180-220px FIXED. If stat cards share a row equally, use layoutSizingHorizontal:"FILL" on each. NEVER make a sidebar 50% of the screen width.
-3. SECTION COUNT: If the reference shows 4 stat cards, create exactly 4. If it shows 5 transaction rows, create 5. If it shows 4 budget progress bars, create 4.
-4. VISUAL RICHNESS: Every colored icon circle, every card shadow, every progress bar, every colored amount indicator in the reference MUST have a corresponding node. Do NOT simplify to plain text.
-5. DENSITY: Generate 80-150+ nodes for a rich dashboard. Every distinct visual element (icon, label, value, indicator, bar segment, legend dot) is its own node.
-6. LAYOUT FIDELITY: If the reference shows a 2-column layout below the stat cards (chart on left 65%, transactions on right 35%), replicate that exact arrangement.
-7. COLOR ROLES: Match the reference's color usage (dark sidebar, light background, white cards, colored icons, green/red indicators) using the design system palette if provided.
-8. NO GENERIC TEMPLATES: Do NOT fall back to "hero → features → CTA". Follow ONLY what the reference image shows.
-9. NO VIEWPORT CONVERSION: Do NOT convert a desktop reference into mobile.
+2. SIDEBAR WIDTH (HARD LIMIT): Sidebar width MUST be 200-240px with layoutSizingHorizontal:"FIXED". NEVER exceed 260px. NEVER use layoutSizingHorizontal:"FILL" on a sidebar. The main content area MUST use layoutSizingHorizontal:"FILL" to take all remaining space.
+3. PROPORTIONS: Stat cards sharing a row MUST each have layoutSizingHorizontal:"FILL" so they divide space equally. The parent row FRAME must be layoutMode:"HORIZONTAL" with layoutSizingHorizontal:"FILL".
+4. SECTION COUNT: If the reference shows 4 stat cards, create exactly 4. If it shows 5 transaction rows, create 5. If it shows 4 budget progress bars, create 4.
+5. VISUAL RICHNESS: Every colored icon circle, every card shadow, every progress bar, every colored amount indicator in the reference MUST have a corresponding node. Do NOT simplify to plain text.
+6. DENSITY: Generate 80-150+ nodes for a rich dashboard. Every distinct visual element (icon, label, value, indicator, bar segment, legend dot) is its own node.
+7. LAYOUT FIDELITY: If the reference shows a 2-column layout below the stat cards (chart on left ~60%, transactions on right ~40%), replicate that with two children FRAMEs using layoutSizingHorizontal:"FILL" in a HORIZONTAL parent. Give the chart FRAME a larger flex basis or explicit width ratio.
+8. COLOR ROLES: Match the reference's color usage (dark sidebar, light background, white cards, colored icons, green/red indicators) using the design system palette if provided.
+9. NO GENERIC TEMPLATES: Do NOT fall back to "hero → features → CTA". Follow ONLY what the reference image shows.
+10. NO VIEWPORT CONVERSION: Do NOT convert a desktop reference into mobile.
+11. TEXT MUST NOT WRAP: Large values like "$24,562" and "$8,450" must appear on a SINGLE LINE. Use layoutSizingHorizontal:"FILL" on value TEXT nodes, and ensure parent containers are wide enough. If 4 stat cards share a 1200px row, each gets ~280px — plenty for monetary values.
 
 ═══ SPACING RHYTHM ═══
 Use an 8px base grid. Common values: 4, 8, 12, 16, 24, 32, 48.
@@ -598,7 +614,8 @@ Use an 8px base grid. Common values: 4, 8, 12, 16, 24, 32, 48.
 - Match color ROLES from the reference (dark sidebar, light content, accent icons) to the closest DS style.
 
 ═══ ANTI-PATTERNS (NEVER DO THESE) ═══
-- NEVER make the sidebar 50% of the screen width. Sidebars are narrow (180-250px).
+- NEVER make the sidebar wider than 260px. Sidebars are narrow (200-240px) with layoutSizingHorizontal:"FIXED".
+- NEVER use layoutSizingHorizontal:"FILL" on a sidebar — it will expand to fill half the screen.
 - NEVER create a sparse layout with 20-30 nodes when the reference clearly has 80+ visual elements.
 - NEVER simplify icon circles, progress bars, or card shadows into plain text.
 - NEVER use "STRETCH" for counterAxisAlignItems — invalid.
@@ -606,6 +623,8 @@ Use an 8px base grid. Common values: 4, 8, 12, 16, 24, 32, 48.
 - NEVER omit cornerRadius on cards, buttons, inputs.
 - NEVER use state/interaction paint styles (hover, pressed, focused, disabled) as DEFAULT fills.
 - NEVER add generic sections (footer, CTA) that don't exist in the reference.
+- NEVER let monetary values ($24,562) or percentages (68%) wrap to multiple lines — the card is too narrow if this happens.
+- NEVER create the user profile section with oversized text/initials. Keep avatar/initials at 32-40px max.
 
 Generate the JSON now (remember to include "_referenceAnalysis" as the first field).`;
 
@@ -1092,7 +1111,7 @@ Return a JSON object with this exact structure:
   "viewportWidth": number (estimated pixels, e.g. 1440 or 390),
   "layout": {
     "type": "sidebar-main" or "top-nav-main" or "single-column" or "multi-column",
-    "sidebar": { "position": "left" or "right", "widthPercent": number, "background": "dark" or "light" or "colored" } or null,
+    "sidebar": { "position": "left" or "right", "widthPx": number (estimated pixels, e.g. 200-240 for narrow sidebars), "widthPercent": number, "background": "dark" or "light" or "colored" } or null,
     "header": { "height": "small" or "medium" or "large", "background": "dark" or "light" or "colored" } or null
   },
   "colorRoles": {
@@ -1158,9 +1177,11 @@ Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, n
 - Implement EVERY section described in the blueprint. Do not skip or simplify any section.
 - Match the EXACT item counts (if blueprint says 5 transactions, create 5).
 - Match the layout type (sidebar-main, top-nav, etc.) exactly as described.
-- Match proportions (sidebar widthPercent, card counts per row).
+- Match proportions (sidebar widthPx/widthPercent, card counts per row).
+- SIDEBAR WIDTH: If blueprint specifies a sidebar, use its widthPx value (typically 200-240px). Set width as a FIXED CSS value (e.g., width:220px; flex-shrink:0). NEVER let the sidebar grow or flex to fill space. The main content area should use flex:1.
 - Match color roles using the design system colors if provided, or the blueprint's color descriptions.
 - Write realistic, compelling content — not lorem ipsum. Use specific names, numbers, dates.
+- Monetary values like "$24,562" must NEVER wrap to a second line. Ensure stat cards have enough width.
 
 ═══ ICON CONTAINERS (CRITICAL — do NOT use images for icons) ═══
 For small UI icons (nav items, list item icons, stat card icons), NEVER use <img> or data-image-prompt.
