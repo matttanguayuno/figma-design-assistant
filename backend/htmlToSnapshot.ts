@@ -267,7 +267,8 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
   function walkElement(
     el: Element,
     hexToStyle: Map<string, string>,
-    depth: number = 0
+    depth: number = 0,
+    parentLayoutMode: "VERTICAL" | "HORIZONTAL" = "VERTICAL"
   ): any | null {
     const tag = el.tagName;
     const style = window.getComputedStyle(el);
@@ -360,8 +361,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         fontStyle: fontWeightToStyle(style.fontWeight),
         fillColor: fillColor,
         textAlignHorizontal: textAlignToFigma(style.textAlign),
-        layoutSizingHorizontal: "FILL",
+        layoutSizingHorizontal: (parentLayoutMode === "HORIZONTAL" || style.whiteSpace === "nowrap" || style.whiteSpace === "pre") ? "HUG" : "FILL",
         layoutSizingVertical: "HUG",
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
         childrenCount: 0,
       };
 
@@ -436,7 +439,8 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         paddingLeft: Math.round(parseFloat(style.paddingLeft)),
         fillColor: bgColor,
         fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
-        layoutSizingHorizontal: "FILL",
+        layoutSizingHorizontal: parentLayoutMode === "HORIZONTAL" ? "HUG" : "FILL",
+        layoutSizingVertical: "HUG",
         childrenCount: 1,
         children: [textNode],
       };
@@ -497,7 +501,8 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         paddingLeft: Math.round(parseFloat(style.paddingLeft)),
         fillColor: bgColor,
         fillStyleName: resolveColorToStyleName(bgColor, hexToStyle),
-        layoutSizingHorizontal: "FILL",
+        layoutSizingHorizontal: parentLayoutMode === "HORIZONTAL" ? "HUG" : "FILL",
+        layoutSizingVertical: "HUG",
         childrenCount: 1,
         children: [textNode],
       };
@@ -515,14 +520,37 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       return node;
     }
 
+    // ── SVG → serialize markup for Figma vector import ──
+    if (tag === "svg" || tag === "SVG" || el instanceof SVGSVGElement) {
+      const svgMarkup = new XMLSerializer().serializeToString(el);
+      return {
+        id: nodeId,
+        name: "chart",
+        type: "FRAME",
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        svgMarkup,
+        layoutSizingHorizontal: "FILL",
+        layoutSizingVertical: "FIXED",
+        childrenCount: 0,
+      };
+    }
+
     // ── Container elements → FRAME ──
-    // Recurse into children
+    // Determine layout direction FIRST (needed for child sizing)
+    const flexDir = style.flexDirection;
+    const display = style.display;
+    let layoutMode: "VERTICAL" | "HORIZONTAL" = "VERTICAL";
+    if (display === "flex" || display === "inline-flex") {
+      layoutMode = (flexDir === "row" || flexDir === "row-reverse") ? "HORIZONTAL" : "VERTICAL";
+    }
+
+    // Recurse into children, passing this container's layoutMode as parentLayoutMode
     const children: any[] = [];
 
-    // If this element has mixed text + element children, wrap text runs as TEXT nodes
     for (const child of Array.from(el.childNodes)) {
       if (child.nodeType === Node.ELEMENT_NODE) {
-        const childSnapshot = walkElement(child as Element, hexToStyle, depth + 1);
+        const childSnapshot = walkElement(child as Element, hexToStyle, depth + 1, layoutMode);
         if (childSnapshot) children.push(childSnapshot);
       } else if (child.nodeType === Node.TEXT_NODE) {
         const text = child.textContent?.trim();
@@ -538,20 +566,12 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
             fontStyle: fontWeightToStyle(style.fontWeight),
             fillColor: colorToHex(style.color),
             fillStyleName: resolveColorToStyleName(colorToHex(style.color), hexToStyle),
-            layoutSizingHorizontal: "FILL",
+            layoutSizingHorizontal: layoutMode === "HORIZONTAL" ? "HUG" : "FILL",
             layoutSizingVertical: "HUG",
             childrenCount: 0,
           });
         }
       }
-    }
-
-    // Determine layout direction
-    const flexDir = style.flexDirection;
-    const display = style.display;
-    let layoutMode: "VERTICAL" | "HORIZONTAL" = "VERTICAL";
-    if (display === "flex" || display === "inline-flex") {
-      layoutMode = (flexDir === "row" || flexDir === "row-reverse") ? "HORIZONTAL" : "VERTICAL";
     }
 
     const bgColor = colorToHex(style.backgroundColor);
@@ -628,51 +648,31 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     const opacity = parseFloat(style.opacity);
     if (!isNaN(opacity) && opacity < 1) node.opacity = opacity;
 
-    // Sizing hints based on flex properties and parent direction
+    // Sizing: use PARENT's layout direction, not this node's own
     const flexGrow = parseFloat(style.flexGrow);
     if (depth === 0) {
       // Root element gets FIXED sizing
       node.layoutSizingHorizontal = "FIXED";
       node.layoutSizingVertical = "HUG";
-    } else {
-      // Child elements: in a VERTICAL layout, children fill horizontal by default
-      // (CSS align-items defaults to stretch). In HORIZONTAL, same for vertical.
-      // Also handle explicit flex-grow.
-      const parentAlignItems = style.alignSelf || "auto"; // "auto" means inherit parent's align-items
-      if (layoutMode === "VERTICAL") {
-        // Items in a column fill width (stretch is CSS default)
+    } else if (parentLayoutMode === "HORIZONTAL") {
+      // This node is inside a horizontal parent (row)
+      // Primary axis (horizontal): FILL if flex-grow, else FIXED (keep computed width)
+      if (flexGrow > 0) {
         node.layoutSizingHorizontal = "FILL";
-        node.layoutSizingVertical = "HUG";
-        if (flexGrow > 0) node.layoutSizingVertical = "FILL";
       } else {
-        // Items in a row
-        node.layoutSizingVertical = "HUG";
-        if (flexGrow > 0) node.layoutSizingHorizontal = "FILL";
+        node.layoutSizingHorizontal = "FIXED";
       }
-    }
-
-    // Post-process children's sizing based on THIS container's layout direction.
-    // layoutSizingHorizontal/Vertical describe how a child behaves inside its parent,
-    // so children's sizing must match the parent's layout mode, not the child's own.
-    if (children.length > 0) {
-      for (const child of children) {
-        if (layoutMode === "HORIZONTAL") {
-          // In a row, children should HUG along the primary (horizontal) axis
-          // so justify-content (SPACE_BETWEEN, etc.) can distribute space.
-          // Exception: children with flex-grow already have FILL set above.
-          if (child.type === "TEXT") {
-            child.layoutSizingHorizontal = "HUG";
-          }
-          if (child.type === "FRAME" && !child.layoutSizingHorizontal) {
-            child.layoutSizingHorizontal = "HUG";
-          }
-        } else {
-          // In a column, children should FILL horizontally (CSS stretch default).
-          if (child.type === "FRAME" && !child.layoutSizingHorizontal) {
-            child.layoutSizingHorizontal = "FILL";
-          }
-          // TEXT children already default to FILL from their construction.
-        }
+      // Counter axis (vertical): FILL by default (CSS align-items: stretch)
+      node.layoutSizingVertical = "FILL";
+    } else {
+      // This node is inside a vertical parent (column)
+      // Counter axis (horizontal): FILL by default (CSS stretch)
+      node.layoutSizingHorizontal = "FILL";
+      // Primary axis (vertical): FILL if flex-grow, else HUG
+      if (flexGrow > 0) {
+        node.layoutSizingVertical = "FILL";
+      } else {
+        node.layoutSizingVertical = "HUG";
       }
     }
 

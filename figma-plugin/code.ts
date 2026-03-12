@@ -3049,6 +3049,21 @@ async function createNodeFromSnapshot(
 
     node = rect;
     _importStats.frames++;
+  } else if (snap.svgMarkup) {
+    // SVG node — use Figma's createNodeFromSvg for vector rendering
+    try {
+      const svgFrame = figma.createNodeFromSvg(snap.svgMarkup);
+      svgFrame.resize(snap.width ?? 100, snap.height ?? 100);
+      node = svgFrame;
+      _importStats.frames++;
+    } catch (_svgErr) {
+      // Fallback: create an empty frame with the SVG dimensions
+      const fallback = figma.createFrame();
+      fallback.resize(snap.width ?? 100, snap.height ?? 100);
+      fallback.fills = [{ type: "SOLID", color: { r: 0.95, g: 0.95, b: 0.97 } }];
+      node = fallback;
+      _importStats.frames++;
+    }
   } else if (snap.imageData && (!snap.children || snap.children.length === 0)) {
     // Vector/icon nodes that were rasterized — create a frame with image fill
     const frame = figma.createFrame();
