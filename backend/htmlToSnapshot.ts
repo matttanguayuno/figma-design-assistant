@@ -428,7 +428,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         name: cnBtn ? cnBtn.split(/\s+/)[0] : "button",
         type: "FRAME",
         width: Math.round(rect.width),
-        height: Math.max(44, Math.round(rect.height)),
+        height: Math.round(rect.height),
         layoutMode: "HORIZONTAL",
         primaryAxisAlignItems: "CENTER",
         counterAxisAlignItems: "CENTER",
@@ -492,7 +492,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         name: cnInp ? cnInp.split(/\s+/)[0] : "input",
         type: "FRAME",
         width: Math.round(rect.width),
-        height: Math.max(44, Math.round(rect.height)),
+        height: Math.round(rect.height),
         layoutMode: "HORIZONTAL",
         counterAxisAlignItems: "CENTER",
         paddingTop: Math.round(parseFloat(style.paddingTop)),
@@ -628,8 +628,9 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     const cr = parseFloat(style.borderRadius);
     if (cr > 0) node.cornerRadius = Math.round(cr);
 
-    // Clipping – explicitly set false so Figma doesn't default to true
-    if (style.overflow === "hidden" || style.overflow === "clip") {
+    // Clipping – match CSS overflow behavior
+    const ovf = style.overflow;
+    if (ovf === "hidden" || ovf === "clip" || ovf === "auto" || ovf === "scroll") {
       node.clipsContent = true;
     } else {
       node.clipsContent = false;
@@ -654,9 +655,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     // Sizing: use PARENT's layout direction, not this node's own
     const flexGrow = parseFloat(style.flexGrow);
     if (depth === 0) {
-      // Root element gets FIXED sizing
+      // Root element gets FIXED sizing and clips overflow
       node.layoutSizingHorizontal = "FIXED";
       node.layoutSizingVertical = "HUG";
+      node.clipsContent = true;
     } else if (parentLayoutMode === "HORIZONTAL") {
       // This node is inside a horizontal parent (row)
       // Primary axis (horizontal): use computed width to preserve CSS proportions
@@ -674,6 +676,13 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       } else {
         node.layoutSizingVertical = "HUG";
       }
+    }
+
+    // Empty containers (no children): use FIXED sizing to preserve dimensions.
+    // Handles progress bars, spacers, decorative divs, colored blocks, etc.
+    if (children.length === 0 && depth > 0 && rect.width > 0 && rect.height > 0) {
+      node.layoutSizingHorizontal = "FIXED";
+      node.layoutSizingVertical = "FIXED";
     }
 
     return node;
