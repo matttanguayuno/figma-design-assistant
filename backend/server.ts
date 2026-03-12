@@ -136,7 +136,7 @@ app.post("/validate-key", async (req: Request, res: Response) => {
     if (resolvedProvider === "anthropic") {
       const client = new (await import("@anthropic-ai/sdk")).default({ apiKey });
       await client.messages.create({
-        model: "claude-haiku-4-20250414",
+        model: "claude-sonnet-4-20250514",
         max_tokens: 1,
         messages: [{ role: "user", content: "Hi" }],
       });
@@ -162,17 +162,26 @@ app.post("/validate-key", async (req: Request, res: Response) => {
     console.error(`[validate-key] Failed:`, msg);
 
     // Detect common auth / billing errors
-    let userMessage = "Invalid API key or connection error.";
+    let userMessage = "";
+    let isActuallyInvalid = false;
     if (msg.includes("401") || msg.includes("authentication") || msg.includes("invalid") || msg.includes("Incorrect API key")) {
       userMessage = "Invalid API key. Please check and try again.";
+      isActuallyInvalid = true;
     } else if (msg.includes("402") || msg.includes("insufficient") || msg.includes("billing") || msg.includes("quota")) {
       userMessage = "API key is valid but your account has insufficient credits or billing is not set up.";
+      isActuallyInvalid = true;
     } else if (msg.includes("403") || msg.includes("permission")) {
       userMessage = "API key does not have permission to access this model.";
-    } else if (msg.includes("429") || msg.includes("rate")) {
-      userMessage = "API key is valid (rate limited — try again shortly).";
-      // Rate limited means the key itself is valid
+      isActuallyInvalid = true;
+    } else if (msg.includes("429") || msg.includes("rate") || msg.includes("529") || msg.includes("overloaded")) {
+      userMessage = "API key is valid (rate limited or overloaded — try again shortly).";
+      // Rate limited / overloaded means the key itself is valid
       res.json({ valid: true, warning: userMessage });
+      return;
+    } else {
+      // Transient errors (timeout, 500, DNS, model not found, etc.) — don't flag as invalid
+      console.warn(`[validate-key] Transient error (not marking key invalid): ${msg}`);
+      res.json({ valid: true, warning: "Could not validate key (server/network issue). Key may still be valid." });
       return;
     }
     res.json({ valid: false, error: userMessage });
