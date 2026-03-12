@@ -4,7 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -614,69 +614,159 @@ export async function callLLMGenerateHTML(
   sourceHtml?: string,
   referenceImageBase64?: string
 ): Promise<string> {
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  // ── TWO-STEP pipeline when a reference image is attached ──────────
+  // Step 0: Analyze the image (vision-focused, no coding)
+  // Step 1: Generate HTML from the blueprint (code-focused, no image)
+  if (referenceImageBase64) {
+    // ── Step 0: Image → Blueprint ──
+    console.log(`[callLLMGenerateHTML] Step 0: Analyzing reference image...`);
+    const analyzePrompt = `Analyze this UI screenshot and produce a detailed structural blueprint as JSON.\n\nThe user wants to create: ${prompt}\n\nDescribe what you SEE in the image — every section, component, count, proportion, and color role.`;
+
+    const abort0 = new AbortController();
+    _activeAbort = abort0;
+    let blueprintRaw: string;
+    try {
+      blueprintRaw = await callProviderWithImage(
+        provider,
+        ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT,
+        analyzePrompt,
+        referenceImageBase64,
+        resolvedModel,
+        8192,
+        apiKey,
+        abort0,
+        true // jsonMode
+      );
+    } finally {
+      if (_activeAbort === abort0) _activeAbort = null;
+    }
+
+    // Clean up any markdown fences from the blueprint
+    let blueprint = blueprintRaw.trim();
+    if (blueprint.startsWith("```json")) blueprint = blueprint.slice(7);
+    else if (blueprint.startsWith("```")) blueprint = blueprint.slice(3);
+    if (blueprint.endsWith("```")) blueprint = blueprint.slice(0, -3);
+    blueprint = blueprint.trim();
+
+    console.log(`[callLLMGenerateHTML] Step 0 complete: blueprint ${blueprint.length} chars`);
+    console.log(`[callLLMGenerateHTML] Blueprint preview: ${blueprint.slice(0, 500)}...`);
+
+    // ── Step 1: Blueprint → HTML ──
+    console.log(`[callLLMGenerateHTML] Step 1: Generating HTML from blueprint...`);
+    const generateParts: string[] = [
+      "## UI Blueprint (from reference image analysis)",
+      blueprint,
+      "",
+      "## User Request",
+      prompt,
+    ];
+
+    // Include DS colors/typography for style binding
+    if (dsSummary) {
+      generateParts.push("", "## Design System Colors & Typography");
+      if (dsSummary.surfaces?.length > 0) {
+        generateParts.push("### Surfaces");
+        for (const c of dsSummary.surfaces.slice(0, 8)) {
+          generateParts.push(`- ${c.name}: ${c.hex} (${c.role})`);
+        }
+      }
+      if (dsSummary.textColors?.length > 0) {
+        generateParts.push("### Text Colors");
+        for (const c of dsSummary.textColors.slice(0, 6)) {
+          generateParts.push(`- ${c.name}: ${c.hex} (${c.role})`);
+        }
+      }
+      if (dsSummary.brandColors?.length > 0) {
+        generateParts.push("### Brand / Accent");
+        for (const c of dsSummary.brandColors.slice(0, 6)) {
+          generateParts.push(`- ${c.name}: ${c.hex} (${c.role})`);
+        }
+      }
+      if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
+        generateParts.push("### Typography");
+        for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
+          const fontSize = dsSummary.typeRoleFontSizes?.[role];
+          generateParts.push(`- ${role}: textStyleName="${styleName}"${fontSize ? `, fontSize: ${fontSize}` : ""}`);
+        }
+      }
+    }
+
+    // Include font family hint
+    const fontFamilies = styleTokens?.fontFamilies || [];
+    if (fontFamilies.length > 0) {
+      generateParts.push("", `## Font: Use "${fontFamilies[0]}" as the primary font-family.`);
+    }
+
+    generateParts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
+
+    const generatePrompt = generateParts.join("\n");
+    console.log(`[callLLMGenerateHTML] Step 1 prompt: ${generatePrompt.length} chars`);
+
+    const abort1 = new AbortController();
+    _activeAbort = abort1;
+    let raw: string;
+    try {
+      // No image needed — just the blueprint text
+      raw = await callProvider(
+        provider,
+        GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT,
+        generatePrompt,
+        resolvedModel,
+        32768,
+        apiKey,
+        abort1,
+        false, // not JSON mode — we want HTML
+        0.4   // lower temperature for faithful blueprint implementation
+      );
+    } finally {
+      if (_activeAbort === abort1) _activeAbort = null;
+    }
+
+    // Strip markdown fences
+    let html = raw.trim();
+    if (html.startsWith("```html")) html = html.slice(7);
+    else if (html.startsWith("```")) html = html.slice(3);
+    if (html.endsWith("```")) html = html.slice(0, -3);
+    html = html.trim();
+
+    if (!html.includes("<") || !html.includes(">")) {
+      throw new Error("LLM returned non-HTML content");
+    }
+
+    console.log(`[callLLMGenerateHTML] Step 1 complete: HTML ${html.length} chars`);
+    return html;
+  }
+
+  // ── Standard path (no reference image) ────────────────────────────
   const userPrompt = buildGenerateHTMLPrompt(prompt, styleTokens, designSystem, selection, fullDesignSystem, dsSummary, sourceHtml);
 
-  // Append reference image instruction if present
-  let finalUserPrompt = userPrompt;
-  if (referenceImageBase64) {
-    finalUserPrompt += `\n\n## Reference Image (HIGH PRIORITY — ANALYZE CAREFULLY)
-
-A reference image is attached. This is your PRIMARY visual inspiration for the HTML output.
-
-ANALYZE the reference and REPLICATE:
-1. **Viewport type**: Is this desktop (wide, sidebar, multi-column) or mobile (narrow, stacked)? MATCH the reference's viewport — if it's desktop, generate a wide desktop layout. If the reference is desktop but the prompt says "mobile", still generate desktop because the reference image is the truth.
-2. **Layout structure**: sidebar vs. top-nav, panel arrangements, grid patterns — replicate exactly
-3. **Section types**: identify every distinct section (stat cards, charts, tables, lists, navigation, etc.) and recreate them
-4. **Component count**: if the reference shows 4 metric cards in a row, create 4 in a row. If it shows 5 transaction rows, create 5.
-5. **Visual hierarchy**: match prominence, sizing, and spacing relationships
-6. **Spacing and density**: match the overall feel — compact vs. spacious
-7. **Color approach**: match the color ROLES (dark sidebar, light content area, colored accents) using the design system palette
-8. **Proportions**: match relative sizing — if the sidebar is narrow (~15% of width), keep it narrow. If stat cards share the row equally, make them equal-width. Do NOT make a sidebar take 50% of the screen when the reference shows it at ~15%.
-9. **Visual richness**: if the reference shows card surfaces with shadows, icons with colored backgrounds, progress bars, chart placeholders — recreate ALL of them. Do NOT simplify the reference into plain text. Use CSS to create rounded colored icon containers, progress bar tracks with fills, card shadows, colored amount indicators.
-10. **Density**: a rich dashboard reference should produce dense HTML with many elements. Every distinct visual element in the reference (icon, label, value, indicator, bar, separator) should be represented.
-
-The reference defines the STRUCTURE, LAYOUT, and VIEWPORT SIZE. The user's prompt defines the CONTENT and BRANDING. Generate HTML that closely mirrors the reference's layout while adapting content to the user's request. Do NOT convert a desktop reference into a mobile layout.`;
-  }
-
-  console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${finalUserPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + finalUserPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + finalUserPrompt.length)/4)} tokens)${referenceImageBase64 ? `, refImage: ${referenceImageBase64.length} chars` : ""}`);
+  console.log(`[callLLMGenerateHTML] System prompt: ${GENERATE_HTML_SYSTEM_PROMPT.length} chars, User prompt: ${userPrompt.length} chars, TOTAL: ${GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length} chars (~${Math.round((GENERATE_HTML_SYSTEM_PROMPT.length + userPrompt.length)/4)} tokens)`);
 
   const MAX_USER_PROMPT_CHARS = 500000;
-  let safeUserPrompt = finalUserPrompt;
-  if (finalUserPrompt.length > MAX_USER_PROMPT_CHARS) {
-    console.warn(`[callLLMGenerateHTML] User prompt too long (${finalUserPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
-    safeUserPrompt = finalUserPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
+  let safeUserPrompt = userPrompt;
+  if (userPrompt.length > MAX_USER_PROMPT_CHARS) {
+    console.warn(`[callLLMGenerateHTML] User prompt too long (${userPrompt.length} chars), truncating to ${MAX_USER_PROMPT_CHARS}`);
+    safeUserPrompt = userPrompt.slice(0, MAX_USER_PROMPT_CHARS) + "\n\n[PROMPT TRUNCATED — generate based on the content above]";
   }
-
-  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   const abort = new AbortController();
   _activeAbort = abort;
 
   let raw: string;
   try {
-    if (referenceImageBase64) {
-      raw = await callProviderWithImage(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, referenceImageBase64, resolvedModel, 16384, apiKey, abort, false);
-    } else {
-      // Higher max tokens since HTML can be verbose; temperature 0.5 for creativity
-      raw = await callProvider(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, false, 0.5);
-    }
+    raw = await callProvider(provider, GENERATE_HTML_SYSTEM_PROMPT, safeUserPrompt, resolvedModel, 16384, apiKey, abort, false, 0.5);
   } finally {
     if (_activeAbort === abort) _activeAbort = null;
   }
 
-  // The LLM should return raw HTML, not JSON. Strip any markdown fences.
   let html = raw.trim();
-  if (html.startsWith("```html")) {
-    html = html.slice(7);
-  } else if (html.startsWith("```")) {
-    html = html.slice(3);
-  }
-  if (html.endsWith("```")) {
-    html = html.slice(0, -3);
-  }
+  if (html.startsWith("```html")) html = html.slice(7);
+  else if (html.startsWith("```")) html = html.slice(3);
+  if (html.endsWith("```")) html = html.slice(0, -3);
   html = html.trim();
 
-  // Validate it looks like HTML
   if (!html.includes("<") || !html.includes(">")) {
     throw new Error("LLM returned non-HTML content");
   }
