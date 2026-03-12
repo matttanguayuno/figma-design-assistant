@@ -655,7 +655,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     // Sizing: use PARENT's layout direction, not this node's own
     const flexGrow = parseFloat(style.flexGrow);
     if (depth === 0) {
-      // Root element gets FIXED sizing and clips overflow
+      // Root element gets FIXED sizing and clips overflow.
+      // Use viewport width if wider than rendered rect — prevents right-side truncation
+      // when the root div doesn't fully fill the Puppeteer viewport.
+      node.width = Math.max(Math.round(rect.width), window.innerWidth);
       node.layoutSizingHorizontal = "FIXED";
       node.layoutSizingVertical = "HUG";
       node.clipsContent = true;

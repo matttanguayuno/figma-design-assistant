@@ -1230,16 +1230,26 @@ The "tree" is a recursive structure. Every node is ONE of these types:
    - If sidebar is ~12% of viewport, use "180px" with flex "0 0 180px" (FIXED, no grow).
    - Main content beside it uses flex "1" (fills remaining space).
    - If two sections sit side by side at ~60/40 split, use flex "3" and flex "2" (or similar ratio).
-5. For REPEATING items (nav items, list rows, cards), include EVERY instance with exact text.
-6. For NAV items, mark the active one with different bg/fg colors.
-7. Charts: extract APPROXIMATE data values by reading the visual. 6 data points for 6 months, etc.
+   - Children in a ROW must have widths/flex values that FILL their parent. Never leave unaccounted horizontal space.
+     If 3 equal cards sit in a row, each gets flex "1". If one card is twice as wide, use flex "2" and flex "1".
+   - Prefer flex RATIOS (flex "1", "2", "3") over fixed pixel widths for child elements that should share space.
+     Use fixed widths ONLY for elements with a visually fixed size (sidebar, icon, avatar).
+5. Measure HEIGHT accurately:
+   - Summary/stat/metric cards at the top of dashboards are typically COMPACT (80–120px tall including padding). Do NOT over-estimate.
+   - Card heights should reflect actual content: a card with a label + number + subtitle is ~80-100px with padding, NOT 200px+.
+   - Use height "auto" for content-driven sections that should shrink to their content.
+   - Only use explicit pixel heights for elements with a fixed visual size (charts, images, sidebars with "100vh").
+6. The ROOT node must use width "100%" to fill the full viewport width. Never make the root narrower.
+7. For REPEATING items (nav items, list rows, cards), include EVERY instance with exact text.
+8. For NAV items, mark the active one with different bg/fg colors.
+9. Charts: extract APPROXIMATE data values by reading the visual. 6 data points for 6 months, etc.
    The values don't need to be exact but should approximate the visual shape of the line/bars.
-8. Progress bars: estimate fill percentage from the visual width of the fill.
-9. Buttons: include as container nodes with el "button", with text children and bg/fg colors.
-10. User profiles/avatars at bottom of sidebar: include as a container with text nodes for name/email.
-11. Set "noWrap": true on ALL monetary values, percentages, dates, and stat numbers.
-12. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
-13. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators).
+10. Progress bars: estimate fill percentage from the visual width of the fill.
+11. Buttons: include as container nodes with el "button", with text children and bg/fg colors.
+12. User profiles/avatars at bottom of sidebar: include as a container with text nodes for name/email.
+13. Set "noWrap": true on ALL monetary values, percentages, dates, and stat numbers.
+14. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
+15. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators).
 
 Return ONLY the JSON — no markdown fences, no explanation.`;
 
@@ -1372,10 +1382,16 @@ Toggle group nodes become:
 CSS: use flex row, padding, border-radius. Active button gets activeBg/activeFg colors.
 
 ═══ STRUCTURE RULES (CRITICAL) ═══
-- <body> contains a single <div id="root"> with width matching viewport.width from the tree.
+- Include this CSS reset at the top of your <style> block:
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+- <body> contains a single <div id="root"> with EXPLICIT width and min-width matching viewport.width from the tree.
+  Example: #root { width: 1440px; min-width: 1440px; }
+  The root MUST fill the full viewport width — never leave it narrower.
 - ALL styles in a single <style> block. NEVER use inline style= attributes.
 - Define ALL colors as CSS custom properties in :root { ... }.
 - The font-family from the tree should be set on body.
+- When a tree node has height "auto" or omits height, do NOT set an explicit CSS height — let content determine it.
+  Only set explicit pixel heights when the tree specifies them (e.g., height: "200px" for a chart container).
 
 ═══ FIGMA CONVERSION CONSTRAINTS (CRITICAL — violations cause elements to DISAPPEAR) ═══
 - Use ONLY flexbox (display:flex + flex-direction). NO CSS Grid, float, position:absolute, position:fixed, position:relative.
@@ -1391,6 +1407,13 @@ CSS: use flex row, padding, border-radius. Active button gets activeBg/activeFg 
 Use data-image-prompt as an HTML ATTRIBUTE only for LARGE images (hero backgrounds, profile photos).
 NEVER for icons, charts, or small UI elements.
 Elements with data-image-prompt MUST have explicit width AND height in CSS.
+
+═══ FLEX DISTRIBUTION (CRITICAL for correct sizing) ═══
+- When multiple children in a row each have flex "1", they MUST share space equally. Use flex: 1 on each.
+- When children have flex ratios (flex "2" and flex "1"), use those exact values so they divide parent space proportionally.
+- Fixed-width children (flex "0 0 180px") get their exact size; remaining siblings with flex "1" share the rest.
+- All children in a flex ROW or COLUMN must collectively fill their parent — no leaked space.
+- If a card/section only contains a label + number + subtitle, it should be compact. Do NOT add excessive padding or min-heights.
 
 ═══ ABSOLUTE RULES — DO NOT VIOLATE ═══
 - Do NOT add elements not in the tree.
