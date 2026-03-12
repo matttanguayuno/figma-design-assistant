@@ -637,12 +637,12 @@ export async function callLLMGenerateHTML(
   const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
 
   // ── TWO-STEP pipeline when a reference image is attached ──────────
-  // Step 0: Analyze the image (vision-focused, no coding)
-  // Step 1: Generate HTML from the blueprint (code-focused, no image)
+  // Step 0: Analyze the image → hierarchical layout tree (vision-focused, no coding)
+  // Step 1: Translate layout tree → HTML/CSS (mechanical reconstruction)
   if (referenceImageBase64) {
-    // ── Step 0: Image → Blueprint ──
-    console.log(`[callLLMGenerateHTML] Step 0: Analyzing reference image...`);
-    const analyzePrompt = `Analyze this UI screenshot and produce a detailed structural blueprint as JSON.\n\nThe user wants to create: ${prompt}\n\nDescribe what you SEE in the image — every section, component, count, proportion, and color role.`;
+    // ── Step 0: Image → Layout Tree ──
+    console.log(`[callLLMGenerateHTML] Step 0: Extracting hierarchical layout tree from reference image...`);
+    const analyzePrompt = `Analyze this UI screenshot and produce a hierarchical layout tree as JSON.\n\nExtract the EXACT visual structure — every container, text element, icon, chart, and progress bar with CSS-ready properties.\n\nUser context: ${prompt}`;
 
     const abort0 = new AbortController();
     _activeAbort = abort0;
@@ -654,7 +654,7 @@ export async function callLLMGenerateHTML(
         analyzePrompt,
         referenceImageBase64,
         resolvedModel,
-        8192,
+        capMaxTokens(provider, 16384, resolvedModel),
         apiKey,
         abort0,
         true // jsonMode
@@ -663,63 +663,37 @@ export async function callLLMGenerateHTML(
       if (_activeAbort === abort0) _activeAbort = null;
     }
 
-    // Clean up any markdown fences from the blueprint
+    // Clean up any markdown fences from the layout tree
     let blueprint = blueprintRaw.trim();
     if (blueprint.startsWith("```json")) blueprint = blueprint.slice(7);
     else if (blueprint.startsWith("```")) blueprint = blueprint.slice(3);
     if (blueprint.endsWith("```")) blueprint = blueprint.slice(0, -3);
     blueprint = blueprint.trim();
 
-    console.log(`[callLLMGenerateHTML] Step 0 complete: blueprint ${blueprint.length} chars`);
-    console.log(`[callLLMGenerateHTML] Blueprint preview: ${blueprint.slice(0, 500)}...`);
+    console.log(`[callLLMGenerateHTML] Step 0 complete: layout tree ${blueprint.length} chars`);
+    console.log(`[callLLMGenerateHTML] Layout tree preview: ${blueprint.slice(0, 500)}...`);
 
-    // ── Step 1: Blueprint → HTML ──
-    console.log(`[callLLMGenerateHTML] Step 1: Generating HTML from blueprint...`);
+    // ── Step 1: Layout Tree → HTML ──
+    console.log(`[callLLMGenerateHTML] Step 1: Translating layout tree to HTML...`);
     const generateParts: string[] = [
-      "## UI Blueprint (from reference image analysis)",
-      blueprint,
+      "## Hierarchical Layout Tree (extracted from reference image)",
+      "Translate this tree MECHANICALLY into HTML/CSS. Each node → an HTML element with the specified CSS properties.",
       "",
-      "## User Request",
-      prompt,
+      blueprint,
     ];
 
-    // Include DS colors/typography for style binding
-    if (dsSummary) {
-      generateParts.push("", "## Design System Colors & Typography");
-      if (dsSummary.surfaces?.length > 0) {
-        generateParts.push("### Surfaces");
-        for (const c of dsSummary.surfaces.slice(0, 8)) {
-          generateParts.push(`- ${c.name}: ${c.hex} (${c.role})`);
-        }
-      }
-      if (dsSummary.textColors?.length > 0) {
-        generateParts.push("### Text Colors");
-        for (const c of dsSummary.textColors.slice(0, 6)) {
-          generateParts.push(`- ${c.name}: ${c.hex} (${c.role})`);
-        }
-      }
-      if (dsSummary.brandColors?.length > 0) {
-        generateParts.push("### Brand / Accent");
-        for (const c of dsSummary.brandColors.slice(0, 6)) {
-          generateParts.push(`- ${c.name}: ${c.hex} (${c.role})`);
-        }
-      }
-      if (dsSummary.typeRoles && Object.keys(dsSummary.typeRoles).length > 0) {
-        generateParts.push("### Typography");
-        for (const [role, styleName] of Object.entries(dsSummary.typeRoles)) {
-          const fontSize = dsSummary.typeRoleFontSizes?.[role];
-          generateParts.push(`- ${role}: textStyleName="${styleName}"${fontSize ? `, fontSize: ${fontSize}` : ""}`);
-        }
-      }
-    }
-
-    // Include font family hint
+    // Include font family hint from the project's design system
     const fontFamilies = styleTokens?.fontFamilies || [];
     if (fontFamilies.length > 0) {
-      generateParts.push("", `## Font: Use "${fontFamilies[0]}" as the primary font-family.`);
+      generateParts.push("", `## Font Override: Use "${fontFamilies[0]}" as the primary font-family instead of the tree's fontFamily.`);
     }
 
-    generateParts.push("", "## Instructions", "The reference image is attached. Use it as your PRIMARY visual guide.", "The blueprint above provides structural details extracted from the image.", "Reproduce the design as FAITHFULLY as possible — match every color, proportion, text value, and visual detail from the image.", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
+    generateParts.push("", "## Instructions",
+      "The reference image is attached. Use it to verify your reconstruction matches the original.",
+      "Translate every node in the layout tree to a corresponding HTML element with the exact CSS properties specified.",
+      "Do NOT add, remove, or modify any elements. Do NOT change text, colors, or proportions.",
+      "For chart nodes, generate inline SVG with polylines/polygons from the provided data values.",
+      "Generate the complete HTML document now.");
 
     const generatePrompt = generateParts.join("\n");
     console.log(`[callLLMGenerateHTML] Step 1 prompt: ${generatePrompt.length} chars`);
@@ -728,7 +702,7 @@ export async function callLLMGenerateHTML(
     _activeAbort = abort1;
     let raw: string;
     try {
-      // Pass the reference image to Step 1 so the HTML generator can see the original design
+      // Pass the reference image to Step 1 so the HTML generator can verify against the original
       raw = await callProviderWithImage(
         provider,
         GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT,

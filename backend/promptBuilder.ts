@@ -1102,202 +1102,301 @@ function describeSnapshotTree(node: any, depth: number): string {
 // STEP 0 — Reference Image Analysis (vision-only, no coding)
 // ════════════════════════════════════════════════════════════════════
 
-export const ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT = `You are an expert UI/UX analyst with pixel-perfect vision. You receive a screenshot of a UI design.
-Your ONLY job is to produce an EXHAUSTIVE structural blueprint capturing EVERY visual detail. Do NOT write any code or HTML.
+export const ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT = `You are a precision UI layout reconstruction engine. You receive a screenshot of a UI design.
+Your job is to extract a HIERARCHICAL LAYOUT TREE with CSS-ready values that can be mechanically translated into HTML/CSS to faithfully reconstruct the screenshot.
 
-CRITICAL: Your blueprint must be so detailed that someone who has NEVER seen the image could recreate it pixel-for-pixel.
+This is for RECONSTRUCTION — extract exactly what you see. Do NOT interpret, redesign, or add anything.
 
-Return a JSON object with this exact structure:
+Return a JSON object with this structure:
 {
-  "viewport": "desktop" or "mobile",
-  "viewportWidth": number (estimated pixels, e.g. 1440 or 390),
-  "layout": {
-    "type": "sidebar-main" or "top-nav-main" or "single-column" or "multi-column",
-    "sidebar": { "position": "left" or "right", "widthPx": number, "background": "hex color (e.g. #1a1a2e)" } or null,
-    "header": { "heightPx": number, "background": "hex color" } or null,
-    "mainContentBg": "hex color (e.g. #f0f2f5)"
-  },
+  "viewport": { "width": <number px, e.g. 1440>, "height": <number px, e.g. 900> },
+  "fontFamily": "<best guess, e.g. Inter, sans-serif>",
   "colors": {
-    "sidebarBg": "#hex",
-    "sidebarText": "#hex",
-    "sidebarActiveItemBg": "#hex",
-    "contentBg": "#hex",
-    "cardBg": "#hex",
-    "headerBg": "#hex or same as cardBg",
-    "primaryAccent": "#hex (buttons, active states)",
-    "textPrimary": "#hex (main headings, titles)",
-    "textSecondary": "#hex (labels, descriptions)",
-    "textMuted": "#hex (timestamps, metadata)",
-    "positive": "#hex (green for income/success)",
-    "negative": "#hex (red for expenses/errors)",
-    "warning": "#hex (yellow/orange for warnings)",
-    "border": "#hex (card borders, dividers)"
+    "<descriptive-name>": "#hex"
   },
-  "sections": [
+  "tree": <RootNode>
+}
+
+The "colors" object should list EVERY distinct color visible with a descriptive key name (e.g. "sidebar-bg": "#1e1e2d", "positive-green": "#27ae60").
+
+The "tree" is a recursive structure. Every node is ONE of these types:
+
+═══ CONTAINER NODE (div, nav, section, header, aside, main, footer, button) ═══
+{
+  "id": "<unique-descriptive-id>",
+  "el": "div|nav|aside|header|section|main|footer|button|a",
+  "name": "<human-readable name, e.g. 'sidebar', 'stat-cards-row'>",
+  "layout": "row|column",
+  "width": "<CSS value: '180px', '25%', '100%', 'auto'>",
+  "flex": "<CSS flex: '1', '0 0 180px', '2', 'none'>",
+  "height": "<CSS value: 'auto', '100vh', '200px'>",
+  "minWidth": "<CSS value or omit>",
+  "bg": "<#hex or null>",
+  "fg": "<#hex default text color or null>",
+  "padding": "<CSS shorthand: '24px 32px', '16px'>",
+  "gap": "<CSS gap: '16px', '8px', '0'>",
+  "align": "<align-items: 'stretch','center','start','end'>",
+  "justify": "<justify-content: 'start','center','end','space-between'>",
+  "borderRadius": "<px or null>",
+  "shadow": "<CSS box-shadow value or null>",
+  "border": "<CSS border value or null>",
+  "overflow": "<'hidden' or null>",
+  "flexWrap": "<'wrap' or null>",
+  "children": [<any node type>]
+}
+
+═══ TEXT NODE ═══
+{
+  "type": "text",
+  "el": "h1|h2|h3|h4|p|span|label",
+  "text": "<EXACT verbatim text as shown>",
+  "fontSize": <number px>,
+  "fontWeight": <number: 400|500|600|700|800>,
+  "color": "#hex",
+  "noWrap": <boolean — true for monetary values, stats, dates>
+}
+
+═══ ICON NODE (colored circle/square with emoji) ═══
+{
+  "type": "icon",
+  "emoji": "<single emoji character>",
+  "size": <number px>,
+  "bg": "#hex",
+  "fg": "#hex",
+  "borderRadius": "<'50%' for circle, '8px' for rounded square>"
+}
+
+═══ CHART NODE (line, bar, area, donut) ═══
+{
+  "type": "chart",
+  "chartType": "line|bar|area|donut",
+  "width": "<CSS width>",
+  "height": "<px, e.g. '200px'>",
+  "bg": "<#hex or null>",
+  "series": [
     {
-      "name": "descriptive name",
-      "type": "sidebar-nav" or "stat-cards" or "chart" or "transaction-list" or "progress-bars" or "header-bar" or "table" or "form" or "hero" or "card-grid" or "budget-section" or "other",
-      "position": "sidebar" or "main-top" or "main-left" or "main-right" or "main-bottom" or "header" or "footer",
-      "gridArea": "optional: e.g. 'spans full width' or 'left 60%' or 'right 40%'",
-      "content": [
-        {
-          "type": "nav-item" or "stat-card" or "chart-area" or "list-item" or "progress-bar" or "button" or "heading" or "text" or "avatar" or "toggle-group" or "other",
-          "label": "exact text as shown",
-          "value": "exact value as shown (e.g. '$24,562')",
-          "sublabel": "secondary text (e.g. '12.5% from last month')",
-          "icon": "emoji that best represents the icon shown (e.g. 💰 📊 ⬆️ ⬇️ ⭐)",
-          "iconBgColor": "#hex of the icon background circle",
-          "iconColor": "#hex of the icon foreground",
-          "valueColor": "#hex if the value has a specific color (e.g. green for positive, red for negative)",
-          "isActive": boolean (for nav items),
-          "percentage": number (for progress bars, e.g. 93),
-          "barColor": "#hex (for progress bars)"
-        }
-      ]
+      "name": "<legend label>",
+      "color": "#hex",
+      "values": [<number>, <number>, ...]
     }
   ],
-  "typography": {
-    "fontFamily": "estimated font family (e.g. 'Inter, sans-serif')",
-    "pageTitle": { "sizePx": number, "weight": "bold" or "semibold" or "normal", "color": "#hex" },
-    "sectionHeadings": { "sizePx": number, "weight": "string", "color": "#hex" },
-    "statValues": { "sizePx": number, "weight": "string", "color": "#hex" },
-    "bodyText": { "sizePx": number, "weight": "string", "color": "#hex" },
-    "smallText": { "sizePx": number, "weight": "string", "color": "#hex" }
-  },
-  "visualDetails": {
-    "cardShadow": "CSS shadow value (e.g. '0 2px 8px rgba(0,0,0,0.08)')",
-    "cardBorderRadius": number (px),
-    "cardBorder": "CSS border (e.g. '1px solid #e0e0e0')" or "none",
-    "sectionGap": number (px between major sections),
-    "cardPadding": number (px inside cards),
-    "density": "compact" or "normal" or "spacious"
-  },
-  "userProfile": {
-    "position": "sidebar-bottom" or "header-right" or "none",
-    "name": "exact name shown",
-    "email": "exact email shown",
-    "avatarInitials": "initials shown (e.g. 'MJ')",
-    "avatarBgColor": "#hex"
-  } or null
+  "xLabels": ["Jan", "Feb", ...],
+  "showArea": <boolean — true if area fill is visible under line>,
+  "showDots": <boolean — true if data points are marked>,
+  "showGrid": <boolean — true if grid lines visible>
+}
+
+═══ PROGRESS BAR NODE ═══
+{
+  "type": "progress",
+  "label": "<exact label text>",
+  "value": "<exact value text, e.g. '$1,400 / $1,500'>",
+  "percent": <number 0-100>,
+  "barColor": "#hex",
+  "trackColor": "<#hex or '#e0e0e0'>",
+  "height": <number px, default 8>
+}
+
+═══ IMAGE NODE (photos, avatars, logos — NOT icons) ═══
+{
+  "type": "image",
+  "imagePrompt": "<stock photo search query>",
+  "width": "<CSS value>",
+  "height": "<CSS value>",
+  "borderRadius": "<CSS value>"
+}
+
+═══ TOGGLE GROUP NODE (Week/Month/Year style button group) ═══
+{
+  "type": "toggleGroup",
+  "options": [
+    { "label": "<text>", "active": <boolean> }
+  ],
+  "bg": "#hex",
+  "activeBg": "#hex",
+  "activeFg": "#hex",
+  "inactiveFg": "#hex",
+  "borderRadius": "<px>",
+  "fontSize": <px>
 }
 
 ═══ CRITICAL RULES ═══
-1. Extract EXACT text content — every label, value, name, and number VERBATIM as shown in the image.
-2. Extract EXACT hex colors — estimate the hex value for every color you see. Be precise (#1e1e2d not just "dark").
-3. Count items PRECISELY — if there are 5 transaction rows, list all 5 with their exact text.
-4. For each stat card, capture: label, value, trend text, icon emoji, icon background color.
-5. For each list/transaction item, capture: name, category, amount, date, icon emoji, icon color.
-6. For progress bars, capture: label, current/max values, fill percentage, bar color.
-7. For charts, describe: type, axis labels, legend items, approximate data trend.
-8. Note the EXACT layout proportions — sidebar width in px, content area split ratios.
-9. Capture button text, button colors, and button styles exactly.
-10. Note which nav item is active/highlighted.
+1. The tree MUST be HIERARCHICAL — the nesting must reflect actual visual containment.
+   Example: a sidebar-main layout = root row with [sidebar column, main column].
+   Within main: [header row, stat-cards row, content-area row with [chart section, right panel]].
+2. Extract EXACT text — every word, number, label VERBATIM as shown.
+3. Extract EXACT hex colors. Be precise (#1e1e2d not "dark blue").
+4. Measure WIDTH PROPORTIONS carefully:
+   - If sidebar is ~12% of viewport, use "180px" with flex "0 0 180px" (FIXED, no grow).
+   - Main content beside it uses flex "1" (fills remaining space).
+   - If two sections sit side by side at ~60/40 split, use flex "3" and flex "2" (or similar ratio).
+5. For REPEATING items (nav items, list rows, cards), include EVERY instance with exact text.
+6. For NAV items, mark the active one with different bg/fg colors.
+7. Charts: extract APPROXIMATE data values by reading the visual. 6 data points for 6 months, etc.
+   The values don't need to be exact but should approximate the visual shape of the line/bars.
+8. Progress bars: estimate fill percentage from the visual width of the fill.
+9. Buttons: include as container nodes with el "button", with text children and bg/fg colors.
+10. User profiles/avatars at bottom of sidebar: include as a container with text nodes for name/email.
+11. Set "noWrap": true on ALL monetary values, percentages, dates, and stat numbers.
+12. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
+13. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators).
 
 Return ONLY the JSON — no markdown fences, no explanation.`;
 
 // ════════════════════════════════════════════════════════════════════
-// STEP 1b — HTML Generation FROM Blueprint (no image, code-focused)
+// STEP 1b — Mechanical HTML Reconstruction FROM Layout Tree
 // ════════════════════════════════════════════════════════════════════
 
-export const GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT = `You are an expert HTML/CSS developer creating PIXEL-PERFECT reproductions of UI designs.
-You receive a STRUCTURAL BLUEPRINT (JSON) describing a UI design, and you may also see the ORIGINAL REFERENCE IMAGE.
-Your goal is to reproduce the design as FAITHFULLY as possible — matching colors, proportions, text, and layout EXACTLY.
-The HTML will be rendered in Puppeteer and converted into a Figma design file, so follow the conversion rules below EXACTLY.
+export const GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT = `You are a MECHANICAL HTML RECONSTRUCTION ENGINE. You receive:
+1. A hierarchical LAYOUT TREE (JSON) extracted from a UI screenshot
+2. The ORIGINAL REFERENCE IMAGE
+
+Your ONLY job is to translate the layout tree into a faithful HTML/CSS reproduction.
+Do NOT creatively interpret, redesign, simplify, or add anything that isn't in the tree.
 
 Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, no explanation.
 
-═══ PIXEL-PERFECT REPRODUCTION RULES (HIGHEST PRIORITY) ═══
-- If you can see the reference image, use it as your PRIMARY visual guide. The blueprint provides structure, but the IMAGE is the ground truth.
-- Reproduce the EXACT colors from the blueprint/image — use the hex values provided, do not substitute your own palette.
-- Reproduce the EXACT text content — every label, value, number, and string VERBATIM from the blueprint. Do NOT paraphrase or invent different text.
-- Match EXACT item counts — if blueprint says 5 transactions, create exactly 5 with the exact content listed.
-- Match EXACT proportions — sidebar width, card sizes, section heights should match the blueprint's pixel values.
-- Match the layout type (sidebar-main, top-nav, etc.) exactly as described.
-- SIDEBAR WIDTH: Use the blueprint's widthPx value. Set width as a FIXED CSS value (e.g., width:220px; flex-shrink:0). NEVER let the sidebar grow or flex to fill space. The main content area should use flex:1.
-- Monetary values like "$24,562" must NEVER wrap to a second line. Use white-space:nowrap on monetary values.
+═══ TRANSLATION RULES — follow EXACTLY ═══
 
-═══ ICON CONTAINERS (CRITICAL — do NOT use images for icons) ═══
-For small UI icons (nav items, list item icons, stat card icons), NEVER use <img> or data-image-prompt.
-Unsplash returns full photographs, not icons. Instead, create colored containers with emoji:
+1. EVERY node in the tree becomes an HTML element:
+   - Container nodes → <div> (or the specified el tag like <nav>, <aside>, <header>, <section>)
+   - Text nodes → the specified el tag (<h1>, <h2>, <p>, <span>, <label>)
+   - Each node gets a unique CSS class based on its "id" or "name"
 
-  .icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; }
-  .icon-blue { background-color: #e3f2fd; color: #1976d2; }
-  .icon-green { background-color: #e8f5e9; color: #2e7d32; }
-  .icon-red { background-color: #fce4ec; color: #c62828; }
-  .icon-purple { background-color: #f3e5f5; color: #7b1fa2; }
+2. EVERY property maps DIRECTLY to CSS:
+   Container:
+     layout: "row"    → display: flex; flex-direction: row;
+     layout: "column" → display: flex; flex-direction: column;
+     width   → width
+     flex    → flex
+     height  → height
+     minWidth → min-width
+     bg      → background-color
+     padding → padding
+     gap     → gap
+     align   → align-items
+     justify → justify-content
+     borderRadius → border-radius
+     shadow  → box-shadow
+     border  → border
+     overflow → overflow
+     flexWrap → flex-wrap
 
-  <div class="icon icon-green">💰</div>
+   Text:
+     fontSize   → font-size (in px)
+     fontWeight → font-weight
+     color      → color
+     noWrap: true → white-space: nowrap
 
-Use varied, relevant emoji for each item. Use tinted background circles matching the color scheme.
+3. ALL colors defined in the tree's "colors" object → CSS custom properties in :root { }
+   Use these variables throughout the CSS.
 
-═══ PROGRESS BARS (CRITICAL — no position:absolute) ═══
-NEVER use position:absolute or position:relative for progress bars — they get DROPPED by the converter.
-Use flex with explicit width CSS classes:
+4. Body contains a single <div id="root"> matching the viewport width from the tree.
 
-  .progress-track { display: flex; height: 8px; background-color: #e0e0e0; border-radius: 4px; width: 100%; }
-  .progress-fill { height: 8px; border-radius: 4px; background-color: #3498db; }
-  .fill-93 { width: 93%; }
-  .fill-70 { width: 70%; }
+═══ ICON RENDERING (colored circles with emoji) ═══
+Icon nodes become:
+  <div class="icon icon-{id}" style-from-tree>emoji</div>
 
-  <div class="progress-track"><div class="progress-fill fill-70"></div></div>
+CSS pattern:
+  .icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .icon-salary { width: 40px; height: 40px; border-radius: 50%; background: #e3f2fd; color: #1976d2; font-size: 18px; }
 
-Define a CSS class for each specific width value needed. Do NOT use inline style="width:...".
+NEVER use <img> or data-image-prompt for icons. Use emoji in colored containers.
 
-═══ CHARTS (CRITICAL — build with CSS, not images) ═══
-NEVER use data-image-prompt for charts. Build them with pure CSS flexbox:
+═══ CHART RENDERING (SVG — CRITICAL) ═══
+Chart nodes become inline SVG elements. This is the ONLY correct way to render charts.
+
+LINE/AREA CHART:
+  <svg viewBox="0 0 {width} {height}" class="chart-svg" preserveAspectRatio="none">
+    <!-- Optional grid lines -->
+    <line x1="0" y1="{y}" x2="{width}" y2="{y}" stroke="#e0e0e0" stroke-width="0.5"/>
+    <!-- Area fill with gradient -->
+    <defs>
+      <linearGradient id="grad-{name}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="{color}" stop-opacity="0.3"/>
+        <stop offset="100%" stop-color="{color}" stop-opacity="0.05"/>
+      </linearGradient>
+    </defs>
+    <!-- Area polygon (close path to bottom) -->
+    <polygon points="{x1},{y1} {x2},{y2} ... {xN},{yN} {xN},{chartHeight} {x1},{chartHeight}" fill="url(#grad-{name})"/>
+    <!-- Line -->
+    <polyline points="{x1},{y1} {x2},{y2} ..." fill="none" stroke="{color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Data point dots -->
+    <circle cx="{x}" cy="{y}" r="4" fill="{color}" stroke="white" stroke-width="2"/>
+  </svg>
+
+To convert data values to SVG coordinates:
+  - X: spread points evenly across width (0 to svgWidth)
+  - Y: invert values (SVG y=0 is top): y = chartHeight - ((value - min) / (max - min)) * chartHeight
+  Add padding (e.g. 10% on top/bottom) so lines don't touch edges.
+  Place x-axis labels BELOW the SVG as regular HTML text in a flex row.
+  Place legend items BELOW the axis labels as colored dots + text.
 
 BAR CHART:
-  .chart-container { display: flex; align-items: flex-end; gap: 12px; height: 200px; padding: 20px; background: white; border-radius: 12px; }
-  .chart-bar-group { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
-  .chart-bar { width: 100%; border-radius: 4px 4px 0 0; }
-  .bar-color-1 { background-color: #3498db; }
-  .bar-color-2 { background-color: #e74c3c; }
-  .h-40 { height: 40px; } .h-60 { height: 60px; } .h-80 { height: 80px; }
-  .h-100 { height: 100px; } .h-120 { height: 120px; } .h-150 { height: 150px; }
+  Use CSS flexbox with colored divs of varying height. Each bar group is a column of [bar, label].
+  .chart-bars { display: flex; align-items: flex-end; gap: 12px; height: 200px; }
+  .bar { border-radius: 4px 4px 0 0; flex: 1; }
 
-  <div class="chart-container">
-    <div class="chart-bar-group"><div class="chart-bar bar-color-1 h-80"></div><span class="chart-label">Jan</span></div>
-    <div class="chart-bar-group"><div class="chart-bar bar-color-1 h-120"></div><span class="chart-label">Feb</span></div>
+DONUT CHART:
+  Use conic-gradient on a circular div.
+  .donut { width: 150px; height: 150px; border-radius: 50%; background: conic-gradient(...); }
+  Add a white circle in the center for the hole.
+
+═══ PROGRESS BAR RENDERING ═══
+Progress nodes become:
+  <div class="progress-row">
+    <span class="progress-label">{label}</span>
+    <span class="progress-value">{value}</span>
+  </div>
+  <div class="progress-track"><div class="progress-fill progress-fill-{n}"></div></div>
+
+CSS:
+  .progress-track { display: flex; height: 8px; border-radius: 4px; width: 100%; }
+  .progress-fill { height: 8px; border-radius: 4px; }
+  .progress-fill-1 { width: 93%; background-color: #hex; }
+  .progress-fill-2 { width: 70%; background-color: #hex; }
+
+Define a unique CSS class per progress bar with its specific width% and color.
+NEVER use position:absolute for progress bars.
+
+═══ TOGGLE GROUP RENDERING ═══
+Toggle group nodes become:
+  <div class="toggle-group">
+    <button class="toggle-btn active">Week</button>
+    <button class="toggle-btn">Month</button>
   </div>
 
-DONUT CHART: Use conic-gradient on a circle div.
-  .donut { width: 150px; height: 150px; border-radius: 50%; background: conic-gradient(#3498db 0% 35%, #2ecc71 35% 60%, #e74c3c 60% 80%, #f39c12 80% 100%); }
+CSS: use flex row, padding, border-radius. Active button gets activeBg/activeFg colors.
 
-═══ COLORED TEXT ═══
-Do NOT use inline style="color:...". Define CSS classes:
-  .text-positive { color: #27ae60; }
-  .text-negative { color: #e74c3c; }
-  <span class="text-positive">+ $4,200</span>
-
-═══ STRUCTURE ═══
-- <body> must contain a single <div id="root"> with the width from the blueprint viewport.
-- All styles in a single <style> block in <head>. NEVER use inline style= attributes.
+═══ STRUCTURE RULES (CRITICAL) ═══
+- <body> contains a single <div id="root"> with width matching viewport.width from the tree.
+- ALL styles in a single <style> block. NEVER use inline style= attributes.
 - Define ALL colors as CSS custom properties in :root { ... }.
+- The font-family from the tree should be set on body.
 
-═══ FIGMA CONVERSION RULES (CRITICAL — follow exactly) ═══
-- Use ONLY flexbox (display:flex + flex-direction). No Grid, float, position:absolute/fixed/relative.
+═══ FIGMA CONVERSION CONSTRAINTS (CRITICAL — violations cause elements to DISAPPEAR) ═══
+- Use ONLY flexbox (display:flex + flex-direction). NO CSS Grid, float, position:absolute, position:fixed, position:relative.
 - NEVER use position:absolute or position:relative ANYWHERE. Elements with these are SILENTLY DROPPED.
 - Use "gap" for spacing, "padding" on containers.
-- Use "flex: 1" for stretch elements (not width:100%).
 - No transform, animation, transition, media queries, @keyframes, JavaScript.
 - No CSS mask or mask-image.
+- SVG elements ARE supported — use them for charts and decorative graphics.
 - box-shadow maps to Figma drop shadows.
-- NEVER use inline style= attributes. ALL styling must be in CSS classes.
+- NEVER use inline style= attributes. ALL styling must be via CSS classes in <style>.
 
 ═══ IMAGES ═══
-Use data-image-prompt as an HTML ATTRIBUTE only for LARGE images (hero backgrounds, profile photos, product images).
-NEVER for icons, charts, or UI elements. Elements with data-image-prompt MUST have explicit width AND height in CSS.
+Use data-image-prompt as an HTML ATTRIBUTE only for LARGE images (hero backgrounds, profile photos).
+NEVER for icons, charts, or small UI elements.
+Elements with data-image-prompt MUST have explicit width AND height in CSS.
 
-═══ HERO OVERLAY PATTERN ═══
-Text ON TOP of an image: put text INSIDE the data-image-prompt element:
-  <div class="hero" data-image-prompt="description"><div class="overlay"><h1>Title</h1></div></div>
-
-═══ TYPOGRAPHY ═══
-- Page title: 24-32px bold. Section headings: 18-24px semibold. Body: 14-16px. Small: 12-13px.
-
-═══ SPACING ═══
-- Section padding: 24-40px. Card padding: 16-24px. Gaps: 16-24px. Never less than 8px anywhere.
-- Cards should have box-shadow: 0 2px 8px rgba(0,0,0,0.08) and border-radius: 8-16px.
+═══ ABSOLUTE RULES — DO NOT VIOLATE ═══
+- Do NOT add elements not in the tree.
+- Do NOT remove or skip elements that ARE in the tree.
+- Do NOT change any text content from what the tree specifies.
+- Do NOT substitute colors — use the exact hex values provided.
+- Do NOT change proportions — if the tree says width "180px" with flex "0 0 180px", use EXACTLY that.
+- Do NOT "improve" or "modernize" the design. Reproduce it exactly.
+- EVERY text node in the tree must appear as editable text in the HTML (not as an image or SVG text).
 
 Generate the complete HTML document now.`;
 
