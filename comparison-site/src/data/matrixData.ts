@@ -170,7 +170,7 @@ export const CAPABILITIES: Capability[] = [
     name: "HTML-to-Figma Generation",
     description:
       "Generate HTML/CSS first, render in a headless browser, then convert to Figma nodes.",
-    testPrompt: "Create a pricing comparison table with three tiers: Free, Pro, and Enterprise. Each column should list features with checkmarks and a \"Choose Plan\" button at the bottom.",
+    testPrompt: "Recreate the html page attached",
     support: {
       "uno-design-assistant": "full",
       "figma-ai": "none",
