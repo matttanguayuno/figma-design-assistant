@@ -163,7 +163,11 @@ export const CAPABILITIES: Capability[] = [
       codia:
         "Core feature — upload screenshot, edit in-browser, export to Figma with layer hierarchy.",
     },
-    screenshots: [],
+    screenshots: [
+      { toolId: "codia", src: "/screenshots/Codia - Screenshot to Figma - 1.png", alt: "Codia Screenshot to Figma — input and conversion UI", caption: "Codia — Screenshot to Figma conversion" },
+      { toolId: "codia", src: "/screenshots/Codia - Screenshot to Figma - 2.png", alt: "Codia Screenshot to Figma — generated Figma output", caption: "Codia — Generated Figma layers from screenshot" },
+      { toolId: "uno-design-assistant", src: "/screenshots/Uno - Screenshot to Figma - 1.png", alt: "Uno Design Assistant Screenshot to Figma output", caption: "Uno Design Assistant — Screenshot to Figma generation" },
+    ],
   },
   {
     id: "html-to-figma",

@@ -1102,8 +1102,10 @@ function describeSnapshotTree(node: any, depth: number): string {
 // STEP 0 — Reference Image Analysis (vision-only, no coding)
 // ════════════════════════════════════════════════════════════════════
 
-export const ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT = `You are an expert UI/UX analyst. You receive a screenshot of a UI design.
-Your ONLY job is to produce a detailed structural blueprint of what you see. Do NOT write any code or HTML.
+export const ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT = `You are an expert UI/UX analyst with pixel-perfect vision. You receive a screenshot of a UI design.
+Your ONLY job is to produce an EXHAUSTIVE structural blueprint capturing EVERY visual detail. Do NOT write any code or HTML.
+
+CRITICAL: Your blueprint must be so detailed that someone who has NEVER seen the image could recreate it pixel-for-pixel.
 
 Return a JSON object with this exact structure:
 {
@@ -1111,77 +1113,108 @@ Return a JSON object with this exact structure:
   "viewportWidth": number (estimated pixels, e.g. 1440 or 390),
   "layout": {
     "type": "sidebar-main" or "top-nav-main" or "single-column" or "multi-column",
-    "sidebar": { "position": "left" or "right", "widthPx": number (estimated pixels, e.g. 200-240 for narrow sidebars), "widthPercent": number, "background": "dark" or "light" or "colored" } or null,
-    "header": { "height": "small" or "medium" or "large", "background": "dark" or "light" or "colored" } or null
+    "sidebar": { "position": "left" or "right", "widthPx": number, "background": "hex color (e.g. #1a1a2e)" } or null,
+    "header": { "heightPx": number, "background": "hex color" } or null,
+    "mainContentBg": "hex color (e.g. #f0f2f5)"
   },
-  "colorRoles": {
-    "sidebarBg": "description (e.g. 'dark navy')",
-    "contentBg": "description (e.g. 'light gray')",
-    "cardBg": "description (e.g. 'white')",
-    "accent": "description (e.g. 'purple buttons')",
-    "textPrimary": "description",
-    "textSecondary": "description",
-    "positive": "description (e.g. 'green for income')",
-    "negative": "description (e.g. 'red for expenses')"
+  "colors": {
+    "sidebarBg": "#hex",
+    "sidebarText": "#hex",
+    "sidebarActiveItemBg": "#hex",
+    "contentBg": "#hex",
+    "cardBg": "#hex",
+    "headerBg": "#hex or same as cardBg",
+    "primaryAccent": "#hex (buttons, active states)",
+    "textPrimary": "#hex (main headings, titles)",
+    "textSecondary": "#hex (labels, descriptions)",
+    "textMuted": "#hex (timestamps, metadata)",
+    "positive": "#hex (green for income/success)",
+    "negative": "#hex (red for expenses/errors)",
+    "warning": "#hex (yellow/orange for warnings)",
+    "border": "#hex (card borders, dividers)"
   },
   "sections": [
     {
-      "name": "descriptive name (e.g. 'Sidebar Navigation')",
-      "type": "sidebar-nav" or "stat-cards" or "chart" or "transaction-list" or "progress-bars" or "header" or "table" or "form" or "hero" or "card-grid" or "other",
-      "position": "sidebar" or "main-top" or "main-middle" or "main-bottom" or "header" or "footer",
-      "details": {
-        "itemCount": number,
-        "items": ["item1 label", "item2 label", ...],
-        "hasIcons": boolean,
-        "iconStyle": "colored-circle" or "outline" or "filled" or "emoji" or "none",
-        "hasActiveState": boolean
-      }
+      "name": "descriptive name",
+      "type": "sidebar-nav" or "stat-cards" or "chart" or "transaction-list" or "progress-bars" or "header-bar" or "table" or "form" or "hero" or "card-grid" or "budget-section" or "other",
+      "position": "sidebar" or "main-top" or "main-left" or "main-right" or "main-bottom" or "header" or "footer",
+      "gridArea": "optional: e.g. 'spans full width' or 'left 60%' or 'right 40%'",
+      "content": [
+        {
+          "type": "nav-item" or "stat-card" or "chart-area" or "list-item" or "progress-bar" or "button" or "heading" or "text" or "avatar" or "toggle-group" or "other",
+          "label": "exact text as shown",
+          "value": "exact value as shown (e.g. '$24,562')",
+          "sublabel": "secondary text (e.g. '12.5% from last month')",
+          "icon": "emoji that best represents the icon shown (e.g. 💰 📊 ⬆️ ⬇️ ⭐)",
+          "iconBgColor": "#hex of the icon background circle",
+          "iconColor": "#hex of the icon foreground",
+          "valueColor": "#hex if the value has a specific color (e.g. green for positive, red for negative)",
+          "isActive": boolean (for nav items),
+          "percentage": number (for progress bars, e.g. 93),
+          "barColor": "#hex (for progress bars)"
+        }
+      ]
     }
   ],
-  "components": {
-    "statCards": { "count": number, "layout": "horizontal-row" or "grid", "hasIcon": boolean, "hasTrend": boolean, "labels": ["label1", ...] } or null,
-    "chart": { "type": "bar" or "line" or "donut" or "area" or "none", "approximate": "description of what it shows" } or null,
-    "list": { "type": "transaction" or "feed" or "simple", "itemCount": number, "hasIcon": boolean, "hasAmount": boolean, "hasCategory": boolean } or null,
-    "progressBars": { "count": number, "labels": ["label1", ...], "hasValues": boolean } or null,
-    "userProfile": { "position": "sidebar-bottom" or "header-right" or "none", "hasAvatar": boolean, "hasEmail": boolean } or null
-  },
   "typography": {
-    "pageTitle": "estimated size (e.g. '28-32px bold')",
-    "sectionHeadings": "estimated size",
-    "bodyText": "estimated size",
-    "smallText": "estimated size"
+    "fontFamily": "estimated font family (e.g. 'Inter, sans-serif')",
+    "pageTitle": { "sizePx": number, "weight": "bold" or "semibold" or "normal", "color": "#hex" },
+    "sectionHeadings": { "sizePx": number, "weight": "string", "color": "#hex" },
+    "statValues": { "sizePx": number, "weight": "string", "color": "#hex" },
+    "bodyText": { "sizePx": number, "weight": "string", "color": "#hex" },
+    "smallText": { "sizePx": number, "weight": "string", "color": "#hex" }
   },
   "visualDetails": {
-    "cardShadows": boolean,
-    "cardBorderRadius": "estimated (e.g. '12px')",
-    "sectionSpacing": "estimated (e.g. '24-32px')",
+    "cardShadow": "CSS shadow value (e.g. '0 2px 8px rgba(0,0,0,0.08)')",
+    "cardBorderRadius": number (px),
+    "cardBorder": "CSS border (e.g. '1px solid #e0e0e0')" or "none",
+    "sectionGap": number (px between major sections),
+    "cardPadding": number (px inside cards),
     "density": "compact" or "normal" or "spacious"
-  }
+  },
+  "userProfile": {
+    "position": "sidebar-bottom" or "header-right" or "none",
+    "name": "exact name shown",
+    "email": "exact email shown",
+    "avatarInitials": "initials shown (e.g. 'MJ')",
+    "avatarBgColor": "#hex"
+  } or null
 }
 
-Be EXHAUSTIVE. Every visual element you can identify should be captured.
-Count items carefully — if there are 5 transaction rows, say 5. If there are 4 stat cards, say 4.
+═══ CRITICAL RULES ═══
+1. Extract EXACT text content — every label, value, name, and number VERBATIM as shown in the image.
+2. Extract EXACT hex colors — estimate the hex value for every color you see. Be precise (#1e1e2d not just "dark").
+3. Count items PRECISELY — if there are 5 transaction rows, list all 5 with their exact text.
+4. For each stat card, capture: label, value, trend text, icon emoji, icon background color.
+5. For each list/transaction item, capture: name, category, amount, date, icon emoji, icon color.
+6. For progress bars, capture: label, current/max values, fill percentage, bar color.
+7. For charts, describe: type, axis labels, legend items, approximate data trend.
+8. Note the EXACT layout proportions — sidebar width in px, content area split ratios.
+9. Capture button text, button colors, and button styles exactly.
+10. Note which nav item is active/highlighted.
+
 Return ONLY the JSON — no markdown fences, no explanation.`;
 
 // ════════════════════════════════════════════════════════════════════
 // STEP 1b — HTML Generation FROM Blueprint (no image, code-focused)
 // ════════════════════════════════════════════════════════════════════
 
-export const GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT = `You are an expert HTML/CSS developer creating production-quality web pages.
-You receive a STRUCTURAL BLUEPRINT (JSON) describing a UI design. Generate HTML/CSS that precisely implements this blueprint.
+export const GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT = `You are an expert HTML/CSS developer creating PIXEL-PERFECT reproductions of UI designs.
+You receive a STRUCTURAL BLUEPRINT (JSON) describing a UI design, and you may also see the ORIGINAL REFERENCE IMAGE.
+Your goal is to reproduce the design as FAITHFULLY as possible — matching colors, proportions, text, and layout EXACTLY.
 The HTML will be rendered in Puppeteer and converted into a Figma design file, so follow the conversion rules below EXACTLY.
 
 Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, no explanation.
 
-═══ BLUEPRINT IMPLEMENTATION RULES ═══
-- Implement EVERY section described in the blueprint. Do not skip or simplify any section.
-- Match the EXACT item counts (if blueprint says 5 transactions, create 5).
+═══ PIXEL-PERFECT REPRODUCTION RULES (HIGHEST PRIORITY) ═══
+- If you can see the reference image, use it as your PRIMARY visual guide. The blueprint provides structure, but the IMAGE is the ground truth.
+- Reproduce the EXACT colors from the blueprint/image — use the hex values provided, do not substitute your own palette.
+- Reproduce the EXACT text content — every label, value, number, and string VERBATIM from the blueprint. Do NOT paraphrase or invent different text.
+- Match EXACT item counts — if blueprint says 5 transactions, create exactly 5 with the exact content listed.
+- Match EXACT proportions — sidebar width, card sizes, section heights should match the blueprint's pixel values.
 - Match the layout type (sidebar-main, top-nav, etc.) exactly as described.
-- Match proportions (sidebar widthPx/widthPercent, card counts per row).
-- SIDEBAR WIDTH: If blueprint specifies a sidebar, use its widthPx value (typically 200-240px). Set width as a FIXED CSS value (e.g., width:220px; flex-shrink:0). NEVER let the sidebar grow or flex to fill space. The main content area should use flex:1.
-- Match color roles using the design system colors if provided, or the blueprint's color descriptions.
-- Write realistic, compelling content — not lorem ipsum. Use specific names, numbers, dates.
-- Monetary values like "$24,562" must NEVER wrap to a second line. Ensure stat cards have enough width.
+- SIDEBAR WIDTH: Use the blueprint's widthPx value. Set width as a FIXED CSS value (e.g., width:220px; flex-shrink:0). NEVER let the sidebar grow or flex to fill space. The main content area should use flex:1.
+- Monetary values like "$24,562" must NEVER wrap to a second line. Use white-space:nowrap on monetary values.
 
 ═══ ICON CONTAINERS (CRITICAL — do NOT use images for icons) ═══
 For small UI icons (nav items, list item icons, stat card icons), NEVER use <img> or data-image-prompt.

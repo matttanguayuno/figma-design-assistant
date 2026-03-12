@@ -719,7 +719,7 @@ export async function callLLMGenerateHTML(
       generateParts.push("", `## Font: Use "${fontFamilies[0]}" as the primary font-family.`);
     }
 
-    generateParts.push("", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
+    generateParts.push("", "## Instructions", "The reference image is attached. Use it as your PRIMARY visual guide.", "The blueprint above provides structural details extracted from the image.", "Reproduce the design as FAITHFULLY as possible — match every color, proportion, text value, and visual detail from the image.", "Generate the complete HTML document now. Return ONLY the HTML — no markdown fences, no explanation.");
 
     const generatePrompt = generateParts.join("\n");
     console.log(`[callLLMGenerateHTML] Step 1 prompt: ${generatePrompt.length} chars`);
@@ -728,17 +728,17 @@ export async function callLLMGenerateHTML(
     _activeAbort = abort1;
     let raw: string;
     try {
-      // No image needed — just the blueprint text
-      raw = await callProvider(
+      // Pass the reference image to Step 1 so the HTML generator can see the original design
+      raw = await callProviderWithImage(
         provider,
         GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT,
         generatePrompt,
+        referenceImageBase64,
         resolvedModel,
         capMaxTokens(provider, 32768, resolvedModel),
         apiKey,
         abort1,
-        false, // not JSON mode — we want HTML
-        0.4   // lower temperature for faithful blueprint implementation
+        false // not JSON mode — we want HTML
       );
     } finally {
       if (_activeAbort === abort1) _activeAbort = null;
