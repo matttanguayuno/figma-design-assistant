@@ -6,7 +6,7 @@
   "scripts": {
     "build:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --minify",
     "watch:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --minify --watch",
-    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk --external:openai --external:@google/generative-ai --external:puppeteer-core --external:@sparticuz/chromium",
+    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk --external:openai --external:@google/generative-ai --external:puppeteer-core --external:@sparticuz/chromium --external:sharp",
     "start": "node dist/server.js",
     "start:backend": "npx tsx backend/server.ts",
     "dev:backend": "npx tsx watch backend/server.ts",
@@ -22,6 +22,7 @@
     "express": "^4.21.0",
     "openai": "^6.22.0",
     "puppeteer-core": "^24.0.0",
+    "sharp": "^0.34.5",
     "zod": "^3.24.0"
   },
   "engines": {

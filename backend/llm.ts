@@ -4,6 +4,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import sharp from "sharp";
 import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
@@ -673,6 +674,62 @@ export async function callLLMGenerateHTML(
     console.log(`[callLLMGenerateHTML] Step 0 complete: layout tree ${blueprint.length} chars`);
     console.log(`[callLLMGenerateHTML] Layout tree preview: ${blueprint.slice(0, 500)}...`);
 
+    // ── Step 0.5: Crop icon regions from reference image ──
+    let iconImagesSection = "";
+    try {
+      const blueprintObj = JSON.parse(blueprint);
+      interface IconInfo { id: string; bbox: { x: number; y: number; w: number; h: number } }
+      const icons: IconInfo[] = [];
+      function findIcons(node: any): void {
+        if (node && typeof node === "object") {
+          if (node.type === "icon" && node.id && node.bbox) {
+            icons.push({ id: node.id, bbox: node.bbox });
+          }
+          if (Array.isArray(node.children)) {
+            for (const child of node.children) findIcons(child);
+          }
+        }
+      }
+      findIcons(blueprintObj);
+      console.log(`[callLLMGenerateHTML] Found ${icons.length} icon nodes with bbox`);
+
+      if (icons.length > 0) {
+        const refBuf = Buffer.from(referenceImageBase64, "base64");
+        const metadata = await sharp(refBuf).metadata();
+        const imgW = metadata.width || 1;
+        const imgH = metadata.height || 1;
+        const iconMap: Record<string, string> = {};
+
+        for (const icon of icons) {
+          try {
+            // Clamp bbox to image bounds
+            const left = Math.max(0, Math.round(icon.bbox.x));
+            const top = Math.max(0, Math.round(icon.bbox.y));
+            const width = Math.min(Math.round(icon.bbox.w), imgW - left);
+            const height = Math.min(Math.round(icon.bbox.h), imgH - top);
+            if (width > 0 && height > 0) {
+              const cropped = await sharp(refBuf)
+                .extract({ left, top, width, height })
+                .png()
+                .toBuffer();
+              iconMap[icon.id] = cropped.toString("base64");
+              console.log(`[callLLMGenerateHTML] Cropped icon "${icon.id}": ${width}×${height}px, ${cropped.length} bytes`);
+            }
+          } catch (cropErr) {
+            console.warn(`[callLLMGenerateHTML] Failed to crop icon "${icon.id}":`, cropErr);
+          }
+        }
+
+        if (Object.keys(iconMap).length > 0) {
+          const mapLines = Object.entries(iconMap).map(([id, b64]) => `  "${id}": "${b64}"`);
+          iconImagesSection = "\n\n## ICON_IMAGES\nUse these base64 PNG images for icon <img> src attributes. Map icon id → base64 string:\n{\n" + mapLines.join(",\n") + "\n}";
+          console.log(`[callLLMGenerateHTML] ICON_IMAGES section: ${Object.keys(iconMap).length} icons, ${iconImagesSection.length} chars`);
+        }
+      }
+    } catch (parseErr) {
+      console.warn(`[callLLMGenerateHTML] Could not parse blueprint for icon extraction:`, parseErr);
+    }
+
     // ── Step 1: Layout Tree → HTML ──
     console.log(`[callLLMGenerateHTML] Step 1: Translating layout tree to HTML...`);
     const generateParts: string[] = [
@@ -681,6 +738,11 @@ export async function callLLMGenerateHTML(
       "",
       blueprint,
     ];
+
+    // Inject cropped icon images into the prompt
+    if (iconImagesSection) {
+      generateParts.push(iconImagesSection);
+    }
 
     // Include font family hint from the project's design system
     const fontFamilies = styleTokens?.fontFamilies || [];

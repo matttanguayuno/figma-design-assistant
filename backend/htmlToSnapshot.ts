@@ -316,15 +316,25 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       }
       const cr = parseFloat(style.borderRadius);
       if (cr > 0) node.cornerRadius = Math.round(cr);
-      // Extract data-image-prompt for stock photo resolution
-      const imgPrompt = (el as HTMLElement).getAttribute?.("data-image-prompt");
-      if (imgPrompt) {
-        node.imagePrompt = imgPrompt;
-      } else {
-        // Fallback: use alt text as image search query if no data-image-prompt
-        const altText = (el as HTMLImageElement).alt;
-        if (altText && altText.length > 2 && altText.toLowerCase() !== "image") {
-          node.imagePrompt = altText;
+      // Extract base64 image data (e.g. cropped icon images from reference)
+      const imgSrc = (el as HTMLImageElement).src || "";
+      if (imgSrc.startsWith("data:image")) {
+        const commaIdx = imgSrc.indexOf(",");
+        if (commaIdx > -1) {
+          node.imageData = imgSrc.substring(commaIdx + 1);
+        }
+      }
+      // Extract data-image-prompt for stock photo resolution (only if no imageData)
+      if (!node.imageData) {
+        const imgPrompt = (el as HTMLElement).getAttribute?.("data-image-prompt");
+        if (imgPrompt) {
+          node.imagePrompt = imgPrompt;
+        } else {
+          // Fallback: use alt text as image search query if no data-image-prompt
+          const altText = (el as HTMLImageElement).alt;
+          if (altText && altText.length > 2 && altText.toLowerCase() !== "image") {
+            node.imagePrompt = altText;
+          }
         }
       }
       return node;

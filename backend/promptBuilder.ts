@@ -1126,6 +1126,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
   "id": "<unique-descriptive-id>",
   "el": "div|nav|aside|header|section|main|footer|button|a",
   "name": "<human-readable name, e.g. 'sidebar', 'stat-cards-row'>",
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "layout": "row|column",
   "width": "<CSS value: '180px', '25%', '100%', 'auto'>",
   "flex": "<CSS flex: '1', '0 0 180px', '2', 'none'>",
@@ -1150,6 +1151,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
   "type": "text",
   "el": "h1|h2|h3|h4|p|span|label",
   "text": "<EXACT verbatim text as shown>",
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "fontSize": <number px>,
   "fontWeight": <number: 400|500|600|700|800>,
   "color": "#hex",
@@ -1159,7 +1161,9 @@ The "tree" is a recursive structure. Every node is ONE of these types:
 ═══ ICON NODE (colored circle/square with emoji) ═══
 {
   "type": "icon",
+  "id": "<unique-descriptive-id, e.g. 'icon-wallet', 'icon-nav-dashboard'>",
   "emoji": "<single emoji character>",
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "size": <number px>,
   "bg": "#hex",
   "fg": "#hex",
@@ -1170,6 +1174,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
 {
   "type": "chart",
   "chartType": "line|bar|area|donut",
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "width": "<CSS width>",
   "height": "<px, e.g. '200px'>",
   "bg": "<#hex or null>",
@@ -1191,6 +1196,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
   "type": "progress",
   "label": "<exact label text>",
   "value": "<exact value text, e.g. '$1,400 / $1,500'>",
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "percent": <number 0-100>,
   "barColor": "#hex",
   "trackColor": "<#hex or '#e0e0e0'>",
@@ -1201,6 +1207,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
 {
   "type": "image",
   "imagePrompt": "<stock photo search query>",
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "width": "<CSS value>",
   "height": "<CSS value>",
   "borderRadius": "<CSS value>"
@@ -1212,6 +1219,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
   "options": [
     { "label": "<text>", "active": <boolean> }
   ],
+  "bbox": { "x": <number px>, "y": <number px>, "w": <number px>, "h": <number px> },
   "bg": "#hex",
   "activeBg": "#hex",
   "activeFg": "#hex",
@@ -1221,12 +1229,17 @@ The "tree" is a recursive structure. Every node is ONE of these types:
 }
 
 ═══ CRITICAL RULES ═══
-1. The tree MUST be HIERARCHICAL — the nesting must reflect actual visual containment.
+1. BOUNDING BOX ("bbox"): Every node MUST include a "bbox" with pixel coordinates measured from the TOP-LEFT corner of the screenshot.
+   - "x" and "y" are the top-left corner of the element in the screenshot.
+   - "w" and "h" are the element's visible width and height in pixels.
+   - Measure these as precisely as possible — they will be used for pixel-accurate cropping and sizing.
+   - The bbox should encompass the ENTIRE visible area of the element including its background/container.
+2. The tree MUST be HIERARCHICAL — the nesting must reflect actual visual containment.
    Example: a sidebar-main layout = root row with [sidebar column, main column].
    Within main: [header row, stat-cards row, content-area row with [chart section, right panel]].
-2. Extract EXACT text — every word, number, label VERBATIM as shown.
-3. Extract EXACT hex colors. Be precise (#1e1e2d not "dark blue").
-4. Measure WIDTH PROPORTIONS carefully:
+3. Extract EXACT text — every word, number, label VERBATIM as shown.
+4. Extract EXACT hex colors. Be precise (#1e1e2d not "dark blue").
+5. Measure WIDTH PROPORTIONS carefully:
    - If sidebar is ~12% of viewport, use "180px" with flex "0 0 180px" (FIXED, no grow).
    - Main content beside it uses flex "1" (fills remaining space).
    - If two sections sit side by side at ~60/40 split, use flex "3" and flex "2" (or similar ratio).
@@ -1234,20 +1247,20 @@ The "tree" is a recursive structure. Every node is ONE of these types:
      If 3 equal cards sit in a row, each gets flex "1". If one card is twice as wide, use flex "2" and flex "1".
    - Prefer flex RATIOS (flex "1", "2", "3") over fixed pixel widths for child elements that should share space.
      Use fixed widths ONLY for elements with a visually fixed size (sidebar, icon, avatar).
-5. Measure HEIGHT accurately:
+6. Measure HEIGHT accurately:
    - Summary/stat/metric cards at the top of dashboards are typically COMPACT (80–120px tall including padding). Do NOT over-estimate.
    - Card heights should reflect actual content: a card with a label + number + subtitle is ~80-100px with padding, NOT 200px+.
    - Use height "auto" for content-driven sections that should shrink to their content.
    - Only use explicit pixel heights for elements with a fixed visual size (charts, images, sidebars with "100vh").
-6. The ROOT node must use width "100%" to fill the full viewport width. Never make the root narrower.
-7. For REPEATING items (nav items, list rows, cards), include EVERY instance with exact text.
-8. For NAV items, mark the active one with different bg/fg colors.
-9. Charts: extract APPROXIMATE data values by reading the visual. 6 data points for 6 months, etc.
+7. The ROOT node must use width "100%" to fill the full viewport width. Never make the root narrower.
+8. For REPEATING items (nav items, list rows, cards), include EVERY instance with exact text.
+9. For NAV items, mark the active one with different bg/fg colors.
+10. Charts: extract APPROXIMATE data values by reading the visual. 6 data points for 6 months, etc.
    The values don't need to be exact but should approximate the visual shape of the line/bars.
-10. Progress bars: estimate fill percentage from the visual width of the fill.
-11. Buttons: include as container nodes with el "button", with text children and bg/fg colors.
-12. User profiles/avatars at bottom of sidebar: include as a container with text nodes for name/email.
-13. Set "noWrap": true on ALL of these — they must NEVER line-break:
+11. Progress bars: estimate fill percentage from the visual width of the fill.
+12. Buttons: include as container nodes with el "button", with text children and bg/fg colors.
+13. User profiles/avatars at bottom of sidebar: include as a container with text nodes for name/email.
+14. Set "noWrap": true on ALL of these — they must NEVER line-break:
     - Monetary values ("$12,450.00", "+$2,300", "-$150")
     - Percentages ("+12.5%", "93%")
     - Dates and date ranges ("Jun 15, 2024", "Jan - Jun")
@@ -1257,15 +1270,15 @@ The "tree" is a recursive structure. Every node is ONE of these types:
     - Button text ("Add Transaction", "View All", "Download Report")
     - Table header cells and any single-line label that would look broken if wrapped
     Rule of thumb: if the text is ≤ 3 words or is a proper noun/category name, set noWrap: true.
-14. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
-15. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators, floating action buttons, overlaid elements).
+15. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
+16. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators, floating action buttons, overlaid elements).
     Elements that visually float or overlay other content (e.g., "+ Add" buttons, tooltips, badges) must still be included in the nearest logical parent container.
-16. STAT/METRIC CARD LAYOUT DIRECTION: Look carefully at each stat card's internal arrangement:
+17. STAT/METRIC CARD LAYOUT DIRECTION: Look carefully at each stat card's internal arrangement:
     - If the icon is ABOVE the text (icon on top, value and label stacked below): use layout "column" for that card.
     - If the icon is BESIDE the text (icon left, value and label to the right): use layout "row" for that card.
     Match what you SEE in the screenshot. Do NOT default to one layout — observe each card individually.
-17. INLINE CONTROLS (toggles, selectors, dropdown triggers): When a toggle group, segmented control, or small button appears in the SAME ROW as a section heading/title, wrap BOTH in a single ROW container with justify "space-between". Do NOT place the control as a separate sibling below the heading.
-18. SIDEBAR SPACER: If a sidebar has a user profile/avatar section anchored at the BOTTOM, insert a spacer container between the nav items and the profile:
+18. INLINE CONTROLS (toggles, selectors, dropdown triggers): When a toggle group, segmented control, or small button appears in the SAME ROW as a section heading/title, wrap BOTH in a single ROW container with justify "space-between". Do NOT place the control as a separate sibling below the heading.
+19. SIDEBAR SPACER: If a sidebar has a user profile/avatar section anchored at the BOTTOM, insert a spacer container between the nav items and the profile:
     { "id": "sidebar-spacer", "el": "div", "name": "spacer", "layout": "column", "width": "100%", "flex": "1", "height": "auto", "children": [] }
     This ensures the profile is pushed to the bottom via flex-grow.
 
@@ -1323,13 +1336,16 @@ Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, n
 
 4. Body contains a single <div id="root"> matching the viewport width from the tree.
 
-═══ ICON RENDERING (emoji in colored containers) ═══
+═══ ICON RENDERING (cropped images from reference) ═══
+Icon nodes are rendered as <img> tags with base64 image data cropped from the reference screenshot.
+The icon image data is provided in the ICON_IMAGES section below the layout tree.
+
 Icon nodes become:
-  <div class="icon icon-{id}" style-from-tree>emoji</div>
+  <img class="icon icon-{id}" src="data:image/png;base64,{BASE64_FROM_ICON_IMAGES}" alt="{emoji}" />
 
 CSS pattern:
-  .icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .icon-salary { width: 40px; height: 40px; border-radius: 8px; background: #e3f2fd; color: #1976d2; font-size: 18px; }
+  .icon { flex-shrink: 0; object-fit: contain; }
+  .icon-salary { width: 40px; height: 40px; border-radius: 8px; background: #e3f2fd; }
 
 CRITICAL: Use the EXACT borderRadius value from the tree node.
   - borderRadius "50%" → border-radius: 50%  (circle)
@@ -1337,7 +1353,9 @@ CRITICAL: Use the EXACT borderRadius value from the tree node.
   - borderRadius "12px" → border-radius: 12px (rounded rectangle)
   Do NOT default to 50% for all icons. Many dashboards use ROUNDED SQUARES, not circles.
 
-NEVER use <img> or data-image-prompt for icons. Use emoji in colored containers.
+Look up the icon's "id" in the ICON_IMAGES map and use the base64 string as the <img> src.
+If an icon id is NOT found in ICON_IMAGES, fall back to emoji in a colored container:
+  <div class="icon icon-{id}" style-from-tree>emoji</div>
 
 ═══ CHART RENDERING (SVG — CRITICAL) ═══
 Chart nodes become inline SVG elements. This is the ONLY correct way to render charts.
