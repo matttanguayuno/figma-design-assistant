@@ -2224,6 +2224,178 @@ CRITICAL RULES:
 9. Charts: use the "chart" type with approximate data values.`;
 
 // ════════════════════════════════════════════════════════════════════
+// OPTION 5: Multi-pass specialized extraction
+// ════════════════════════════════════════════════════════════════════
+
+// ── Pass 1: Container/Structure extraction ──────────────────────────
+export const MULTIPASS_STRUCTURE_PROMPT = `You are a precision UI structure extraction engine. You receive a screenshot of a UI design.
+
+Your ONLY job is to extract the CONTAINER HIERARCHY — the structural skeleton of the layout.
+Do NOT extract text content, icons, charts, or images. Just the containers/frames with their visual properties.
+
+Return a JSON object:
+{
+  "viewport": { "width": <number px>, "height": <number px> },
+  "fontFamily": "<best guess, e.g. Inter>",
+  "colors": { "<name>": "#hex" },
+  "tree": <RootContainerNode>
+}
+
+Each container node:
+{
+  "id": "<unique-descriptive-id>",
+  "el": "div|nav|aside|header|section|main|footer|button|a",
+  "name": "<human-readable, e.g. 'sidebar', 'stat-card-1', 'chart-section'>",
+  "bbox": { "x": <px from left>, "y": <px from top>, "w": <px>, "h": <px> },
+  "layout": "row|column",
+  "bg": "#hex or null",
+  "fg": "#hex or null",
+  "padding": "<CSS shorthand, e.g. '24px 32px'>",
+  "gap": "<CSS gap, e.g. '16px'>",
+  "align": "<align-items>",
+  "justify": "<justify-content>",
+  "borderRadius": "<px or null>",
+  "shadow": "<CSS box-shadow or null>",
+  "border": "<CSS border or null>",
+  "overflow": "<hidden or null>",
+  "children": [<child container nodes>]
+}
+
+LEAF containers (containers whose direct content is text/icons/charts — NOT more containers) should be EMPTY with children: [].
+These act as "slots" that will be filled by text/icon/chart content in a later pass.
+Give them descriptive names like "total-balance-card", "sidebar-nav", "chart-area", "transactions-list".
+
+CRITICAL RULES:
+1. EVERY container MUST include "bbox" with pixel coordinates from the TOP-LEFT of the screenshot.
+2. The tree MUST be HIERARCHICAL reflecting visual containment (e.g., root row → [sidebar, main] → [header, content]).
+3. EVERY visually distinct region/card/section/panel MUST be its own container.
+4. Include EMPTY leaf containers for areas that hold content (text, charts, icons) — they are placeholders.
+5. Pay careful attention to PROPORTIONS — sidebar vs main content widths, card heights, spacing.
+6. Include containers for: navigation sections, stat/metric cards, chart areas, transaction lists, progress bar groups, headers, footers, toggle groups.
+7. If a sidebar has a user profile at the bottom, include a spacer container (empty, name "spacer") between nav and profile.
+8. Extract ALL distinct colors into the "colors" map.
+9. DON'T include any text content or icon details — just the structural boxes.
+
+Return ONLY the JSON — no markdown fences, no explanation.`;
+
+// ── Pass 2: Text extraction ─────────────────────────────────────────
+export const MULTIPASS_TEXT_PROMPT = `You are a precision text extraction engine. You receive a screenshot of a UI design.
+
+Your ONLY job is to extract EVERY visible text element with its exact position, size, and font properties.
+
+Return a JSON object:
+{
+  "texts": [
+    {
+      "text": "<EXACT verbatim text>",
+      "bbox": { "x": <px from left>, "y": <px from top>, "w": <px>, "h": <px> },
+      "fontSize": <number px>,
+      "fontWeight": <number: 400|500|600|700|800>,
+      "color": "#hex",
+      "textAlign": "LEFT|CENTER|RIGHT",
+      "noWrap": <boolean>
+    }
+  ]
+}
+
+CRITICAL RULES:
+1. Extract EVERY piece of visible text — headings, labels, numbers, button text, nav items, subtitles, dates, percentages, amounts.
+2. Measure "bbox" PRECISELY from the TOP-LEFT corner of the screenshot in pixels.
+3. "x" and "y" are the TOP-LEFT corner of the text bounding box.
+4. Use EXACT hex colors — be precise (#1e1e2d not "dark blue").
+5. Set "noWrap": true for monetary values, percentages, dates, stat numbers, category labels, nav labels, button text, and any text ≤ 3 words.
+6. For multi-line text blocks, include full text with newlines as a single entry with appropriate height.
+7. Order entries top-to-bottom, left-to-right.
+8. Do NOT include icons, images, or charts — ONLY text.
+9. Make "w" slightly wider than the actual text to avoid clipping.
+10. Include text inside buttons, cards, sidebars, headers — EVERYWHERE. Miss nothing.
+
+Return ONLY the JSON — no markdown fences, no explanation.`;
+
+// ── Pass 3: Visual elements extraction (icons, charts, images, progress bars, toggles) ──
+export const MULTIPASS_VISUALS_PROMPT = `You are a precision visual element extraction engine. You receive a screenshot of a UI design.
+
+Your ONLY job is to extract all NON-TEXT visual elements: icons, charts, progress bars, images, toggle groups, and decorative elements.
+Do NOT extract text — only visual/graphical elements.
+
+Return a JSON object:
+{
+  "visuals": [
+    <VisualNode>,
+    ...
+  ]
+}
+
+Each visual node is ONE of these types:
+
+═══ ICON ═══
+{
+  "type": "icon",
+  "id": "<unique id, e.g. 'icon-dashboard', 'icon-salary'>",
+  "emoji": "<single emoji>",
+  "bbox": { "x": <px>, "y": <px>, "w": <px>, "h": <px> },
+  "size": <px>,
+  "bg": "#hex",
+  "fg": "#hex",
+  "borderRadius": "<'50%' for circles, '8px' for rounded squares>"
+}
+
+═══ CHART ═══
+{
+  "type": "chart",
+  "chartType": "line|bar|area|donut",
+  "bbox": { "x": <px>, "y": <px>, "w": <px>, "h": <px> },
+  "series": [{ "name": "<label>", "color": "#hex", "values": [<approximate numbers>] }],
+  "xLabels": ["Jan", "Feb", ...],
+  "showArea": <boolean>,
+  "showDots": <boolean>,
+  "showGrid": <boolean>
+}
+
+═══ PROGRESS BAR ═══
+{
+  "type": "progress",
+  "label": "<label text>",
+  "value": "<value text, e.g. '$1,400 / $1,500'>",
+  "bbox": { "x": <px>, "y": <px>, "w": <px>, "h": <px> },
+  "percent": <0-100>,
+  "barColor": "#hex",
+  "trackColor": "#hex"
+}
+
+═══ IMAGE / AVATAR ═══
+{
+  "type": "image",
+  "imagePrompt": "<stock photo search query>",
+  "bbox": { "x": <px>, "y": <px>, "w": <px>, "h": <px> },
+  "borderRadius": "<CSS value>"
+}
+
+═══ TOGGLE GROUP ═══
+{
+  "type": "toggleGroup",
+  "options": [{ "label": "<text>", "active": <boolean> }],
+  "bbox": { "x": <px>, "y": <px>, "w": <px>, "h": <px> },
+  "bg": "#hex",
+  "activeBg": "#hex",
+  "activeFg": "#hex",
+  "inactiveFg": "#hex",
+  "borderRadius": "<px>",
+  "fontSize": <px>
+}
+
+CRITICAL RULES:
+1. ALL bbox coordinates are from the TOP-LEFT corner of the screenshot.
+2. Include EVERY icon, chart, progress bar, image, and toggle group visible.
+3. For icons: look carefully at borderRadius — rounded squares vs circles.
+4. For charts: provide APPROXIMATE data values that match the visual shape.
+5. For progress bars: estimate fill percentage from visual width.
+6. Do NOT include text elements — only visual/graphical elements.
+7. Order entries top-to-bottom, left-to-right.
+
+Return ONLY the JSON — no markdown fences, no explanation.`;
+
+// ════════════════════════════════════════════════════════════════════
 // OPTION 4: Screenshot-as-background + text overlay extraction
 // ════════════════════════════════════════════════════════════════════
 

@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import sharp from "sharp";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt, IDENTIFY_REGIONS_SYSTEM_PROMPT, EXTRACT_REGION_DETAIL_SYSTEM_PROMPT, EXTRACT_TEXT_OVERLAY_SYSTEM_PROMPT } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt, IDENTIFY_REGIONS_SYSTEM_PROMPT, EXTRACT_REGION_DETAIL_SYSTEM_PROMPT, EXTRACT_TEXT_OVERLAY_SYSTEM_PROMPT, MULTIPASS_STRUCTURE_PROMPT, MULTIPASS_TEXT_PROMPT, MULTIPASS_VISUALS_PROMPT } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -1215,6 +1215,240 @@ export async function callLLMExtractTextOverlay(
 
   console.log(`[extractTextOverlay] Extracted ${result.texts?.length || 0} text elements`);
   return result;
+}
+
+// ── Multi-pass specialized extraction (Option 5) ────────────────────
+// Pass 1: Container structure
+// Pass 2: Text elements
+// Pass 3: Visual elements (icons, charts, progress bars, toggles, images)
+// Merge: Place text/visuals into containers by position containment
+
+async function callPassWithImage(
+  systemPrompt: string,
+  userPrompt: string,
+  imageBase64: string,
+  provider: Provider,
+  model: string,
+  apiKey: string,
+): Promise<any> {
+  // Each pass gets its own abort controller (not the shared _activeAbort)
+  // since multiple passes run in parallel
+  const abort = new AbortController();
+  let raw: string;
+  raw = await callProviderWithImage(
+    provider,
+    systemPrompt,
+    userPrompt,
+    imageBase64,
+    model,
+    capMaxTokens(provider, 16384, model),
+    apiKey,
+    abort,
+    true, // jsonMode
+  );
+  let clean = raw.trim();
+  if (clean.startsWith("```json")) clean = clean.slice(7);
+  else if (clean.startsWith("```")) clean = clean.slice(3);
+  if (clean.endsWith("```")) clean = clean.slice(0, -3);
+  clean = clean.trim();
+  try {
+    return JSON.parse(clean);
+  } catch {
+    return repairTruncatedJSON(clean);
+  }
+}
+
+/**
+ * Place text and visual elements into the correct containers based on position containment.
+ * Returns a unified layout tree matching the format expected by treeToSnapshot().
+ */
+function mergeMultiPassResults(
+  structure: any,
+  textResult: any,
+  visualsResult: any,
+): any {
+  const texts: any[] = textResult?.texts || [];
+  const visuals: any[] = visualsResult?.visuals || [];
+  const tree = structure?.tree;
+  if (!tree) {
+    console.warn("[multipass-merge] No structure tree found — building flat layout");
+    // Fallback: build a flat container with all elements
+    return {
+      viewport: structure?.viewport || { width: 1440, height: 900 },
+      fontFamily: structure?.fontFamily || "Inter",
+      colors: structure?.colors || {},
+      tree: {
+        id: "root",
+        el: "div",
+        name: "root",
+        bbox: { x: 0, y: 0, w: structure?.viewport?.width || 1440, h: structure?.viewport?.height || 900 },
+        layout: "column",
+        bg: "#ffffff",
+        children: [
+          ...texts.map((t: any, i: number) => ({
+            type: "text",
+            id: `text-${i}`,
+            text: t.text,
+            bbox: t.bbox,
+            fontSize: t.fontSize,
+            fontWeight: t.fontWeight,
+            color: t.color,
+            textAlign: t.textAlign,
+            noWrap: t.noWrap,
+          })),
+          ...visuals,
+        ],
+      },
+    };
+  }
+
+  // Build a flat list of ALL leaf containers (no children or empty children)
+  interface LeafInfo { node: any; depth: number; }
+  const leaves: LeafInfo[] = [];
+
+  function collectLeaves(node: any, depth: number): void {
+    if (!node.children || node.children.length === 0) {
+      leaves.push({ node, depth });
+    } else {
+      for (const child of node.children) {
+        collectLeaves(child, depth + 1);
+      }
+    }
+  }
+  collectLeaves(tree, 0);
+
+  // Also collect ALL containers (including non-leaf) for fallback placement
+  const allContainers: LeafInfo[] = [];
+  function collectAll(node: any, depth: number): void {
+    allContainers.push({ node, depth });
+    if (node.children) {
+      for (const child of node.children) {
+        collectAll(child, depth + 1);
+      }
+    }
+  }
+  collectAll(tree, 0);
+
+  /**
+   * Find the deepest container whose bbox fully contains the given bbox.
+   * Prioritize leaf containers, fall back to any container.
+   */
+  function findBestContainer(bbox: any): any {
+    if (!bbox) return tree;
+
+    const cx = bbox.x + bbox.w / 2;
+    const cy = bbox.y + bbox.h / 2;
+
+    // First try: find deepest LEAF container that contains the center point
+    let bestLeaf: any = null;
+    let bestLeafDepth = -1;
+    for (const { node, depth } of leaves) {
+      const nb = node.bbox;
+      if (!nb) continue;
+      if (cx >= nb.x && cx <= nb.x + nb.w && cy >= nb.y && cy <= nb.y + nb.h) {
+        if (depth > bestLeafDepth) {
+          bestLeaf = node;
+          bestLeafDepth = depth;
+        }
+      }
+    }
+    if (bestLeaf) return bestLeaf;
+
+    // Fallback: find deepest ANY container that contains the center point
+    let bestAny: any = null;
+    let bestAnyDepth = -1;
+    for (const { node, depth } of allContainers) {
+      const nb = node.bbox;
+      if (!nb) continue;
+      if (cx >= nb.x && cx <= nb.x + nb.w && cy >= nb.y && cy <= nb.y + nb.h) {
+        if (depth > bestAnyDepth) {
+          bestAny = node;
+          bestAnyDepth = depth;
+        }
+      }
+    }
+    return bestAny || tree;
+  }
+
+  // Place text elements into containers
+  let textPlaced = 0;
+  for (let i = 0; i < texts.length; i++) {
+    const t = texts[i];
+    const container = findBestContainer(t.bbox);
+    if (!container.children) container.children = [];
+    container.children.push({
+      type: "text",
+      id: `text-${i}`,
+      text: t.text,
+      bbox: t.bbox,
+      fontSize: t.fontSize,
+      fontWeight: t.fontWeight,
+      color: t.color,
+      textAlign: t.textAlign,
+      noWrap: t.noWrap,
+    });
+    textPlaced++;
+  }
+
+  // Place visual elements into containers
+  let visualsPlaced = 0;
+  for (const v of visuals) {
+    const container = findBestContainer(v.bbox);
+    if (!container.children) container.children = [];
+    container.children.push(v);
+    visualsPlaced++;
+  }
+
+  console.log(`[multipass-merge] Placed ${textPlaced} text elements and ${visualsPlaced} visual elements into ${leaves.length} leaf containers`);
+
+  return {
+    viewport: structure.viewport || { width: 1440, height: 900 },
+    fontFamily: structure.fontFamily || "Inter",
+    colors: structure.colors || {},
+    tree,
+  };
+}
+
+export async function callLLMMultiPass(
+  prompt: string,
+  referenceImageBase64: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+): Promise<any> {
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  console.log(`[multipass] Starting 3-pass extraction with ${provider}/${resolvedModel}...`);
+  const context = `Analyze this UI screenshot.\n\nUser context: ${prompt}`;
+
+  // Run all 3 passes in parallel for speed
+  const [structureResult, textResult, visualsResult] = await Promise.all([
+    (async () => {
+      console.log(`[multipass] Pass 1: Extracting container structure...`);
+      const r = await callPassWithImage(MULTIPASS_STRUCTURE_PROMPT, context, referenceImageBase64, provider, resolvedModel, apiKey);
+      console.log(`[multipass] Pass 1 done: ${JSON.stringify(r).length} chars`);
+      return r;
+    })(),
+    (async () => {
+      console.log(`[multipass] Pass 2: Extracting text elements...`);
+      const r = await callPassWithImage(MULTIPASS_TEXT_PROMPT, context, referenceImageBase64, provider, resolvedModel, apiKey);
+      console.log(`[multipass] Pass 2 done: ${(r?.texts || []).length} text elements`);
+      return r;
+    })(),
+    (async () => {
+      console.log(`[multipass] Pass 3: Extracting visual elements...`);
+      const r = await callPassWithImage(MULTIPASS_VISUALS_PROMPT, context, referenceImageBase64, provider, resolvedModel, apiKey);
+      console.log(`[multipass] Pass 3 done: ${(r?.visuals || []).length} visual elements`);
+      return r;
+    })(),
+  ]);
+
+  // Merge passes into a unified layout tree
+  console.log(`[multipass] Merging 3 passes...`);
+  const merged = mergeMultiPassResults(structureResult, textResult, visualsResult);
+  console.log(`[multipass] Merged tree: ${JSON.stringify(merged).length} chars`);
+
+  return merged;
 }
 
 // ── Call LLM for Design System Binding (Step 2) ─────────────────────

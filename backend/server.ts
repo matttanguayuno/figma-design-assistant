@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMExtractLayoutTree, callLLMRegionByRegion, callLLMExtractTextOverlay, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMExtractLayoutTree, callLLMRegionByRegion, callLLMExtractTextOverlay, callLLMMultiPass, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { treeToSnapshot } from "./treeToSnapshot";
 import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
@@ -701,13 +701,12 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       }
     }
 
-    // ── SCREENSHOT-AS-BACKGROUND + TEXT OVERLAY (Option 4) ──
-    // Guarantees pixel-perfect visuals: screenshot = background image,
-    // editable text nodes overlaid at exact positions
+    // ── MULTI-PASS SPECIALIZED EXTRACTION (Option 5) ──
+    // 3 parallel LLM passes: structure, text, visuals → merge → treeToSnapshot
     if (referenceImageBase64 && !isDirectRender) {
-      console.log(`[generate-html] SCREENSHOT-BACKGROUND mode: extracting text overlay positions`);
+      console.log(`[generate-html] MULTI-PASS mode: 3 specialized extraction passes`);
 
-      const textResult = await callLLMExtractTextOverlay(
+      const layoutTree = await callLLMMultiPass(
         prompt,
         referenceImageBase64,
         apiKey,
@@ -715,47 +714,9 @@ app.post("/generate-html", async (req: Request, res: Response) => {
         model
       );
 
-      const viewport = textResult.viewport || { width: 1440, height: 900 };
-      const texts = textResult.texts || [];
-      console.log(`[generate-html] Extracted ${texts.length} text elements for overlay`);
-
-      // Build text overlay children — each text node is absolutely positioned
-      const textChildren: any[] = texts.map((t: any, i: number) => ({
-        id: `text-${i}`,
-        name: (t.text || "").slice(0, 30) || `text-${i}`,
-        type: "TEXT",
-        x: Math.round(t.x || 0),
-        y: Math.round(t.y || 0),
-        width: Math.round(t.w || 100),
-        height: Math.max(Math.round(t.h || 20), (t.fontSize || 14) + 4),
-        characters: t.text || "",
-        fontSize: t.fontSize || 14,
-        fontFamily: t.fontFamily || "Inter",
-        fontStyle: (t.fontWeight || 400) >= 700 ? "Bold" : (t.fontWeight || 400) >= 600 ? "Semi Bold" : (t.fontWeight || 400) >= 500 ? "Medium" : "Regular",
-        fillColor: t.color || "#000000",
-        textAlignHorizontal: (t.align || "LEFT").toUpperCase(),
-        textAutoResize: "NONE",
-        opacity: t.opacity !== undefined ? t.opacity : 1,
-        childrenCount: 0,
-      }));
-
-      // Build root frame with screenshot as background image
-      const snapshot = {
-        id: "screenshot-frame",
-        name: prompt.slice(0, 40) || "Screenshot Reconstruction",
-        type: "FRAME",
-        x: 0,
-        y: 0,
-        width: viewport.width,
-        height: viewport.height,
-        // No layoutMode — children use absolute positioning
-        clipsContent: true,
-        imageData: referenceImageBase64,
-        childrenCount: textChildren.length,
-        children: textChildren,
-      };
-
-      console.log(`[generate-html] Screenshot-background snapshot: ${viewport.width}x${viewport.height}, ${textChildren.length} text overlays`);
+      console.log(`[generate-html] Multi-pass layout tree ready, converting to snapshot...`);
+      const snapshot = await treeToSnapshot(layoutTree, referenceImageBase64);
+      console.log(`[generate-html] Multi-pass snapshot: ${snapshot.width}x${snapshot.height}, ${snapshot.childrenCount} top-level children`);
       res.json({ snapshot });
       return;
     }
