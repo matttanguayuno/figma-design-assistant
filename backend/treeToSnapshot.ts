@@ -126,6 +126,7 @@ interface SnapshotNode {
   fontStyle?: string;
   textAlignHorizontal?: string;
   textAlignVertical?: string;
+  textAutoResize?: string;
   lineHeight?: number;
 
   // RECTANGLE / image
@@ -286,13 +287,17 @@ export async function treeToSnapshot(
     };
   }
 
-  async function convert(node: LayoutNode, parentLayout?: string): Promise<SnapshotNode> {
+  async function convert(node: LayoutNode, parentBbox?: Bbox): Promise<SnapshotNode> {
     const nodeType = node.type;
     const bbox = node.bbox || { x: 0, y: 0, w: 100, h: 50 };
 
     // Use bbox dimensions directly for Figma — they're already in viewport coordinates
     const w = Math.max(1, Math.round(bbox.w));
     const h = Math.max(1, Math.round(bbox.h));
+
+    // Compute position relative to parent's origin (absolute positioning)
+    const relX = parentBbox ? Math.round(bbox.x - parentBbox.x) : 0;
+    const relY = parentBbox ? Math.round(bbox.y - parentBbox.y) : 0;
 
     let result: SnapshotNode;
     switch (nodeType) {
@@ -316,29 +321,13 @@ export async function treeToSnapshot(
         break;
       default:
         // Container node (no type field, or unknown)
-        result = await convertContainer(node, w, h);
+        result = await convertContainer(node, bbox, w, h);
         break;
     }
 
-    // Apply parent-context sizing overrides
-    if (parentLayout === "column") {
-      // In a vertical parent, children should fill the parent width
-      // (unless they have an explicit fixed pixel width like "180px")
-      const hasFixedWidth = node.width && node.width !== "100%" && node.width !== "auto" && !node.width.includes("%") && !node.flex;
-      if (!hasFixedWidth) {
-        result.layoutSizingHorizontal = "FILL";
-      }
-    }
-    if (parentLayout === "row") {
-      // In a horizontal parent, flex children should fill
-      if (node.flex === "1" || node.flex === "2" || node.flex === "3" || node.width === "100%") {
-        result.layoutSizingHorizontal = "FILL";
-      }
-      // Cross-axis stretch: children in a row fill vertically unless they have an explicit fixed height
-      if (node.height === "100%" || node.height === "100vh" || node.height === "auto" || !node.height) {
-        result.layoutSizingVertical = "FILL";
-      }
-    }
+    // Absolute position relative to parent
+    result.x = relX;
+    result.y = relY;
 
     return result;
   }
@@ -362,9 +351,7 @@ export async function treeToSnapshot(
       fontStyle: fontWeightToStyle(node.fontWeight),
       fillColor: resolveColor(node.color, colors),
       textAlignHorizontal: (node.textAlign || "LEFT").toUpperCase(),
-      // Text FILL horizontally to stretch to parent width; HUG vertically for content height
-      layoutSizingHorizontal: "FILL",
-      layoutSizingVertical: "HUG",
+      textAutoResize: "HEIGHT",
       childrenCount: 0,
     };
   }
@@ -384,8 +371,6 @@ export async function treeToSnapshot(
       height: h,
       cornerRadius: cr,
       childrenCount: 0,
-      layoutSizingHorizontal: "FIXED",
-      layoutSizingVertical: "FIXED",
     };
 
     if (base64) {
@@ -414,8 +399,6 @@ export async function treeToSnapshot(
       height: h,
       cornerRadius: 0,
       childrenCount: 0,
-      layoutSizingHorizontal: "FILL",
-      layoutSizingVertical: "FIXED",
     };
 
     if (base64) {
@@ -441,8 +424,6 @@ export async function treeToSnapshot(
       height: h,
       cornerRadius: cr,
       childrenCount: 0,
-      layoutSizingHorizontal: "FIXED",
-      layoutSizingVertical: "FIXED",
     };
 
     // Try cropping from reference first
@@ -639,38 +620,18 @@ export async function treeToSnapshot(
     };
   }
 
-  // ── Container node → FRAME with auto-layout ────────────────────────
+  // ── Container node → FRAME with absolute-positioned children ──────
 
-  async function convertContainer(node: LayoutNode, w: number, h: number): Promise<SnapshotNode> {
-    const layoutDir = node.layout === "row" ? "HORIZONTAL" : "VERTICAL";
-    const pad = parsePadding(node.padding);
-    const gap = px(node.gap, 0);
+  async function convertContainer(node: LayoutNode, bbox: Bbox, w: number, h: number): Promise<SnapshotNode> {
     const cr = parseBorderRadius(node.borderRadius);
     const bgColor = resolveColor(node.bg, colors);
     const effects = parseShadow(node.shadow);
 
-    // Determine sizing — default FIXED from bbox (the ground truth from the screenshot)
-    // Override to FILL only for flex children or percentage widths
-    let sizingH: "FIXED" | "FILL" | "HUG" = "FIXED";
-    if (node.flex === "1" || node.flex === "2" || node.flex === "3") {
-      sizingH = "FILL";
-    } else if (node.width === "100%") {
-      sizingH = "FILL";
-    }
-
-    let sizingV: "FIXED" | "FILL" | "HUG" = "FIXED";
-    if (node.height === "100vh" || node.height === "100%") {
-      sizingV = "FILL";
-    } else if (node.height === "auto" || !node.height) {
-      // auto/unspecified height = shrink to content
-      sizingV = "HUG";
-    }
-
-    // Convert children, passing current layout direction for context-aware sizing
+    // Convert children — each child positioned absolutely relative to this container's bbox
     const childNodes = node.children || [];
     const children: SnapshotNode[] = [];
     for (const child of childNodes) {
-      const childSnap = await convert(child, node.layout);
+      const childSnap = await convert(child, bbox);
       children.push(childSnap);
     }
 
@@ -693,19 +654,10 @@ export async function treeToSnapshot(
       y: 0,
       width: w,
       height: h,
-      layoutMode: layoutDir,
-      paddingTop: pad.top,
-      paddingRight: pad.right,
-      paddingBottom: pad.bottom,
-      paddingLeft: pad.left,
-      itemSpacing: gap,
-      primaryAxisAlignItems: mapAlign(node.justify),
-      counterAxisAlignItems: mapCounterAlign(node.align),
-      layoutSizingHorizontal: sizingH,
-      layoutSizingVertical: sizingV,
+      // No layoutMode — children use absolute positioning from bbox coordinates
       fillColor: bgColor,
       cornerRadius: cr,
-      clipsContent: node.overflow === "hidden" ? true : undefined,
+      clipsContent: true,
       childrenCount: children.length,
       children: children.length > 0 ? children : undefined,
     };
