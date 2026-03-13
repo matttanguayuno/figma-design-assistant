@@ -277,13 +277,15 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     if (style.display === "none" || style.visibility === "hidden") return null;
     if (style.opacity === "0") return null;
 
-    // Skip position:absolute/fixed elements — they break auto-layout conversion.
-    // These elements are out of normal flow; when converted to auto-layout children
-    // they stack sequentially instead of overlapping, causing text to appear
-    // outside/below frames instead of overlaying images.
-    if (depth > 0 && (style.position === "absolute" || style.position === "fixed")) {
-      console.log(`[DOM walker] Skipping position:${style.position} element: <${tag}> (breaks auto-layout)`);
-      return null;
+    // Position:absolute/fixed elements are out-of-flow in CSS but we still want
+    // to capture visible ones (buttons, badges, overlays) as FIXED-size flow
+    // children.  Only skip truly hidden/offscreen ones.
+    const isAbsoluteOrFixed = depth > 0 && (style.position === "absolute" || style.position === "fixed");
+    if (isAbsoluteOrFixed) {
+      const absRect = el.getBoundingClientRect();
+      // Skip if completely offscreen or zero-size with no text
+      if (absRect.width <= 0 && absRect.height <= 0 && !el.textContent?.trim()) return null;
+      if (absRect.right < 0 || absRect.bottom < 0) return null;
     }
 
     // Skip elements with CSS mask/mask-image (these can't be converted to Figma)
@@ -544,6 +546,18 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     let layoutMode: "VERTICAL" | "HORIZONTAL" = "VERTICAL";
     if (display === "flex" || display === "inline-flex") {
       layoutMode = (flexDir === "row" || flexDir === "row-reverse") ? "HORIZONTAL" : "VERTICAL";
+    } else if (display === "grid" || display === "inline-grid") {
+      // Infer direction from grid-template-columns.
+      // Multiple explicit columns → HORIZONTAL (most common: card grids, stat rows).
+      // auto-flow: column also → HORIZONTAL.
+      const gtc = style.gridTemplateColumns || "";
+      const autoFlow = style.gridAutoFlow || "";
+      const colCount = gtc.split(/\s+/).filter((s: string) => s && s !== "none").length;
+      layoutMode = (colCount > 1 || autoFlow.includes("column")) ? "HORIZONTAL" : "VERTICAL";
+    } else if (display === "inline" || display === "inline-block") {
+      // Inline-level element — when it's a container with children, treat as HORIZONTAL
+      // since inline elements naturally flow left-to-right.
+      layoutMode = "HORIZONTAL";
     }
 
     // Recurse into children, passing this container's layoutMode as parentLayoutMode
@@ -557,6 +571,8 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
         const text = child.textContent?.trim();
         if (text) {
           _nodeCounter++;
+          // Inherit white-space from parent container style
+          const isNowrap = style.whiteSpace === "nowrap" || style.whiteSpace === "pre";
           children.push({
             id: `html_${_nodeCounter}`,
             name: "text",
@@ -567,7 +583,7 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
             fontStyle: fontWeightToStyle(style.fontWeight),
             fillColor: colorToHex(style.color),
             fillStyleName: resolveColorToStyleName(colorToHex(style.color), hexToStyle),
-            layoutSizingHorizontal: layoutMode === "HORIZONTAL" ? "HUG" : "FILL",
+            layoutSizingHorizontal: (layoutMode === "HORIZONTAL" || isNowrap) ? "HUG" : "FILL",
             layoutSizingVertical: "HUG",
             childrenCount: 0,
           });
@@ -654,7 +670,13 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
 
     // Sizing: use PARENT's layout direction, not this node's own
     const flexGrow = parseFloat(style.flexGrow);
-    if (depth === 0) {
+
+    // Position:absolute/fixed elements → always FIXED sizing since they have
+    // explicit rendered dimensions and should not stretch in auto-layout.
+    if (isAbsoluteOrFixed) {
+      node.layoutSizingHorizontal = "FIXED";
+      node.layoutSizingVertical = "FIXED";
+    } else if (depth === 0) {
       // Root element gets FIXED sizing and clips overflow.
       // Use viewport width if wider than rendered rect — prevents right-side truncation
       // when the root div doesn't fully fill the Puppeteer viewport.
@@ -664,9 +686,13 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
       node.clipsContent = true;
     } else if (parentLayoutMode === "HORIZONTAL") {
       // This node is inside a horizontal parent (row)
-      // Primary axis (horizontal): use computed width to preserve CSS proportions
-      // CSS flex-grow ratios (e.g. 5:3) would become equal FILL in Figma, so use FIXED
-      node.layoutSizingHorizontal = "FIXED";
+      // Primary axis (horizontal): use FILL if flex-grow > 0 (lets Figma distribute
+      // space proportionally), otherwise FIXED to preserve explicit CSS widths.
+      if (flexGrow > 0) {
+        node.layoutSizingHorizontal = "FILL";
+      } else {
+        node.layoutSizingHorizontal = "FIXED";
+      }
       // Counter axis (vertical): FILL by default (CSS align-items: stretch)
       node.layoutSizingVertical = "FILL";
     } else {

@@ -1153,7 +1153,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
   "fontSize": <number px>,
   "fontWeight": <number: 400|500|600|700|800>,
   "color": "#hex",
-  "noWrap": <boolean — true for monetary values, stats, dates>
+  "noWrap": <boolean — true for monetary values, stats, dates, category labels, button text, nav labels, and any text ≤ 3 words>
 }
 
 ═══ ICON NODE (colored circle/square with emoji) ═══
@@ -1247,9 +1247,19 @@ The "tree" is a recursive structure. Every node is ONE of these types:
 10. Progress bars: estimate fill percentage from the visual width of the fill.
 11. Buttons: include as container nodes with el "button", with text children and bg/fg colors.
 12. User profiles/avatars at bottom of sidebar: include as a container with text nodes for name/email.
-13. Set "noWrap": true on ALL monetary values, percentages, dates, and stat numbers.
+13. Set "noWrap": true on ALL of these — they must NEVER line-break:
+    - Monetary values ("$12,450.00", "+$2,300", "-$150")
+    - Percentages ("+12.5%", "93%")
+    - Dates and date ranges ("Jun 15, 2024", "Jan - Jun")
+    - Stat numbers and KPI values ("1,234", "45.2K")
+    - Category labels and short descriptive names ("Entertainment", "Groceries", "Transportation", "Salary")
+    - Navigation item labels ("Dashboard", "Transactions", "Settings")
+    - Button text ("Add Transaction", "View All", "Download Report")
+    - Table header cells and any single-line label that would look broken if wrapped
+    Rule of thumb: if the text is ≤ 3 words or is a proper noun/category name, set noWrap: true.
 14. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
-15. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators).
+15. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators, floating action buttons, overlaid elements).
+    Elements that visually float or overlay other content (e.g., "+ Add" buttons, tooltips, badges) must still be included in the nearest logical parent container.
 
 Return ONLY the JSON — no markdown fences, no explanation.`;
 
@@ -1296,7 +1306,9 @@ Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, n
      fontSize   → font-size (in px)
      fontWeight → font-weight
      color      → color
-     noWrap: true → white-space: nowrap
+     noWrap: true → white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+       This is CRITICAL for short labels, monetary values, stats, and category names.
+       Without white-space:nowrap, text like "Entertainment" wraps to "Entertainm\nent" in narrow containers.
 
 3. ALL colors defined in the tree's "colors" object → CSS custom properties in :root { }
    Use these variables throughout the CSS.
@@ -1394,8 +1406,9 @@ CSS: use flex row, padding, border-radius. Active button gets activeBg/activeFg 
   Only set explicit pixel heights when the tree specifies them (e.g., height: "200px" for a chart container).
 
 ═══ FIGMA CONVERSION CONSTRAINTS (CRITICAL — violations cause elements to DISAPPEAR) ═══
-- Use ONLY flexbox (display:flex + flex-direction). NO CSS Grid, float, position:absolute, position:fixed, position:relative.
-- NEVER use position:absolute or position:relative ANYWHERE. Elements with these are SILENTLY DROPPED.
+- Use ONLY flexbox (display:flex + flex-direction) for layout. NO CSS Grid or float.
+- position:absolute / position:fixed MAY be used sparingly for overlay elements (floating buttons, badges, tooltips) that cannot be expressed in normal flow. The converter handles them. However, prefer flexbox flow for everything that CAN be laid out normally.
+- NEVER use position:relative ALONE as a styling trick — only as an anchor for an absolute-positioned child.
 - Use "gap" for spacing, "padding" on containers.
 - No transform, animation, transition, media queries, @keyframes, JavaScript.
 - No CSS mask or mask-image.
@@ -1505,8 +1518,8 @@ MOBILE (390px):
 
 ═══ FIGMA CONVERSION RULES (CRITICAL — follow exactly) ═══
 These constraints exist because the HTML is parsed into Figma auto-layout frames:
-- Use ONLY flexbox for layout (display:flex + flex-direction). No CSS Grid, float, position:absolute/fixed/relative.
-- NEVER use position:absolute or position:relative. Elements with position:absolute will be DROPPED from the output.
+- Use ONLY flexbox for layout (display:flex + flex-direction). No CSS Grid or float.
+- position:absolute / position:fixed MAY be used sparingly for overlay elements (floating buttons, badges) that cannot be expressed in normal flow. Prefer flexbox for everything that CAN be laid out normally.
 - Use "gap" for spacing between children, "padding" on containers.
 - For elements that should stretch to fill available space in a row, use "flex: 1" (not width:100%).
 - No transform, animation, transition, media queries, @keyframes, or JavaScript.
