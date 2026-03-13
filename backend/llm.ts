@@ -51,6 +51,51 @@ const MODEL_MAX_OUTPUT: Record<string, number> = {
   "o3-mini": 65536,
 };
 
+/**
+ * Attempt to repair truncated JSON from LLM output.
+ * Closes open strings, arrays, and objects to produce valid JSON.
+ */
+function repairTruncatedJSON(input: string): any {
+  let s = input.trim();
+  // Try as-is first
+  try { return JSON.parse(s); } catch {}
+
+  // Remove trailing comma
+  s = s.replace(/,\s*$/, '');
+
+  // Track state to close open brackets
+  let inString = false;
+  let escaped = false;
+  const stack: string[] = [];
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+
+  // If we're inside a string, close it
+  if (inString) s += '"';
+  // Remove trailing partial key-value or comma
+  s = s.replace(/,\s*"[^"]*"?\s*:?\s*$/, '');
+  s = s.replace(/,\s*$/, '');
+  // Close remaining open brackets in reverse order
+  while (stack.length > 0) s += stack.pop();
+
+  try {
+    const result = JSON.parse(s);
+    console.log(`[repairTruncatedJSON] Successfully repaired truncated JSON`);
+    return result;
+  } catch (repairErr: any) {
+    throw new Error(`Layout tree JSON is truncated and could not be repaired. The LLM ran out of output tokens. Try a simpler screenshot or a model with higher output limits. (${repairErr.message})`);
+  }
+}
+
 function capMaxTokens(provider: Provider, requested: number, model?: string): number {
   if (model && MODEL_MAX_OUTPUT[model]) {
     return Math.min(requested, MODEL_MAX_OUTPUT[model]);
@@ -655,7 +700,7 @@ export async function callLLMGenerateHTML(
         analyzePrompt,
         referenceImageBase64,
         resolvedModel,
-        capMaxTokens(provider, 16384, resolvedModel),
+        capMaxTokens(provider, 32768, resolvedModel),
         apiKey,
         abort0,
         true // jsonMode
@@ -858,7 +903,7 @@ export async function callLLMExtractLayoutTree(
       analyzePrompt,
       referenceImageBase64,
       resolvedModel,
-      capMaxTokens(provider, 16384, resolvedModel),
+      capMaxTokens(provider, 32768, resolvedModel),
       apiKey,
       abort,
       true // jsonMode
@@ -877,7 +922,14 @@ export async function callLLMExtractLayoutTree(
   console.log(`[callLLMExtractLayoutTree] Layout tree: ${blueprint.length} chars`);
   console.log(`[callLLMExtractLayoutTree] Preview: ${blueprint.slice(0, 500)}...`);
 
-  const parsed = JSON.parse(blueprint);
+  let parsed: any;
+  try {
+    parsed = JSON.parse(blueprint);
+  } catch (parseErr: any) {
+    console.warn(`[callLLMExtractLayoutTree] JSON parse failed: ${parseErr.message}`);
+    console.warn(`[callLLMExtractLayoutTree] Attempting JSON repair on truncated output...`);
+    parsed = repairTruncatedJSON(blueprint);
+  }
   return parsed;
 }
 
