@@ -701,25 +701,9 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       }
     }
 
-    // ── MULTI-PASS SPECIALIZED EXTRACTION (Option 5) ──
-    // 3 parallel LLM passes: structure, text, visuals → merge → treeToSnapshot
-    if (referenceImageBase64 && !isDirectRender) {
-      console.log(`[generate-html] MULTI-PASS mode: 3 specialized extraction passes`);
-
-      const layoutTree = await callLLMMultiPass(
-        prompt,
-        referenceImageBase64,
-        apiKey,
-        resolvedProvider,
-        model
-      );
-
-      console.log(`[generate-html] Multi-pass layout tree ready, converting to snapshot...`);
-      const snapshot = await treeToSnapshot(layoutTree, referenceImageBase64);
-      console.log(`[generate-html] Multi-pass snapshot: ${snapshot.width}x${snapshot.height}, ${snapshot.childrenCount} top-level children`);
-      res.json({ snapshot });
-      return;
-    }
+    // ── Reference images now flow through the HTML pipeline below ──
+    // Multi-pass extraction happens inside callLLMGenerateHTML (Step 0)
+    // then HTML generation → Puppeteer → DOM walker for accurate positions
 
     // ── Step 1: Get HTML content ──
     let htmlContent: string;

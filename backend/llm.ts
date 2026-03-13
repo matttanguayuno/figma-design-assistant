@@ -686,35 +686,18 @@ export async function callLLMGenerateHTML(
   // Step 0: Analyze the image → hierarchical layout tree (vision-focused, no coding)
   // Step 1: Translate layout tree → HTML/CSS (mechanical reconstruction)
   if (referenceImageBase64) {
-    // ── Step 0: Image → Layout Tree ──
-    console.log(`[callLLMGenerateHTML] Step 0: Extracting hierarchical layout tree from reference image...`);
-    const analyzePrompt = `Analyze this UI screenshot and produce a hierarchical layout tree as JSON.\n\nExtract the EXACT visual structure — every container, text element, icon, chart, and progress bar with CSS-ready properties.\n\nUser context: ${prompt}`;
+    // ── Step 0: Image → Layout Tree (multi-pass for better quality) ──
+    console.log(`[callLLMGenerateHTML] Step 0: Multi-pass extraction from reference image...`);
 
-    const abort0 = new AbortController();
-    _activeAbort = abort0;
-    let blueprintRaw: string;
-    try {
-      blueprintRaw = await callProviderWithImage(
-        provider,
-        ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT,
-        analyzePrompt,
-        referenceImageBase64,
-        resolvedModel,
-        capMaxTokens(provider, 32768, resolvedModel),
-        apiKey,
-        abort0,
-        true // jsonMode
-      );
-    } finally {
-      if (_activeAbort === abort0) _activeAbort = null;
-    }
+    const layoutTree = await callLLMMultiPass(
+      prompt,
+      referenceImageBase64,
+      apiKey,
+      provider,
+      model,
+    );
 
-    // Clean up any markdown fences from the layout tree
-    let blueprint = blueprintRaw.trim();
-    if (blueprint.startsWith("```json")) blueprint = blueprint.slice(7);
-    else if (blueprint.startsWith("```")) blueprint = blueprint.slice(3);
-    if (blueprint.endsWith("```")) blueprint = blueprint.slice(0, -3);
-    blueprint = blueprint.trim();
+    let blueprint = JSON.stringify(layoutTree, null, 2);
 
     console.log(`[callLLMGenerateHTML] Step 0 complete: layout tree ${blueprint.length} chars`);
     console.log(`[callLLMGenerateHTML] Layout tree preview: ${blueprint.slice(0, 500)}...`);
@@ -735,7 +718,7 @@ export async function callLLMGenerateHTML(
           }
         }
       }
-      findIcons(blueprintObj);
+      findIcons(blueprintObj.tree || blueprintObj);
       console.log(`[callLLMGenerateHTML] Found ${icons.length} icon nodes with bbox`);
 
       if (icons.length > 0) {
@@ -743,15 +726,21 @@ export async function callLLMGenerateHTML(
         const metadata = await sharp(refBuf).metadata();
         const imgW = metadata.width || 1;
         const imgH = metadata.height || 1;
+        // Scale bbox from viewport coords to actual image pixel coords
+        const vp = blueprintObj.viewport || { width: 1440, height: 900 };
+        const scaleX = imgW / vp.width;
+        const scaleY = imgH / vp.height;
         const iconMap: Record<string, string> = {};
 
         for (const icon of icons) {
           try {
-            // Clamp bbox to image bounds
-            const left = Math.max(0, Math.round(icon.bbox.x));
-            const top = Math.max(0, Math.round(icon.bbox.y));
-            const width = Math.min(Math.round(icon.bbox.w), imgW - left);
-            const height = Math.min(Math.round(icon.bbox.h), imgH - top);
+            // Scale bbox to image coordinates and clamp to bounds
+            const left = Math.max(0, Math.round(icon.bbox.x * scaleX));
+            const top = Math.max(0, Math.round(icon.bbox.y * scaleY));
+            let width = Math.round(icon.bbox.w * scaleX);
+            let height = Math.round(icon.bbox.h * scaleY);
+            if (left + width > imgW) width = imgW - left;
+            if (top + height > imgH) height = imgH - top;
             if (width > 0 && height > 0) {
               const cropped = await sharp(refBuf)
                 .extract({ left, top, width, height })
