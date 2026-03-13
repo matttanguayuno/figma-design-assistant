@@ -557,9 +557,10 @@
     .menu-dropdown {
       display: none;
       position: absolute;
-      right: 0;
+      right: -16px;
       top: 32px;
-      min-width: 230px;
+      width: calc(100vw - 2px);
+      max-width: 300px;
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -567,6 +568,7 @@
       z-index: 100;
       padding: 4px 0;
       animation: menuFadeIn 0.1s ease;
+      overflow: hidden;
     }
     .menu-dropdown.show {
       display: block;

@@ -320,21 +320,22 @@ export async function treeToSnapshot(
         break;
     }
 
-    // Apply parent-context sizing: children in a vertical parent should FILL width,
-    // children in a horizontal parent with flex should FILL width
-    if (parentLayout === "column" && result.type !== "TEXT") {
-      // In a vertical parent, children should fill the parent width unless they have explicit fixed width
-      if (!node.width || node.width === "100%" || node.width === "auto") {
+    // Apply parent-context sizing overrides
+    if (parentLayout === "column") {
+      // In a vertical parent, children should fill the parent width
+      // (unless they have an explicit fixed pixel width like "180px")
+      const hasFixedWidth = node.width && node.width !== "100%" && node.width !== "auto" && !node.width.includes("%") && !node.flex;
+      if (!hasFixedWidth) {
         result.layoutSizingHorizontal = "FILL";
       }
     }
-    if (parentLayout === "row" && result.type !== "TEXT") {
+    if (parentLayout === "row") {
       // In a horizontal parent, flex children should fill
       if (node.flex === "1" || node.flex === "2" || node.flex === "3" || node.width === "100%") {
         result.layoutSizingHorizontal = "FILL";
       }
-      // Children in a row with stretch alignment should fill vertically
-      if (node.height === "100%" || node.height === "100vh") {
+      // Cross-axis stretch: children in a row fill vertically unless they have an explicit fixed height
+      if (node.height === "100%" || node.height === "100vh" || node.height === "auto" || !node.height) {
         result.layoutSizingVertical = "FILL";
       }
     }
@@ -361,8 +362,8 @@ export async function treeToSnapshot(
       fontStyle: fontWeightToStyle(node.fontWeight),
       fillColor: resolveColor(node.color, colors),
       textAlignHorizontal: (node.textAlign || "LEFT").toUpperCase(),
-      // Text should HUG horizontally to avoid clipping; parent auto-layout controls width
-      layoutSizingHorizontal: "HUG",
+      // Text FILL horizontally to stretch to parent width; HUG vertically for content height
+      layoutSizingHorizontal: "FILL",
       layoutSizingVertical: "HUG",
       childrenCount: 0,
     };
@@ -648,23 +649,21 @@ export async function treeToSnapshot(
     const bgColor = resolveColor(node.bg, colors);
     const effects = parseShadow(node.shadow);
 
-    // Determine sizing based on flex/width
-    let sizingH: "FIXED" | "FILL" | "HUG" = "HUG";
+    // Determine sizing — default FIXED from bbox (the ground truth from the screenshot)
+    // Override to FILL only for flex children or percentage widths
+    let sizingH: "FIXED" | "FILL" | "HUG" = "FIXED";
     if (node.flex === "1" || node.flex === "2" || node.flex === "3") {
       sizingH = "FILL";
-    } else if (node.width === "100%" || node.width === "auto") {
+    } else if (node.width === "100%") {
       sizingH = "FILL";
-    } else if (node.width && node.width !== "auto" && !node.width.includes("%")) {
-      // Explicit pixel width like "180px" → FIXED
-      sizingH = "FIXED";
     }
 
-    let sizingV: "FIXED" | "FILL" | "HUG" = "HUG";
+    let sizingV: "FIXED" | "FILL" | "HUG" = "FIXED";
     if (node.height === "100vh" || node.height === "100%") {
       sizingV = "FILL";
-    } else if (node.height && node.height !== "auto" && !node.height.includes("%")) {
-      // Explicit pixel height → FIXED
-      sizingV = "FIXED";
+    } else if (node.height === "auto" || !node.height) {
+      // auto/unspecified height = shrink to content
+      sizingV = "HUG";
     }
 
     // Convert children, passing current layout direction for context-aware sizing
