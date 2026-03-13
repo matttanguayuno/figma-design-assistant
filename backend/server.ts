@@ -9,7 +9,8 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMExtractLayoutTree, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { treeToSnapshot } from "./treeToSnapshot";
 import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
 import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot, extractFillStyleMap, extractTextStyleMap } from "./htmlToSnapshot";
@@ -698,6 +699,58 @@ app.post("/generate-html", async (req: Request, res: Response) => {
           inputStyles: (safeFullDS.inputStyles || []).slice(0, 5),
         };
       }
+    }
+
+    // ── DIRECT-TO-SNAPSHOT: Reference image → Layout tree → Figma snapshot ──
+    // Bypasses HTML/Puppeteer entirely for reference image reconstruction
+    if (referenceImageBase64 && !isDirectRender) {
+      console.log(`[generate-html] DIRECT-TO-SNAPSHOT mode: reference image provided, bypassing HTML pipeline`);
+
+      // Step 0: Vision LLM → Layout tree JSON
+      console.log(`[generate-html] Step 0: Extracting layout tree from reference image...`);
+      const layoutTree = await callLLMExtractLayoutTree(
+        prompt,
+        referenceImageBase64,
+        apiKey,
+        resolvedProvider,
+        model
+      );
+      console.log(`[generate-html] Step 0 complete: ${JSON.stringify(layoutTree).length} chars`);
+
+      // Step 1: Programmatic conversion to Figma snapshot (deterministic, no LLM)
+      console.log(`[generate-html] Step 1: Converting layout tree to Figma snapshot...`);
+      const snapshot = await treeToSnapshot(layoutTree, referenceImageBase64);
+      console.log(`[generate-html] Step 1 complete: snapshot has ${snapshot.childrenCount} top-level children`);
+
+      // Step 2: Resolve remaining imagePrompt fields (stock photos from Unsplash)
+      console.log(`[generate-html] Step 2: Resolving remaining image prompts...`);
+      let imageCount = 0;
+      async function resolveImages(node: any): Promise<void> {
+        if (!node) return;
+        if (node.imagePrompt && !node.imageData) {
+          try {
+            console.log(`[generate-html] Resolving image: "${node.imagePrompt}"`);
+            const base64 = await resolveImagePrompt(node.imagePrompt);
+            node.imageData = base64;
+            delete node.imagePrompt;
+            imageCount++;
+          } catch (imgErr: any) {
+            console.warn(`[generate-html] Image resolution failed for "${node.imagePrompt}": ${imgErr.message}`);
+            delete node.imagePrompt;
+          }
+        }
+        if (node.children) {
+          for (const child of node.children) {
+            await resolveImages(child);
+          }
+        }
+      }
+      await resolveImages(snapshot);
+      console.log(`[generate-html] Resolved ${imageCount} stock images`);
+
+      console.log(`[generate-html] DIRECT-TO-SNAPSHOT complete:`, JSON.stringify(snapshot).slice(0, 500));
+      res.json({ snapshot });
+      return;
     }
 
     // ── Step 1: Get HTML content ──

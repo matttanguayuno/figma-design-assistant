@@ -831,6 +831,56 @@ export async function callLLMGenerateHTML(
   return html;
 }
 
+// ── Call LLM for Layout Tree Extraction (Step 0 only) ───────────────
+// Used by the direct-to-snapshot pipeline: vision LLM → layout tree JSON
+// No HTML generation, no Puppeteer — the layout tree is converted
+// programmatically to a Figma snapshot by treeToSnapshot.ts
+
+export async function callLLMExtractLayoutTree(
+  prompt: string,
+  referenceImageBase64: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+): Promise<any> {
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  console.log(`[callLLMExtractLayoutTree] Analyzing reference image with ${provider}/${resolvedModel}...`);
+  const analyzePrompt = `Analyze this UI screenshot and produce a hierarchical layout tree as JSON.\n\nExtract the EXACT visual structure — every container, text element, icon, chart, and progress bar with CSS-ready properties.\n\nUser context: ${prompt}`;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+  let blueprintRaw: string;
+  try {
+    blueprintRaw = await callProviderWithImage(
+      provider,
+      ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT,
+      analyzePrompt,
+      referenceImageBase64,
+      resolvedModel,
+      capMaxTokens(provider, 16384, resolvedModel),
+      apiKey,
+      abort,
+      true // jsonMode
+    );
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  // Clean up markdown fences
+  let blueprint = blueprintRaw.trim();
+  if (blueprint.startsWith("```json")) blueprint = blueprint.slice(7);
+  else if (blueprint.startsWith("```")) blueprint = blueprint.slice(3);
+  if (blueprint.endsWith("```")) blueprint = blueprint.slice(0, -3);
+  blueprint = blueprint.trim();
+
+  console.log(`[callLLMExtractLayoutTree] Layout tree: ${blueprint.length} chars`);
+  console.log(`[callLLMExtractLayoutTree] Preview: ${blueprint.slice(0, 500)}...`);
+
+  const parsed = JSON.parse(blueprint);
+  return parsed;
+}
+
 // ── Call LLM for Design System Binding (Step 2) ─────────────────────
 
 export async function callLLMBindDS(
