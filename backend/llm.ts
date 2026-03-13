@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import sharp from "sharp";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt, IDENTIFY_REGIONS_SYSTEM_PROMPT, EXTRACT_REGION_DETAIL_SYSTEM_PROMPT } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -931,6 +931,218 @@ export async function callLLMExtractLayoutTree(
     parsed = repairTruncatedJSON(blueprint);
   }
   return parsed;
+}
+
+// ── Region-by-Region Pipeline ───────────────────────────────────────
+// Pass 1: Identify major regions (small JSON output)
+// Pass 2: For each region, crop + detailed extraction (focused LLM calls)
+// Stitch: Combine region trees into one layout tree
+
+interface RegionInfo {
+  id: string;
+  name: string;
+  bbox: { x: number; y: number; w: number; h: number };
+  description: string;
+}
+
+interface RegionsResult {
+  viewport: { width: number; height: number };
+  fontFamily: string;
+  colors: Record<string, string>;
+  regions: RegionInfo[];
+}
+
+export async function callLLMRegionByRegion(
+  prompt: string,
+  referenceImageBase64: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+): Promise<any> {
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  // ── Pass 1: Identify regions ──
+  console.log(`[regionByRegion] Pass 1: Identifying regions with ${provider}/${resolvedModel}...`);
+  const regionPrompt = `Identify the major visual regions of this UI screenshot.\n\nUser context: ${prompt}`;
+
+  const abort1 = new AbortController();
+  _activeAbort = abort1;
+  let regionsRaw: string;
+  try {
+    regionsRaw = await callProviderWithImage(
+      provider,
+      IDENTIFY_REGIONS_SYSTEM_PROMPT,
+      regionPrompt,
+      referenceImageBase64,
+      resolvedModel,
+      capMaxTokens(provider, 4096, resolvedModel),
+      apiKey,
+      abort1,
+      true
+    );
+  } finally {
+    if (_activeAbort === abort1) _activeAbort = null;
+  }
+
+  // Parse regions
+  let regionsClean = regionsRaw.trim();
+  if (regionsClean.startsWith("```json")) regionsClean = regionsClean.slice(7);
+  else if (regionsClean.startsWith("```")) regionsClean = regionsClean.slice(3);
+  if (regionsClean.endsWith("```")) regionsClean = regionsClean.slice(0, -3);
+  regionsClean = regionsClean.trim();
+
+  let regionsResult: RegionsResult;
+  try {
+    regionsResult = JSON.parse(regionsClean);
+  } catch (e: any) {
+    console.warn(`[regionByRegion] Pass 1 JSON parse failed: ${e.message}, attempting repair...`);
+    regionsResult = repairTruncatedJSON(regionsClean);
+  }
+
+  const regions = regionsResult.regions || [];
+  console.log(`[regionByRegion] Pass 1 complete: ${regions.length} regions identified`);
+  for (const r of regions) {
+    console.log(`  - ${r.id}: ${r.name} (${r.bbox.x},${r.bbox.y} ${r.bbox.w}x${r.bbox.h}) — ${r.description}`);
+  }
+
+  if (regions.length === 0) {
+    throw new Error("Region identification found no regions in the screenshot");
+  }
+
+  // ── Pass 2: Extract detail for each region ──
+  // Decode full image once for cropping
+  const refBuf = Buffer.from(referenceImageBase64, "base64");
+  const meta = await sharp(refBuf).metadata();
+  const imgW = meta.width || 1;
+  const imgH = meta.height || 1;
+  const viewport = regionsResult.viewport || { width: 1440, height: 900 };
+  const cropScaleX = imgW / viewport.width;
+  const cropScaleY = imgH / viewport.height;
+
+  console.log(`[regionByRegion] Image: ${imgW}x${imgH}, viewport: ${viewport.width}x${viewport.height}, cropScale: ${cropScaleX.toFixed(3)}x${cropScaleY.toFixed(3)}`);
+
+  const regionTrees: { region: RegionInfo; tree: any }[] = [];
+
+  for (let i = 0; i < regions.length; i++) {
+    const region = regions[i];
+    console.log(`[regionByRegion] Pass 2 [${i + 1}/${regions.length}]: Extracting "${region.id}" (${region.bbox.w}x${region.bbox.h})...`);
+
+    // Crop the region from the reference image
+    const left = Math.max(0, Math.round(region.bbox.x * cropScaleX));
+    const top = Math.max(0, Math.round(region.bbox.y * cropScaleY));
+    let width = Math.round(region.bbox.w * cropScaleX);
+    let height = Math.round(region.bbox.h * cropScaleY);
+    if (left + width > imgW) width = imgW - left;
+    if (top + height > imgH) height = imgH - top;
+
+    if (width <= 0 || height <= 0) {
+      console.warn(`[regionByRegion] Skipping region "${region.id}" — invalid crop dimensions`);
+      continue;
+    }
+
+    const croppedBuf = await sharp(refBuf)
+      .extract({ left, top, width, height })
+      .png()
+      .toBuffer();
+    const croppedBase64 = croppedBuf.toString("base64");
+    console.log(`[regionByRegion] Cropped "${region.id}": ${width}x${height}px (${croppedBuf.length} bytes)`);
+
+    // Send cropped region to LLM for detailed extraction
+    const detailPrompt = `Extract the detailed layout tree for this UI region.\n\nRegion: "${region.name}" — ${region.description}\nCrop dimensions: ${region.bbox.w}px × ${region.bbox.h}px\n\nUser context: ${prompt}`;
+
+    const abort2 = new AbortController();
+    _activeAbort = abort2;
+    let detailRaw: string;
+    try {
+      detailRaw = await callProviderWithImage(
+        provider,
+        EXTRACT_REGION_DETAIL_SYSTEM_PROMPT,
+        detailPrompt,
+        croppedBase64,
+        resolvedModel,
+        capMaxTokens(provider, 16384, resolvedModel),
+        apiKey,
+        abort2,
+        true
+      );
+    } finally {
+      if (_activeAbort === abort2) _activeAbort = null;
+    }
+
+    // Parse region detail
+    let detailClean = detailRaw.trim();
+    if (detailClean.startsWith("```json")) detailClean = detailClean.slice(7);
+    else if (detailClean.startsWith("```")) detailClean = detailClean.slice(3);
+    if (detailClean.endsWith("```")) detailClean = detailClean.slice(0, -3);
+    detailClean = detailClean.trim();
+
+    let detailResult: any;
+    try {
+      detailResult = JSON.parse(detailClean);
+    } catch (e: any) {
+      console.warn(`[regionByRegion] Pass 2 "${region.id}" JSON parse failed: ${e.message}, attempting repair...`);
+      try {
+        detailResult = repairTruncatedJSON(detailClean);
+      } catch {
+        console.warn(`[regionByRegion] Pass 2 "${region.id}" repair also failed, skipping region`);
+        continue;
+      }
+    }
+
+    if (detailResult.tree) {
+      regionTrees.push({ region, tree: detailResult.tree });
+      console.log(`[regionByRegion] Pass 2 "${region.id}" complete: ${JSON.stringify(detailResult.tree).length} chars`);
+    } else {
+      console.warn(`[regionByRegion] Pass 2 "${region.id}" returned no tree, skipping`);
+    }
+  }
+
+  console.log(`[regionByRegion] All regions processed: ${regionTrees.length}/${regions.length} successful`);
+
+  // ── Stitch: Offset each region tree's bboxes by the region's global position ──
+  function offsetBboxes(node: any, offsetX: number, offsetY: number): void {
+    if (!node) return;
+    if (node.bbox) {
+      node.bbox.x = (node.bbox.x || 0) + offsetX;
+      node.bbox.y = (node.bbox.y || 0) + offsetY;
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        offsetBboxes(child, offsetX, offsetY);
+      }
+    }
+  }
+
+  // Build combined layout tree
+  const combinedChildren: any[] = [];
+  for (const { region, tree } of regionTrees) {
+    // Offset all bboxes in this region tree by the region's global position
+    offsetBboxes(tree, region.bbox.x, region.bbox.y);
+    
+    // Set the root container's bbox to the region's global bbox
+    tree.bbox = { ...region.bbox };
+    tree.id = tree.id || region.id;
+    tree.name = tree.name || region.name;
+    
+    combinedChildren.push(tree);
+  }
+
+  const combinedTree = {
+    viewport,
+    fontFamily: regionsResult.fontFamily || "Inter",
+    colors: regionsResult.colors || {},
+    tree: {
+      id: "root",
+      name: "root",
+      bbox: { x: 0, y: 0, w: viewport.width, h: viewport.height },
+      layout: "column",
+      bg: regionsResult.colors?.["page-bg"] || regionsResult.colors?.["background"] || null,
+      children: combinedChildren,
+    },
+  };
+
+  console.log(`[regionByRegion] Combined tree: ${JSON.stringify(combinedTree).length} chars, ${combinedChildren.length} top-level regions`);
+  return combinedTree;
 }
 
 // ── Call LLM for Design System Binding (Step 2) ─────────────────────

@@ -9,7 +9,7 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 import express, { Request, Response } from "express";
 import cors from "cors";
-import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMExtractLayoutTree, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
+import { callLLM, callLLMAnalyze, callLLMGenerate, callLLMGenerateHTML, callLLMExtractLayoutTree, callLLMRegionByRegion, callLLMBindDS, callLLMAudit, callLLMStateAudit, callLLMAuditFix, callLLMLayoutAudit, callLLMPlan, callLLMRefine, cancelCurrentRequest, PROVIDER_MODELS, PROVIDER_LABELS, Provider } from "./llm";
 import { treeToSnapshot } from "./treeToSnapshot";
 import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
@@ -701,14 +701,14 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       }
     }
 
-    // ── DIRECT-TO-SNAPSHOT: Reference image → Layout tree → Figma snapshot ──
+    // ── DIRECT-TO-SNAPSHOT: Reference image → Region-by-Region → Figma snapshot ──
     // Bypasses HTML/Puppeteer entirely for reference image reconstruction
     if (referenceImageBase64 && !isDirectRender) {
-      console.log(`[generate-html] DIRECT-TO-SNAPSHOT mode: reference image provided, bypassing HTML pipeline`);
+      console.log(`[generate-html] REGION-BY-REGION mode: reference image provided, bypassing HTML pipeline`);
 
-      // Step 0: Vision LLM → Layout tree JSON
-      console.log(`[generate-html] Step 0: Extracting layout tree from reference image...`);
-      const layoutTree = await callLLMExtractLayoutTree(
+      // Step 0: Vision LLM → Region-by-region layout tree (Pass 1: regions, Pass 2: per-region detail)
+      console.log(`[generate-html] Step 0: Region-by-region extraction from reference image...`);
+      const layoutTree = await callLLMRegionByRegion(
         prompt,
         referenceImageBase64,
         apiKey,
