@@ -5,7 +5,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import sharp from "sharp";
-import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt, IDENTIFY_REGIONS_SYSTEM_PROMPT, EXTRACT_REGION_DETAIL_SYSTEM_PROMPT } from "./promptBuilder";
+import { SYSTEM_PROMPT, buildUserPrompt, GENERATE_SYSTEM_PROMPT, GENERATE_WITH_REFERENCE_SYSTEM_PROMPT, GENERATE_COMPONENT_SYSTEM_PROMPT, buildGeneratePrompt, buildReferenceImagePrompt, buildGenerateComponentPrompt, GENERATE_HTML_SYSTEM_PROMPT, ANALYZE_REFERENCE_IMAGE_SYSTEM_PROMPT, GENERATE_HTML_FROM_BLUEPRINT_SYSTEM_PROMPT, buildGenerateHTMLPrompt, BIND_DS_SYSTEM_PROMPT, buildDSBindingPrompt, PLAN_SYSTEM_PROMPT, buildPlanPrompt, REFINE_SYSTEM_PROMPT, buildRefinePrompt, IDENTIFY_REGIONS_SYSTEM_PROMPT, EXTRACT_REGION_DETAIL_SYSTEM_PROMPT, EXTRACT_TEXT_OVERLAY_SYSTEM_PROMPT } from "./promptBuilder";
 
 // ── Provider / Model Configuration ──────────────────────────────────
 
@@ -1143,6 +1143,78 @@ export async function callLLMRegionByRegion(
 
   console.log(`[regionByRegion] Combined tree: ${JSON.stringify(combinedTree).length} chars, ${combinedChildren.length} top-level regions`);
   return combinedTree;
+}
+
+// ── Option 4: Screenshot-as-Background + Text Overlay ───────────────
+// Extracts only text positions from screenshot. The screenshot itself becomes
+// the frame's background image, guaranteeing pixel-perfect visuals.
+
+export interface TextOverlayItem {
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  fontSize: number;
+  fontWeight: number;
+  color: string;
+  fontFamily?: string;
+  align?: string;
+  opacity?: number;
+}
+
+export interface TextOverlayResult {
+  viewport: { width: number; height: number };
+  texts: TextOverlayItem[];
+}
+
+export async function callLLMExtractTextOverlay(
+  prompt: string,
+  referenceImageBase64: string,
+  apiKey: string,
+  provider: Provider = "anthropic",
+  model?: string,
+): Promise<TextOverlayResult> {
+  const resolvedModel = model || PROVIDER_MODELS[provider][0].id;
+
+  console.log(`[extractTextOverlay] Extracting text positions with ${provider}/${resolvedModel}...`);
+  const userPrompt = `Extract all visible text from this UI screenshot with exact positions.\n\nContext: ${prompt}`;
+
+  const abort = new AbortController();
+  _activeAbort = abort;
+  let raw: string;
+  try {
+    raw = await callProviderWithImage(
+      provider,
+      EXTRACT_TEXT_OVERLAY_SYSTEM_PROMPT,
+      userPrompt,
+      referenceImageBase64,
+      resolvedModel,
+      capMaxTokens(provider, 16384, resolvedModel),
+      apiKey,
+      abort,
+      true
+    );
+  } finally {
+    if (_activeAbort === abort) _activeAbort = null;
+  }
+
+  let clean = raw.trim();
+  if (clean.startsWith("```json")) clean = clean.slice(7);
+  else if (clean.startsWith("```")) clean = clean.slice(3);
+  if (clean.endsWith("```")) clean = clean.slice(0, -3);
+  clean = clean.trim();
+
+  let result: TextOverlayResult;
+  try {
+    result = JSON.parse(clean);
+  } catch (e: any) {
+    console.warn(`[extractTextOverlay] JSON parse failed: ${e.message}, attempting repair...`);
+    result = repairTruncatedJSON(clean);
+  }
+
+  console.log(`[extractTextOverlay] Extracted ${result.texts?.length || 0} text elements`);
+  return result;
 }
 
 // ── Call LLM for Design System Binding (Step 2) ─────────────────────
