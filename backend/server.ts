@@ -701,57 +701,12 @@ app.post("/generate-html", async (req: Request, res: Response) => {
       }
     }
 
-    // ── DIRECT-TO-SNAPSHOT: Reference image → Region-by-Region → Figma snapshot ──
-    // Bypasses HTML/Puppeteer entirely for reference image reconstruction
-    if (referenceImageBase64 && !isDirectRender) {
-      console.log(`[generate-html] REGION-BY-REGION mode: reference image provided, bypassing HTML pipeline`);
-
-      // Step 0: Vision LLM → Region-by-region layout tree (Pass 1: regions, Pass 2: per-region detail)
-      console.log(`[generate-html] Step 0: Region-by-region extraction from reference image...`);
-      const layoutTree = await callLLMRegionByRegion(
-        prompt,
-        referenceImageBase64,
-        apiKey,
-        resolvedProvider,
-        model
-      );
-      console.log(`[generate-html] Step 0 complete: ${JSON.stringify(layoutTree).length} chars`);
-
-      // Step 1: Programmatic conversion to Figma snapshot (deterministic, no LLM)
-      console.log(`[generate-html] Step 1: Converting layout tree to Figma snapshot...`);
-      const snapshot = await treeToSnapshot(layoutTree, referenceImageBase64);
-      console.log(`[generate-html] Step 1 complete: snapshot has ${snapshot.childrenCount} top-level children`);
-
-      // Step 2: Resolve remaining imagePrompt fields (stock photos from Unsplash)
-      console.log(`[generate-html] Step 2: Resolving remaining image prompts...`);
-      let imageCount = 0;
-      async function resolveImages(node: any): Promise<void> {
-        if (!node) return;
-        if (node.imagePrompt && !node.imageData) {
-          try {
-            console.log(`[generate-html] Resolving image: "${node.imagePrompt}"`);
-            const base64 = await resolveImagePrompt(node.imagePrompt);
-            node.imageData = base64;
-            delete node.imagePrompt;
-            imageCount++;
-          } catch (imgErr: any) {
-            console.warn(`[generate-html] Image resolution failed for "${node.imagePrompt}": ${imgErr.message}`);
-            delete node.imagePrompt;
-          }
-        }
-        if (node.children) {
-          for (const child of node.children) {
-            await resolveImages(child);
-          }
-        }
-      }
-      await resolveImages(snapshot);
-      console.log(`[generate-html] Resolved ${imageCount} stock images`);
-
-      console.log(`[generate-html] DIRECT-TO-SNAPSHOT complete:`, JSON.stringify(snapshot).slice(0, 500));
-      res.json({ snapshot });
-      return;
-    }
+    // ── Reference images now flow through the HTML pipeline below ──
+    // The HTML pipeline handles referenceImageBase64 via callLLMGenerateHTML's
+    // two-step process: (1) image → layout tree, (2) layout tree → HTML/CSS,
+    // then Puppeteer renders the HTML and the DOM walker extracts a snapshot.
+    // This produces much better results than direct layout-tree-to-snapshot
+    // because Puppeteer applies real CSS layout rules.
 
     // ── Step 1: Get HTML content ──
     let htmlContent: string;
