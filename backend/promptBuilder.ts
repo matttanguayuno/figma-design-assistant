@@ -1163,7 +1163,7 @@ The "tree" is a recursive structure. Every node is ONE of these types:
   "size": <number px>,
   "bg": "#hex",
   "fg": "#hex",
-  "borderRadius": "<'50%' for circle, '8px' for rounded square>"
+  "borderRadius": "<MATCH the reference: '50%' ONLY if the icon container is a perfect circle, '8px'-'12px' for rounded squares/rounded rectangles. Look carefully — most dashboard icons use rounded squares, not circles.>"
 }
 
 ═══ CHART NODE (line, bar, area, donut) ═══
@@ -1260,6 +1260,14 @@ The "tree" is a recursive structure. Every node is ONE of these types:
 14. Include gap values between siblings — estimate from visual spacing (commonly 8, 12, 16, 20, 24, 32px).
 15. EVERY visible element must appear in the tree. Do not omit small details (dividers, badges, indicators, floating action buttons, overlaid elements).
     Elements that visually float or overlay other content (e.g., "+ Add" buttons, tooltips, badges) must still be included in the nearest logical parent container.
+16. STAT/METRIC CARD LAYOUT DIRECTION: Look carefully at each stat card's internal arrangement:
+    - If the icon is ABOVE the text (icon on top, value and label stacked below): use layout "column" for that card.
+    - If the icon is BESIDE the text (icon left, value and label to the right): use layout "row" for that card.
+    Match what you SEE in the screenshot. Do NOT default to one layout — observe each card individually.
+17. INLINE CONTROLS (toggles, selectors, dropdown triggers): When a toggle group, segmented control, or small button appears in the SAME ROW as a section heading/title, wrap BOTH in a single ROW container with justify "space-between". Do NOT place the control as a separate sibling below the heading.
+18. SIDEBAR SPACER: If a sidebar has a user profile/avatar section anchored at the BOTTOM, insert a spacer container between the nav items and the profile:
+    { "id": "sidebar-spacer", "el": "div", "name": "spacer", "layout": "column", "width": "100%", "flex": "1", "height": "auto", "children": [] }
+    This ensures the profile is pushed to the bottom via flex-grow.
 
 Return ONLY the JSON — no markdown fences, no explanation.`;
 
@@ -1315,13 +1323,19 @@ Return ONLY a complete HTML document (<!DOCTYPE html>...). No markdown fences, n
 
 4. Body contains a single <div id="root"> matching the viewport width from the tree.
 
-═══ ICON RENDERING (colored circles with emoji) ═══
+═══ ICON RENDERING (emoji in colored containers) ═══
 Icon nodes become:
   <div class="icon icon-{id}" style-from-tree>emoji</div>
 
 CSS pattern:
   .icon { display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-  .icon-salary { width: 40px; height: 40px; border-radius: 50%; background: #e3f2fd; color: #1976d2; font-size: 18px; }
+  .icon-salary { width: 40px; height: 40px; border-radius: 8px; background: #e3f2fd; color: #1976d2; font-size: 18px; }
+
+CRITICAL: Use the EXACT borderRadius value from the tree node.
+  - borderRadius "50%" → border-radius: 50%  (circle)
+  - borderRadius "8px" → border-radius: 8px  (rounded square)
+  - borderRadius "12px" → border-radius: 12px (rounded rectangle)
+  Do NOT default to 50% for all icons. Many dashboards use ROUNDED SQUARES, not circles.
 
 NEVER use <img> or data-image-prompt for icons. Use emoji in colored containers.
 
@@ -1392,6 +1406,14 @@ Toggle group nodes become:
   </div>
 
 CSS: use flex row, padding, border-radius. Active button gets activeBg/activeFg colors.
+
+═══ SPACER / FILLER CONTAINERS ═══
+When a tree node is an EMPTY container (no children, no text) with flex: "1", it is a SPACER.
+Render it as an empty <div> with flex: 1 — this pushes subsequent siblings to the end of the parent.
+Example: a sidebar with nav items at top and profile at bottom uses a spacer between them.
+  <div class="sidebar-spacer"></div>
+  .sidebar-spacer { flex: 1; }
+Do NOT skip or remove these nodes — they are essential for correct layout positioning.
 
 ═══ STRUCTURE RULES (CRITICAL) ═══
 - Include this CSS reset at the top of your <style> block:

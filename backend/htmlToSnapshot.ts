@@ -708,8 +708,10 @@ export const DOM_TO_SNAPSHOT_SCRIPT = (
     }
 
     // Empty containers (no children): use FIXED sizing to preserve dimensions.
-    // Handles progress bars, spacers, decorative divs, colored blocks, etc.
-    if (children.length === 0 && depth > 0 && rect.width > 0 && rect.height > 0) {
+    // Handles progress bars, decorative divs, colored blocks, etc.
+    // BUT if flexGrow > 0, honor the FILL sizing — spacer divs with flex:1 must
+    // stretch to push siblings (e.g. sidebar profile at bottom).
+    if (children.length === 0 && depth > 0 && rect.width > 0 && rect.height > 0 && flexGrow === 0) {
       node.layoutSizingHorizontal = "FIXED";
       node.layoutSizingVertical = "FIXED";
     }
