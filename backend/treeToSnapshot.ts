@@ -267,39 +267,79 @@ export async function treeToSnapshot(
   const fontFamily = layoutTree.fontFamily?.split(",")[0]?.trim() || "Inter";
   const colors = layoutTree.colors || {};
 
-  // Scale factor: the reference image might be larger/smaller than the viewport
-  // All bboxes are in screenshot pixels; we want viewport-relative coordinates
-  const scaleX = viewport.width / imgW;
-  const scaleY = viewport.height / imgH;
+  // The LLM outputs bboxes in the coordinate system of the viewport it perceives.
+  // For cropping from the actual image, we need to scale bbox coords → image pixel coords.
+  // For Figma node dimensions, we use bbox values directly (they're already in viewport coords).
+  const cropScaleX = imgW / viewport.width;
+  const cropScaleY = imgH / viewport.height;
 
-  console.log(`[treeToSnapshot] viewport=${viewport.width}x${viewport.height}, image=${imgW}x${imgH}, scale=${scaleX.toFixed(3)}x${scaleY.toFixed(3)}`);
+  console.log(`[treeToSnapshot] viewport=${viewport.width}x${viewport.height}, image=${imgW}x${imgH}, cropScale=${cropScaleX.toFixed(3)}x${cropScaleY.toFixed(3)}`);
   console.log(`[treeToSnapshot] fontFamily=${fontFamily}, ${Object.keys(colors).length} colors`);
 
-  async function convert(node: LayoutNode): Promise<SnapshotNode> {
+  /** Scale a viewport-coordinate bbox to actual image pixel coordinates for cropping */
+  function bboxToImageCoords(bbox: Bbox): Bbox {
+    return {
+      x: bbox.x * cropScaleX,
+      y: bbox.y * cropScaleY,
+      w: bbox.w * cropScaleX,
+      h: bbox.h * cropScaleY,
+    };
+  }
+
+  async function convert(node: LayoutNode, parentLayout?: string): Promise<SnapshotNode> {
     const nodeType = node.type;
     const bbox = node.bbox || { x: 0, y: 0, w: 100, h: 50 };
 
-    // Dimensions in viewport coordinates (what Figma will use)
-    const w = Math.round(bbox.w * scaleX);
-    const h = Math.round(bbox.h * scaleY);
+    // Use bbox dimensions directly for Figma — they're already in viewport coordinates
+    const w = Math.max(1, Math.round(bbox.w));
+    const h = Math.max(1, Math.round(bbox.h));
 
+    let result: SnapshotNode;
     switch (nodeType) {
       case "text":
-        return convertText(node, w, h);
+        result = convertText(node, w, h);
+        break;
       case "icon":
-        return await convertIcon(node, bbox, w, h);
+        result = await convertIcon(node, bboxToImageCoords(bbox), w, h);
+        break;
       case "chart":
-        return await convertChart(node, bbox, w, h);
+        result = await convertChart(node, bboxToImageCoords(bbox), w, h);
+        break;
       case "image":
-        return await convertImage(node, bbox, w, h);
+        result = await convertImage(node, bboxToImageCoords(bbox), w, h);
+        break;
       case "progress":
-        return convertProgress(node, w, h);
+        result = convertProgress(node, w, h);
+        break;
       case "toggleGroup":
-        return convertToggleGroup(node, w, h);
+        result = convertToggleGroup(node, w, h);
+        break;
       default:
         // Container node (no type field, or unknown)
-        return await convertContainer(node, w, h);
+        result = await convertContainer(node, w, h);
+        break;
     }
+
+    // Apply parent-context sizing: children in a vertical parent should FILL width,
+    // children in a horizontal parent with flex should FILL width
+    if (parentLayout === "column" && result.type !== "TEXT") {
+      // In a vertical parent, children should fill the parent width unless they have explicit fixed width
+      if (!node.width || node.width === "100%" || node.width === "auto") {
+        result.layoutSizingHorizontal = "FILL";
+      }
+    }
+    if (parentLayout === "row" && result.type !== "TEXT") {
+      // In a horizontal parent, flex children should fill
+      if (node.flex === "1" || node.flex === "2" || node.flex === "3" || node.width === "100%") {
+        result.layoutSizingHorizontal = "FILL";
+      }
+      // Children in a row with stretch alignment should fill vertically
+      if (node.height === "100%" || node.height === "100vh") {
+        result.layoutSizingVertical = "FILL";
+      }
+    }
+
+    return result;
   }
 
   // ── Text node ──────────────────────────────────────────────────────
@@ -314,14 +354,15 @@ export async function treeToSnapshot(
       x: 0,
       y: 0,
       width: w,
-      height: h,
+      height: Math.max(h, fs + 4),
       characters: textContent,
       fontSize: fs,
       fontFamily,
       fontStyle: fontWeightToStyle(node.fontWeight),
       fillColor: resolveColor(node.color, colors),
       textAlignHorizontal: (node.textAlign || "LEFT").toUpperCase(),
-      layoutSizingHorizontal: node.noWrap ? "FIXED" : "FILL",
+      // Text should HUG horizontally to avoid clipping; parent auto-layout controls width
+      layoutSizingHorizontal: "HUG",
       layoutSizingVertical: "HUG",
       childrenCount: 0,
     };
@@ -608,47 +649,29 @@ export async function treeToSnapshot(
     const effects = parseShadow(node.shadow);
 
     // Determine sizing based on flex/width
-    let sizingH: "FIXED" | "FILL" | "HUG" = "FIXED";
+    let sizingH: "FIXED" | "FILL" | "HUG" = "HUG";
     if (node.flex === "1" || node.flex === "2" || node.flex === "3") {
       sizingH = "FILL";
     } else if (node.width === "100%" || node.width === "auto") {
       sizingH = "FILL";
+    } else if (node.width && node.width !== "auto" && !node.width.includes("%")) {
+      // Explicit pixel width like "180px" → FIXED
+      sizingH = "FIXED";
     }
 
-    let sizingV: "FIXED" | "FILL" | "HUG" = "FIXED";
-    if (node.height === "auto" || node.height === undefined) {
-      sizingV = "HUG";
-    } else if (node.height === "100vh" || node.height === "100%") {
+    let sizingV: "FIXED" | "FILL" | "HUG" = "HUG";
+    if (node.height === "100vh" || node.height === "100%") {
       sizingV = "FILL";
+    } else if (node.height && node.height !== "auto" && !node.height.includes("%")) {
+      // Explicit pixel height → FIXED
+      sizingV = "FIXED";
     }
 
-    // Convert children
+    // Convert children, passing current layout direction for context-aware sizing
     const childNodes = node.children || [];
     const children: SnapshotNode[] = [];
     for (const child of childNodes) {
-      const childSnap = await convert(child);
-      // Determine child sizing based on its flex/width relative to parent
-      if (layoutDir === "HORIZONTAL") {
-        if (child.flex === "1" || child.flex === "2" || child.flex === "3") {
-          childSnap.layoutSizingHorizontal = "FILL";
-        }
-        if (child.width === "100%") {
-          childSnap.layoutSizingHorizontal = "FILL";
-        }
-        // Vertical fill for children in horizontal layout
-        if (child.height === "100%" || child.height === "100vh" ||
-            child.align === "stretch" || node.align === "stretch") {
-          childSnap.layoutSizingVertical = "FILL";
-        }
-      } else {
-        // VERTICAL layout
-        if (child.width === "100%" || child.flex === "1") {
-          childSnap.layoutSizingHorizontal = "FILL";
-        }
-        if (child.flex === "1" && (child.height === undefined || child.height === "auto")) {
-          childSnap.layoutSizingVertical = "FILL";
-        }
-      }
+      const childSnap = await convert(child, node.layout);
       children.push(childSnap);
     }
 
@@ -704,13 +727,14 @@ export async function treeToSnapshot(
     throw new Error("Layout tree has no root node");
   }
 
-  const snapshot = await convert(rootNode);
+  const snapshot = await convert(rootNode, undefined);
 
-  // Ensure root is properly sized
+  // Ensure root is properly sized and clips content
   snapshot.width = viewport.width;
   snapshot.height = viewport.height;
   snapshot.layoutSizingHorizontal = "FIXED";
   snapshot.layoutSizingVertical = "FIXED";
+  snapshot.clipsContent = true;
 
   // Count total nodes for logging
   let totalNodes = 0;
