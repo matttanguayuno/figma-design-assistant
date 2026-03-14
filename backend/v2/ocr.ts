@@ -5,9 +5,20 @@
  * Groups words into lines, estimates font properties, samples colors.
  */
 
-import Tesseract from "tesseract.js";
+import { createWorker } from "tesseract.js";
 import sharp from "sharp";
+import path from "path";
 import type { TextRegion, Bbox } from "./types";
+
+/**
+ * Resolve the tesseract.js worker script path explicitly.
+ * The default resolution fails on Render when running from a bundled dist/ output
+ * because __dirname in the worker module doesn't match the expected package layout.
+ */
+function resolveWorkerPath(): string {
+  const mainEntry = require.resolve("tesseract.js");
+  return path.resolve(path.dirname(mainEntry), "worker-script", "node", "index.js");
+}
 
 interface WordInfo {
   text: string;
@@ -28,7 +39,12 @@ export async function extractText(
 ): Promise<TextRegion[]> {
   console.log(`[v2/ocr] Starting OCR on ${imgWidth}x${imgHeight} image...`);
 
-  const result = await Tesseract.recognize(imgBuffer, "eng", {
+  // Use createWorker with explicit workerPath to avoid path resolution
+  // issues in bundled deployments (Render, Docker, etc.)
+  const workerPath = resolveWorkerPath();
+  console.log(`[v2/ocr] Worker path: ${workerPath}`);
+  const worker = await createWorker("eng", undefined, {
+    workerPath,
     logger: (m: any) => {
       if (m.status === "recognizing text") {
         const pct = Math.round((m.progress || 0) * 100);
@@ -36,6 +52,9 @@ export async function extractText(
       }
     },
   });
+
+  const result = await worker.recognize(imgBuffer);
+  await worker.terminate();
 
   const words: WordInfo[] = [];
   for (const block of result.data.blocks || []) {
