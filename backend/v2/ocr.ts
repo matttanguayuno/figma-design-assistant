@@ -192,22 +192,28 @@ async function addColorInfo(
 ): Promise<TextRegion[]> {
   const regions: TextRegion[] = [];
 
+  // Extract raw RGB once for color sampling
+  let rawBuf: Buffer;
+  let channels = 3;
+  try {
+    const raw = await sharp(imgBuffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    rawBuf = raw.data;
+    channels = raw.info.channels;
+  } catch {
+    // Fallback: return all black text colors
+    rawBuf = Buffer.alloc(0);
+  }
+
   for (const block of blocks) {
-    // Sample color at center of text bbox
     const cx = Math.min(Math.max(Math.round(block.bbox.x + block.bbox.w / 2), 0), imgWidth - 1);
     const cy = Math.min(Math.max(Math.round(block.bbox.y + block.bbox.h / 2), 0), imgHeight - 1);
 
     let fillColor = "#000000";
-    try {
-      const pixel = await sharp(imgBuffer)
-        .extract({ left: cx, top: cy, width: 1, height: 1 })
-        .raw()
-        .toBuffer();
-      if (pixel.length >= 3) {
-        fillColor = `#${pixel[0].toString(16).padStart(2, "0")}${pixel[1].toString(16).padStart(2, "0")}${pixel[2].toString(16).padStart(2, "0")}`;
+    if (rawBuf.length > 0) {
+      const idx = (cy * imgWidth + cx) * channels;
+      if (idx + 2 < rawBuf.length) {
+        fillColor = `#${rawBuf[idx].toString(16).padStart(2, "0")}${rawBuf[idx + 1].toString(16).padStart(2, "0")}${rawBuf[idx + 2].toString(16).padStart(2, "0")}`;
       }
-    } catch {
-      // keep default black
     }
 
     // Estimate font size from line height

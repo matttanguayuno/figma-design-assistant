@@ -6,7 +6,7 @@
   "scripts": {
     "build:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --minify",
     "watch:plugin": "esbuild figma-plugin/code.ts --bundle --outfile=figma-plugin/code.js --target=es2017 --format=iife --minify --watch",
-    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk --external:openai --external:@google/generative-ai --external:puppeteer-core --external:@sparticuz/chromium --external:sharp",
+    "build:backend": "esbuild backend/server.ts --bundle --outfile=dist/server.js --platform=node --target=node18 --format=cjs --external:@anthropic-ai/sdk --external:openai --external:@google/generative-ai --external:puppeteer-core --external:@sparticuz/chromium --external:sharp --external:tesseract.js",
     "start": "node dist/server.js",
     "start:backend": "npx tsx backend/server.ts",
     "dev:backend": "npx tsx watch backend/server.ts",

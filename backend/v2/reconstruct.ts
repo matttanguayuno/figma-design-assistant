@@ -43,20 +43,18 @@ export async function reconstruct(
 
   console.log(`[v2] Image: ${imgWidth}x${imgHeight}`);
 
-  // Ensure we have a PNG buffer for consistent processing
-  const pngBuffer = await sharp(imgBuffer).png().toBuffer();
-
   // Step 2: Run OCR and edge detection in parallel
+  // sharp handles PNG/JPEG/WebP natively — no conversion needed
   const [texts, containers] = await Promise.all([
-    extractText(pngBuffer, imgWidth, imgHeight),
-    parseContainers(pngBuffer, imgWidth, imgHeight),
+    extractText(imgBuffer, imgWidth, imgHeight),
+    parseContainers(imgBuffer, imgWidth, imgHeight),
   ]);
 
   console.log(`[v2] OCR found ${texts.length} text regions`);
   console.log(`[v2] Parser found ${containers.length} top-level containers`);
 
   // Step 3: Detect icons (needs text regions to avoid overlap)
-  const icons = await detectIcons(pngBuffer, imgWidth, imgHeight, texts, containers);
+  const icons = await detectIcons(imgBuffer, imgWidth, imgHeight, texts, containers);
   console.log(`[v2] Detected ${icons.length} icons`);
 
   // Step 4: Assemble scene graph

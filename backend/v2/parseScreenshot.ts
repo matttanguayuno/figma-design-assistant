@@ -301,41 +301,36 @@ async function buildContainerRegions(
 ): Promise<ContainerRegion[]> {
   const regions: ContainerRegion[] = [];
 
+  // Extract raw RGB once for color sampling + corner radius
+  const rawInfo = await sharp(imgBuffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const rawBuf = rawInfo.data;
+  const ch = rawInfo.info.channels;
+
+  // Also get greyscale for corner radius estimation
+  const greyBuf = await sharp(imgBuffer).greyscale().raw().toBuffer();
+
   for (let i = 0; i < rects.length; i++) {
     const rect = rects[i];
 
-    // Sample fill color from center of rectangle
+    // Sample fill color from center of rectangle using raw pixels
     const cx = Math.min(Math.max(Math.round(rect.x + rect.w / 2), 0), imgW - 1);
     const cy = Math.min(Math.max(Math.round(rect.y + rect.h / 2), 0), imgH - 1);
 
     let fillColor = "#ffffff";
-    try {
-      // Sample a small region (5x5 average) for more stable color
-      const sampleSize = Math.min(5, rect.w, rect.h);
-      const sx = Math.max(0, cx - Math.floor(sampleSize / 2));
-      const sy = Math.max(0, cy - Math.floor(sampleSize / 2));
-      const sw = Math.min(sampleSize, imgW - sx);
-      const sh = Math.min(sampleSize, imgH - sy);
-
-      const stats = await sharp(imgBuffer)
-        .extract({ left: sx, top: sy, width: sw, height: sh })
-        .stats();
-
-      const [r, g, b] = stats.channels.map(c => Math.round(c.mean));
-      fillColor = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-    } catch {
-      // keep default white
+    const idx = (cy * imgW + cx) * ch;
+    if (idx + 2 < rawBuf.length) {
+      fillColor = `#${rawBuf[idx].toString(16).padStart(2, "0")}${rawBuf[idx + 1].toString(16).padStart(2, "0")}${rawBuf[idx + 2].toString(16).padStart(2, "0")}`;
     }
 
-    // Estimate corner radius by checking edge pixel patterns near corners
-    const cornerRadius = await estimateCornerRadius(imgBuffer, rect, imgW, imgH);
+    // Estimate corner radius from greyscale buffer
+    const cornerRadius = estimateCornerRadiusFromRaw(greyBuf, rect, imgW, imgH);
 
     regions.push({
       id: `container-${i}`,
       bbox: rect,
       fillColor,
       cornerRadius,
-      confidence: 70, // moderate confidence for edge-detected regions
+      confidence: 70,
       children: [],
     });
   }
@@ -344,54 +339,46 @@ async function buildContainerRegions(
 }
 
 /**
- * Estimate corner radius by checking if corners are rounded.
- * Samples pixels along a diagonal from each corner and checks for fill-to-transparent transition.
+ * Estimate corner radius from pre-extracted greyscale buffer.
  */
-async function estimateCornerRadius(
-  imgBuffer: Buffer,
+function estimateCornerRadiusFromRaw(
+  greyBuf: Buffer,
   rect: Bbox,
   imgW: number,
   imgH: number,
-): Promise<number> {
-  try {
-    // Sample the top-left corner region
-    const cornerSize = Math.min(20, Math.floor(rect.w / 4), Math.floor(rect.h / 4));
-    if (cornerSize < 4) return 0;
+): number {
+  const cornerSize = Math.min(20, Math.floor(rect.w / 4), Math.floor(rect.h / 4));
+  if (cornerSize < 4) return 0;
 
-    const left = Math.max(0, Math.round(rect.x));
-    const top = Math.max(0, Math.round(rect.y));
-    const w = Math.min(cornerSize, imgW - left);
-    const h = Math.min(cornerSize, imgH - top);
-    if (w < 4 || h < 4) return 0;
+  const left = Math.max(0, Math.round(rect.x));
+  const top = Math.max(0, Math.round(rect.y));
+  const w = Math.min(cornerSize, imgW - left);
+  const h = Math.min(cornerSize, imgH - top);
+  if (w < 4 || h < 4) return 0;
 
-    const cornerPixels = await sharp(imgBuffer)
-      .extract({ left, top, width: w, height: h })
-      .greyscale()
-      .raw()
-      .toBuffer();
+  // Read top-left pixel and center pixel from greyscale buffer
+  const topLeftIdx = top * imgW + left;
+  const centerIdx = (top + Math.floor(h / 2)) * imgW + (left + Math.floor(w / 2));
+  if (topLeftIdx >= greyBuf.length || centerIdx >= greyBuf.length) return 0;
 
-    // Check diagonal: if pixel (0,0) differs from center, there's rounding
-    const topLeftVal = cornerPixels[0];
-    const centerVal = cornerPixels[Math.floor(h / 2) * w + Math.floor(w / 2)];
+  const topLeftVal = greyBuf[topLeftIdx];
+  const centerVal = greyBuf[centerIdx];
 
-    if (Math.abs(topLeftVal - centerVal) > 30) {
-      // There's rounding — estimate radius by counting how far along the diagonal
-      // the edge transition occurs
-      let radius = 0;
-      for (let d = 0; d < Math.min(w, h); d++) {
-        const val = cornerPixels[d * w + d];
-        if (Math.abs(val - centerVal) < 30) {
-          radius = d;
-          break;
-        }
+  if (Math.abs(topLeftVal - centerVal) > 30) {
+    // Count diagonal distance to edge transition
+    let radius = 0;
+    for (let d = 0; d < Math.min(w, h); d++) {
+      const dIdx = (top + d) * imgW + (left + d);
+      if (dIdx >= greyBuf.length) break;
+      if (Math.abs(greyBuf[dIdx] - centerVal) < 30) {
+        radius = d;
+        break;
       }
-      return Math.max(radius, 4);
     }
-
-    return 0;
-  } catch {
-    return 0;
+    return Math.max(radius, 4);
   }
+
+  return 0;
 }
 
 // ── Hierarchy building ──────────────────────────────────────────────
