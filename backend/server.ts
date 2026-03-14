@@ -915,14 +915,19 @@ app.post("/generate-refine", async (req: Request, res: Response) => {
 
 app.post("/v2/reconstruct", async (req: Request, res: Response) => {
   try {
-    const { referenceImageBase64 } = req.body;
+    const { referenceImageBase64, apiKey, provider, model } = req.body;
     if (!referenceImageBase64 || typeof referenceImageBase64 !== "string") {
       return res.status(400).json({ error: "referenceImageBase64 is required" });
     }
+    if (!apiKey || typeof apiKey !== "string") {
+      return res.status(400).json({ error: "apiKey is required" });
+    }
 
-    console.log(`[v2/reconstruct] Starting, image=${referenceImageBase64.length} chars`);
+    const resolvedProvider = (provider || "anthropic") as "anthropic" | "openai" | "gemini";
 
-    const result = await v2Reconstruct(referenceImageBase64);
+    console.log(`[v2/reconstruct] Starting, image=${referenceImageBase64.length} chars, provider=${resolvedProvider}`);
+
+    const result = await v2Reconstruct(referenceImageBase64, apiKey, resolvedProvider, model);
 
     console.log(`[v2/reconstruct] Done in ${result.stats.durationMs}ms — ` +
       `texts=${result.stats.textRegions}, containers=${result.stats.containers}, icons=${result.stats.icons}`);

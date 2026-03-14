@@ -9459,9 +9459,14 @@ async function runV2ReconstructJob(
 ): Promise<void> {
   try {
     sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
-    console.log(`[job ${job.id}] [v2] Starting V2 CV/OCR reconstruction...`);
+    console.log(`[job ${job.id}] [v2] Starting V2 LLM vision reconstruction...`);
 
-    const payload = { referenceImageBase64 };
+    const payload = {
+      referenceImageBase64,
+      apiKey: _userApiKey,
+      provider: _selectedProvider,
+      model: _selectedModel,
+    };
 
     sendToUI({ type: "job-progress", jobId: job.id, phase: "design" } as any);
     let result: { snapshot: any; stats?: any };
