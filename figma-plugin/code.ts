@@ -10440,12 +10440,6 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         // Determine generation mode from message or persisted setting
         let activeGenerateMode: "standard" | "multi-step" | "html" =
           (msg as any).generateMode || ((msg as any).multiStep ? "multi-step" : _generateMode);
-        // Auto-upgrade to HTML pipeline when a reference image is attached
-        // HTML pipeline produces far better layout fidelity (browser handles sizing)
-        if ((msg as any).referenceImageBase64 && activeGenerateMode !== "html") {
-          console.log(`[run] Reference image attached — auto-upgrading from "${activeGenerateMode}" to "html" pipeline for better fidelity`);
-          activeGenerateMode = "html";
-        }
         // isAuditFix already declared above
 
         // ── Native Actions (no LLM needed) ──────────────────
@@ -13954,10 +13948,9 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         // ── AI-powered flows (generate or edit) ─────────────
         const referenceImageBase64: string | undefined = (msg as any).referenceImageBase64 || undefined;
         if (referenceImageBase64) console.log(`[run] Reference image attached (${referenceImageBase64.length} chars)`);
-        const v2ReconstructFlag = !!(msg as any).v2Reconstruct;
 
-        // ── V2 CV/OCR reconstruction shortcut ───────────────
-        if (v2ReconstructFlag && referenceImageBase64) {
+        // ── Screenshot attached → V2 CV/OCR reconstruction ──
+        if (referenceImageBase64) {
           const jobId = ++_nextJobId;
           const job: GenerateJobState = { id: jobId, cancelled: false };
           _activeJobs.set(jobId, job);
