@@ -14,6 +14,7 @@ import { treeToSnapshot } from "./treeToSnapshot";
 import { validateOperationBatch } from "./validator";
 import { renderHTMLPage, closeBrowser } from "./browser";
 import { DOM_TO_SNAPSHOT_SCRIPT, postProcessHTMLSnapshot, extractFillStyleMap, extractTextStyleMap } from "./htmlToSnapshot";
+import { reconstruct as v2Reconstruct } from "./v2/reconstruct";
 
 /**
  * Fix data-image-prompt values that the LLM put in CSS instead of as HTML attributes.
@@ -910,6 +911,29 @@ app.post("/generate-refine", async (req: Request, res: Response) => {
   }
 });
 
+// ── V2: CV/OCR-based screenshot reconstruction ─────────────────────
+
+app.post("/v2/reconstruct", async (req: Request, res: Response) => {
+  try {
+    const { referenceImageBase64 } = req.body;
+    if (!referenceImageBase64 || typeof referenceImageBase64 !== "string") {
+      return res.status(400).json({ error: "referenceImageBase64 is required" });
+    }
+
+    console.log(`[v2/reconstruct] Starting, image=${referenceImageBase64.length} chars`);
+
+    const result = await v2Reconstruct(referenceImageBase64);
+
+    console.log(`[v2/reconstruct] Done in ${result.stats.durationMs}ms — ` +
+      `texts=${result.stats.textRegions}, containers=${result.stats.containers}, icons=${result.stats.icons}`);
+
+    res.json({ snapshot: result.snapshot, stats: result.stats });
+  } catch (err: any) {
+    console.error("[v2/reconstruct] Error:", err.message, err.stack);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Start ───────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
@@ -919,6 +943,7 @@ app.listen(PORT, () => {
   console.log(`  POST /generate-html — generate HTML, render, convert to snapshot`);
   console.log(`  POST /generate-plan — multi-step: layout plan`);
   console.log(`  POST /generate-refine — multi-step: visual refinement`);
+  console.log(`  POST /v2/reconstruct — V2 CV/OCR screenshot reconstruction`);
   console.log(`  POST /audit         — accessibility audit enrichment`);
   console.log(`  POST /audit-fix     — LLM-assisted audit fix`);
   console.log(`  POST /audit-states  — UI state completeness audit`);

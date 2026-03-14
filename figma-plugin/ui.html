@@ -2424,6 +2424,7 @@
         <option value="standard">Standard (1 pass)</option>
         <option value="multi-step">Multi-Step (3 passes)</option>
         <option value="html">HTML to Figma</option>
+        <option value="v2-reconstruct">Reconstruct V2 (CV/OCR)</option>
       </select>
       <div class="gen-mode-desc" id="gen-mode-desc">Single LLM call → NodeSnapshot JSON</div>
     </div>
@@ -3220,6 +3221,7 @@
       standard: "Single LLM call → NodeSnapshot JSON",
       "multi-step": "Plan → Generate → Refine (3 LLM calls)",
       html: "LLM generates HTML → server renders → Figma nodes",
+      "v2-reconstruct": "CV/OCR screenshot → Figma nodes (no LLM)",
     };
     generateModeSelect.addEventListener("change", function() {
       _generateMode = generateModeSelect.value;
@@ -5689,6 +5691,10 @@
         finalIntent += "\n\n--- Attached file: " + (att.fileName || "file") + " ---\n" + att.data + "\n--- End of attached file ---";
       }
       const runMsg = { type: "run", intent: finalIntent, generateMode: _generateMode };
+      // V2 reconstruction mode
+      if (_generateMode === "v2-reconstruct") {
+        runMsg.v2Reconstruct = true;
+      }
       // Use the first image attachment as the reference image
       const imgAtt = _attachments.find(a => a.type === "image");
       if (imgAtt) runMsg.referenceImageBase64 = imgAtt.data;

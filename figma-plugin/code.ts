@@ -9451,6 +9451,84 @@ async function runGenerateJobMultiStep(
 
 // ── HTML-to-Figma Generate Job Runner ───────────────────────────────
 // 4-phase pipeline: Analyze → Generate (HTML) → Render (server-side) → Create
+// ── V2: CV/OCR-based screenshot reconstruction ──────────────────────
+async function runV2ReconstructJob(
+  job: GenerateJobState,
+  referenceImageBase64: string,
+  sourcePosition?: { x: number; y: number; width: number; height: number; name?: string },
+): Promise<void> {
+  try {
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "analyze" } as any);
+    console.log(`[job ${job.id}] [v2] Starting V2 CV/OCR reconstruction...`);
+
+    const payload = { referenceImageBase64 };
+
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "design" } as any);
+    let result: { snapshot: any; stats?: any };
+    try {
+      result = await fetchViaUIForJob("/v2/reconstruct", payload, job.id);
+    } catch (err: any) {
+      if (job.cancelled) {
+        sendToUI({ type: "job-cancelled", jobId: job.id } as any);
+        return;
+      }
+      sendToUI({ type: "job-error", jobId: job.id, error: `V2 backend error: ${err.message}` } as any);
+      return;
+    }
+
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "render" } as any);
+
+    const snapshot = result.snapshot;
+    if (!snapshot || !snapshot.type) {
+      sendToUI({ type: "job-error", jobId: job.id, error: "V2 backend returned invalid snapshot." } as any);
+      return;
+    }
+
+    console.log(`[job ${job.id}] [v2] Snapshot received: ${snapshot.name} (${snapshot.type})`);
+    if (result.stats) {
+      console.log(`[job ${job.id}] [v2] Stats: ${JSON.stringify(result.stats)}`);
+    }
+
+    // Create the frame on canvas
+    sendToUI({ type: "job-progress", jobId: job.id, phase: "apply" } as any);
+
+    const frame = await createNodeFromSnapshot(snapshot, figma.currentPage) as FrameNode;
+    if (frame) {
+      // Position next to existing content
+      if (sourcePosition) {
+        frame.x = sourcePosition.x + sourcePosition.width + 100;
+        frame.y = sourcePosition.y;
+      } else if (_nextPlaceX != null) {
+        frame.x = _nextPlaceX;
+        _nextPlaceX = frame.x + frame.width + 100;
+      } else {
+        // Find right edge of existing content
+        let maxRight = 0;
+        for (const child of figma.currentPage.children) {
+          const right = child.x + child.width;
+          if (right > maxRight) maxRight = right;
+        }
+        frame.x = maxRight + 100;
+        _nextPlaceX = frame.x + frame.width + 100;
+      }
+
+      figma.currentPage.selection = [frame];
+      figma.viewport.scrollAndZoomIntoView([frame]);
+
+      console.log(`[job ${job.id}] [v2] Frame created: "${frame.name}" at ${frame.x},${frame.y}`);
+    }
+
+    sendToUI({ type: "job-complete", jobId: job.id } as any);
+    _activeJobs.delete(job.id);
+  } catch (err: any) {
+    console.error(`[job ${job.id}] [v2] Error:`, err.message);
+    if (!job.cancelled) {
+      sendToUI({ type: "job-error", jobId: job.id, error: `V2 reconstruction failed: ${err.message}` } as any);
+    }
+    _activeJobs.delete(job.id);
+  }
+}
+
 async function runGenerateJobHTML(
   job: GenerateJobState,
   prompt: string,
@@ -13876,6 +13954,34 @@ figma.ui.onmessage = async (msg: UIToPluginMessage) => {
         // ── AI-powered flows (generate or edit) ─────────────
         const referenceImageBase64: string | undefined = (msg as any).referenceImageBase64 || undefined;
         if (referenceImageBase64) console.log(`[run] Reference image attached (${referenceImageBase64.length} chars)`);
+        const v2ReconstructFlag = !!(msg as any).v2Reconstruct;
+
+        // ── V2 CV/OCR reconstruction shortcut ───────────────
+        if (v2ReconstructFlag && referenceImageBase64) {
+          const jobId = ++_nextJobId;
+          const job: GenerateJobState = { id: jobId, cancelled: false };
+          _activeJobs.set(jobId, job);
+
+          console.log(`[run] V2 reconstruction requested — starting job ${jobId}`);
+          sendToUI({ type: "job-started", jobId, prompt: "V2 Screenshot Reconstruction" } as any);
+
+          // Get position from selection if any
+          let pos: { x: number; y: number; width: number; height: number } | undefined;
+          if (figma.currentPage.selection.length === 1) {
+            const sel = figma.currentPage.selection[0];
+            pos = { x: Math.round(sel.x), y: Math.round(sel.y), width: Math.round(sel.width), height: Math.round(sel.height) };
+          }
+
+          runV2ReconstructJob(job, referenceImageBase64, pos).catch((err: any) => {
+            console.error(`[run] V2 job ${jobId} error:`, err);
+            if (!job.cancelled) {
+              sendToUI({ type: "job-error", jobId, error: `V2 failed: ${err.message}` } as any);
+            }
+            _activeJobs.delete(jobId);
+          });
+          break;
+        }
+
         const attachedSourceHtml: string | undefined = (msg as any).sourceHtml || undefined;
         const directRender: boolean = !!(msg as any).directRender;
         if (attachedSourceHtml) console.log(`[run] HTML file attached (${attachedSourceHtml.length} chars, directRender=${directRender})`);
